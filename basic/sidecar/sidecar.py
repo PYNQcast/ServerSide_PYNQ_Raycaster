@@ -1,0 +1,114 @@
+# basic/sidecar/sidecar.py
+#
+# Minimal Python sidecar — single file.
+#
+# Purpose: show how the sidecar pattern works end to end.
+# server.py writes to Redis. This sidecar reads from Redis
+# and writes to DynamoDB. The two processes never talk directly.
+#
+# What it does:
+#   1. Connects to Redis and DynamoDB
+#   2. Blocks on BRPOP "game:events" — wakes up only when server.py pushes an event
+#   3. On match_start: reads all player positions from Redis, writes to DynamoDB
+#   4. Goes back to sleep waiting for the next event
+#
+# Run on EC2 alongside server.py:
+#   pip install redis boto3
+#   python sidecar.py
+#
+# AWS credentials must be available (IAM Role on EC2, or ~/.aws/credentials locally).
+
+import json
+import time
+import redis
+import boto3
+from datetime import datetime, timezone
+
+# ── Config ────────────────────────────────────────────────────────────────────
+
+REDIS_HOST      = "127.0.0.1"   # change to ElastiCache endpoint on EC2
+REDIS_PORT      = 6379
+REDIS_EVENT_KEY = "game:events"
+
+DYNAMO_TABLE    = "fpga-raycaster"   # must exist in DynamoDB already
+AWS_REGION      = "eu-west-2"
+
+# ── Connections ───────────────────────────────────────────────────────────────
+
+print(f"Connecting to Redis at {REDIS_HOST}:{REDIS_PORT}...")
+r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+
+print(f"Connecting to DynamoDB table '{DYNAMO_TABLE}' in {AWS_REGION}...")
+dynamo = boto3.resource("dynamodb", region_name=AWS_REGION)
+table  = dynamo.Table(DYNAMO_TABLE)
+
+# ── Handlers ──────────────────────────────────────────────────────────────────
+
+def handle_match_start(event: dict):
+    """
+    Called when server.py pushes {"event": "match_start", "players": 2}.
+    Reads all player positions from Redis and writes a match record to DynamoDB.
+    """
+    match_id  = f"match-{int(time.time())}"
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    # Read player positions from Redis (set by server.py each packet)
+    players = []
+    for player_id in range(event.get("players", 0)):
+        pos = r.hgetall(f"player:{player_id}")   # {"x": "1.0", "y": "2.0", ...}
+        players.append({
+            "player_id": player_id,
+            "x":     float(pos.get("x", 0)),
+            "y":     float(pos.get("y", 0)),
+            "angle": float(pos.get("angle", 0)),
+        })
+
+    item = {
+        "PK":        f"MATCH#{match_id}",
+        "SK":        "META",
+        "match_id":  match_id,
+        "timestamp": timestamp,
+        "players":   players,
+        "status":    "in_progress",
+    }
+
+    table.put_item(Item=item)
+    print(f"DynamoDB: wrote match record {match_id} with {len(players)} player(s)")
+
+# ── Event dispatch ────────────────────────────────────────────────────────────
+
+HANDLERS = {
+    "match_start": handle_match_start,
+    # add more here: "match_end", "player_tagged", etc.
+}
+
+# ── Main loop ─────────────────────────────────────────────────────────────────
+
+print(f"Waiting for events on Redis key '{REDIS_EVENT_KEY}'...")
+print("(Sidecar sleeps here until server.py pushes an event — BRPOP blocks)")
+
+while True:
+    # BRPOP blocks until server.py pushes something — 0 = wait forever
+    # Returns (key, value) tuple or None on timeout
+    result = r.brpop(REDIS_EVENT_KEY, timeout=0)
+    if result is None:
+        continue
+
+    _, raw = result
+    try:
+        event = json.loads(raw)
+    except json.JSONDecodeError:
+        print(f"Bad event payload: {raw}")
+        continue
+
+    event_type = event.get("event")
+    print(f"Received event: {event_type}")
+
+    handler = HANDLERS.get(event_type)
+    if handler:
+        try:
+            handler(event)
+        except Exception as e:
+            print(f"Handler error for '{event_type}': {e}")
+    else:
+        print(f"No handler for event type: {event_type}")

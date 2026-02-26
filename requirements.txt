@@ -1,0 +1,8 @@
+# Add Python dependencies here as you build each component.
+# Install with: pip install -r requirements.txt
+#
+# boto3  — needed when we start building the sidecar (DynamoDB, S3, SNS)
+# redis  — needed when sidecar connects to ElastiCache
+#
+# boto3>=1.34
+# redis>=5.0
