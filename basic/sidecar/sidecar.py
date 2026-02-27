@@ -22,6 +22,7 @@ import json
 import time
 import redis
 import boto3
+from decimal import Decimal
 from datetime import datetime, timezone
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -30,7 +31,7 @@ REDIS_HOST      = "127.0.0.1"   # change to ElastiCache endpoint on EC2
 REDIS_PORT      = 6379
 REDIS_EVENT_KEY = "game:events"
 
-DYNAMO_TABLE    = "fpga-raycaster"   # must exist in DynamoDB already
+DYNAMO_TABLE    = "pynq-raycaster-matches"   # must exist in DynamoDB already
 AWS_REGION      = "eu-west-2"
 
 # ── Connections ───────────────────────────────────────────────────────────────
@@ -58,18 +59,17 @@ def handle_match_start(event: dict):
         pos = r.hgetall(f"player:{player_id}")   # {"x": "1.0", "y": "2.0", ...}
         players.append({
             "player_id": player_id,
-            "x":     float(pos.get("x", 0)),
-            "y":     float(pos.get("y", 0)),
-            "angle": float(pos.get("angle", 0)),
+            "x":     Decimal(pos.get("x", "0")),
+            "y":     Decimal(pos.get("y", "0")),
+            "angle": Decimal(pos.get("angle", "0")),
         })
 
     item = {
-        "PK":        f"MATCH#{match_id}",
-        "SK":        "META",
-        "match_id":  match_id,
-        "timestamp": timestamp,
-        "players":   players,
-        "status":    "in_progress",
+        "match_id":    match_id,
+        "record_type": "META",
+        "timestamp":   timestamp,
+        "players":     players,
+        "status":      "in_progress",
     }
 
     table.put_item(Item=item)
