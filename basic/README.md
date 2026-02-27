@@ -1,139 +1,94 @@
-# basic/ — Minimal End-to-End Proof of Concept
+# basic/ — Minimal End-to-End Stack
 
-**Goal:** prove every part of the system works together — PYNQ → EC2 → Redis → DynamoDB — in the simplest possible code before building the full version.
-
-No SEDA. No queues. No C++. Just the flow, end to end, in the fewest lines possible.
+**Goal:** prove every layer works together — PYNQ → EC2 → Redis → DynamoDB — in the simplest possible code before building the full version. No SEDA, no C++, just the data flow end to end.
 
 ---
 
-## What's here
+## Structure
 
 ```
 basic/
-├── protocol/
-│   └── protocol.py   — packet format (shared by server and client)
-├── server/
-│   └── server.py     — single-file Python UDP server (runs on EC2)
-├── client/
-│   └── sender.py     — single-file Python node simulator (runs on laptop / PYNQ)
-└── sidecar/
-    └── sidecar.py    — single-file Python sidecar (Redis → DynamoDB)
+├── protocol/protocol.py   — packet format (shared by server and client)
+├── server/server.py       — UDP game server (runs on EC2)
+├── client/sender.py       — node simulator (runs on laptop / PYNQ)
+└── sidecar/sidecar.py     — Redis → DynamoDB persistence (runs on EC2)
 ```
-
+folders seem overkill - but may eventually become a sandpit with required seperation. 
 ---
 
-## The full data flow
+## Data flow
 
 ```
 PYNQ / simulator
-      │  UDP packet (24 bytes)
+      │  UDP 24-byte packet
       ▼
-  server.py  ──── HSET player:0 x y angle ────►  Redis
-      │                                               │
-      │  UDP game state back                          │  BRPOP game:events (blocks)
-      ▼                                               ▼
-PYNQ / simulator                               sidecar.py
-                                                      │
-                                                      │  put_item()
-                                                      ▼
-                                                 DynamoDB
+  server.py  ── HSET player:N x y angle ──►  Redis
+      │                                           │
+      │  UDP game state back                      │  BRPOP game:events (blocks)
+      ▼                                           ▼
+PYNQ / simulator                           sidecar.py
+                                                  │  put_item()
+                                                  ▼
+                                             DynamoDB
 ```
 
-- **server.py** — receives UDP, merges state, echoes back, writes to Redis
-- **sidecar.py** — sleeps until Redis has an event, then writes to DynamoDB
-- The two processes never talk directly — Redis is the handoff
+Redis sits between server and sidecar so they never block each other — server writes to RAM (µs), sidecar handles DynamoDB at its own pace.
 
 ---
 
-## How to run
-
-### Prerequisites
-
-On EC2:
-```bash
-pip install redis boto3
-```
-
-Redis must be running locally or use your ElastiCache endpoint.
-DynamoDB table `fpga-raycaster` must exist (see `infra/setup/setup_dynamodb.md`).
-
----
-
-### Step 1 — Start the sidecar (on EC2)
+## EC2 access
 
 ```bash
-python basic/sidecar/sidecar.py
+./ssh_ec2.sh          # SSH into EC2 (uses raycastpair.pem)
 ```
 
-It blocks here waiting for events. Leave it running.
+Key: `raycastpair.pem` — must be in repo root, never committed (in `.gitignore`).
+EC2 IP: `18.175.238.148`
+EC2 user: `ubuntu`
 
 ---
 
-### Step 2 — Start the server (on EC2)
+## Running
+
+From repo root on your laptop, use the dev tmux session:
 
 ```bash
-python basic/server/server.py
+./dev.sh
 ```
 
-Make sure EC2 security group allows **inbound UDP on port 9000**.
+Opens 4 panes — server, sidecar (both SSH into EC2), client 1, client 2. Commands are pre-filled, press Enter in each pane in this order: **sidecar → server → client 1 → client 2**.
 
----
-
-### Step 3 — Run two clients (on your laptop or PYNQ)
-
+To kill stale EC2 processes:
 ```bash
-# Terminal 1 — edit SERVER_IP in sender.py first
-python basic/client/sender.py
-
-# Terminal 2 — second player
-python basic/client/sender.py
+ssh -i ./raycastpair.pem ubuntu@18.175.238.148 'pkill -f server.py; pkill -f sidecar.py'
 ```
 
 ---
 
-### What you should see
+## DynamoDB table
 
-**server terminal:**
-```
-Connected to Redis at 127.0.0.1:6379
-Basic game server listening on UDP port 9000
-New player 0 from ('x.x.x.x', 12345) (total: 1)
-New player 1 from ('x.x.x.x', 12346) (total: 2)
-Redis event: {"event":"match_start","players":2}
-Player 0  x=1.00  y=2.00  angle=0.00
-...
-```
+Table: `pynq-raycaster-matches`
+Partition key: `match_id` (String)
+Sort key: `record_type` (String)
+Region: `eu-west-2`
+Credentials: IAM role attached to EC2 instance (no keys needed).
 
-**sidecar terminal:**
-```
-Waiting for events on Redis key 'game:events'...
-Received event: match_start
-DynamoDB: wrote match record match-1234567890 with 2 player(s)
-```
+---
 
-**client terminals:**
-```
-Sending to <EC2-IP>:9000 at 20 Hz.
-  Game state — 2 player(s):
-    player 0  x=1.00  y=2.00  angle=0.00
-    player 1  x=3.00  y=4.00  angle=1.57
-```
+## Expected output
+
+**server:** `New player 1 ... (total: 2)` then `Redis event: {"event":"match_start",...}`
+**sidecar:** `DynamoDB: wrote match record match-... with 2 player(s)`
+**clients:** `Game state — 2 player(s): player 0 x=1.00 ...`
 
 ---
 
 ## What this proves
 
-| Component | Proven by |
-|-----------|-----------|
-| PYNQ → EC2 UDP | Packets arrive in server stdout |
-| EC2 → PYNQ UDP | Clients print the other player's position |
-| Binary protocol correct | Both sides decode each other's packets |
-| Redis writes | `redis-cli HGET player:0 x` returns a value |
-| Redis → sidecar handoff | Sidecar wakes up on match_start event |
+| Layer | Evidence |
+|---|---|
+| PYNQ → EC2 UDP | Player positions appear in server stdout |
+| EC2 → PYNQ UDP | Clients print each other's positions |
+| Redis writes | `redis-cli HGETALL player:0` returns values |
+| Redis → sidecar | Sidecar wakes on `match_start` event |
 | DynamoDB write | Record visible in AWS console |
-
----
-
-## Next step
-
-Once this works end-to-end, move to `ec2/` — the full server with the SEDA pipeline and C++ game logic module.

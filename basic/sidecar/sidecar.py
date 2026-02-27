@@ -79,7 +79,9 @@ def handle_match_start(event: dict):
 
 HANDLERS = {
     "match_start": handle_match_start,
-    # add more here: "match_end", "player_tagged", etc.
+    # "match_start" is one event type for the tag game demo.
+    # Any event server.py pushes to Redis can be handled here.
+    # Examples: "match_end", "player_tagged", "item_picked_up", "round_won", etc.
 }
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
