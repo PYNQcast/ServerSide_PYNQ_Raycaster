@@ -1,7 +1,7 @@
 # basic/protocol/protocol.py
 #
 # THE packet contract between Python client and Python server.
-# If you change anything here, you must update server.py to match.
+# If we change anything here, we must update server.py to match.
 # All fields are little-endian ('<' prefix in struct format strings).
 #
 # Imported by: client/sender.py, server/server.py
@@ -18,6 +18,11 @@ PKT_REGISTER     = 0x0020   # node  → server: first contact
 PKT_ACK          = 0x0030   # server → node:  confirms registration
 
 # ── Flags bitmask ─────────────────────────────────────────────────────────────
+#
+# These two flags are specific to the tag game demo.
+# They are just names for bits 0 and 1 — any game can redefine them.
+# Examples: FLAG_JUMPING = 0x01, FLAG_CROUCHING = 0x02, FLAG_INTERACTING = 0x04
+# Bits 2–7 are free for game-specific use.
 
 FLAG_SHOOTING = 0x01   # player is firing this tick
 FLAG_TAGGED   = 0x02   # player has been tagged (game over signal)
@@ -61,7 +66,7 @@ assert HEADER_SIZE == 8, f"ServerPacketHeader must be 8 bytes, got {HEADER_SIZE}
 #    13       1    B   flags
 #    14       —    x   padding
 
-PLAYER_FMT  = '<BfffBx'
+PLAYER_FMT  = '<BfffB'
 PLAYER_SIZE = struct.calcsize(PLAYER_FMT)
 assert PLAYER_SIZE == 14, f"PlayerEntry must be 14 bytes, got {PLAYER_SIZE}"
 

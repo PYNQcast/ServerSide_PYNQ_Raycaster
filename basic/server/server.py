@@ -41,6 +41,9 @@ REDIS_HOST = "127.0.0.1"   # change to ElastiCache endpoint on real EC2
 REDIS_PORT = 6379
 
 # ── Redis (optional — server runs without it if Redis unavailable) ────────────
+# Tries to connect and ping Redis. If it fails, r=None is set and every Redis
+# helper returns early ("if not r: return") — the UDP game loop keeps running,
+# only persistence (sidecar → DynamoDB) is lost.
 
 try:
     import redis as redislib

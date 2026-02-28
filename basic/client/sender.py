@@ -24,7 +24,7 @@ from protocol import (
     HEADER_SIZE,
 )
 
-SERVER_IP   = "127.0.0.1"  # change to EC2 IP for real test
+SERVER_IP   = "18.175.238.148"  # EC2 elastic IP
 SERVER_PORT = 9000
 
 # ── Fake position (replace with real PYNQ sensor data) ───────────────────────
