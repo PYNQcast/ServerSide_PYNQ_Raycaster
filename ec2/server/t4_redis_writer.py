@@ -74,10 +74,18 @@ class RedisWriter:
         """Batch all HSETs into one pipeline; execute LPUSHes individually."""
         hsets  = [m for m in msgs if m.get("op") == "hset"]
         lpushs = [m for m in msgs if m.get("op") == "lpush"]
-        other  = [m for m in msgs if m.get("op") not in ("hset", "lpush")]
+        dels   = [m for m in msgs if m.get("op") == "del"]
+        other  = [m for m in msgs if m.get("op") not in ("hset", "lpush", "del")]
 
         for m in other:
             print(f"[T4] unknown op: {m}")
+
+        if dels and self.client:
+            try:
+                self.client.delete(*[m["key"] for m in dels])
+                print(f"[T4] DEL {[m['key'] for m in dels]}")
+            except Exception as e:
+                print(f"[T4] DEL failed: {e}")
 
         # Pipeline: bundle all per-tick player position writes into one round-trip
         if hsets and self.client:

@@ -35,12 +35,13 @@ from protocol import (
 )
 import struct
 
-TAG_RADIUS    = 20.0  # units: players closer than this get tagged (orbit radius=50, so ~40° arc)
-MATCH_PLAYERS = 2     # number of players that triggers match_start
-MAX_PLAYERS   = 2     # reject registrations beyond this limit
+TAG_RADIUS       = 20.0  # units: players closer than this get tagged (orbit radius=50, so ~40° arc)
+MATCH_PLAYERS    = 2     # number of players that triggers match_start
+MAX_PLAYERS      = 2     # reject registrations beyond this limit
+TAGS_TO_WIN      = 3     # tagger must tag runner this many times to win
+TAG_FLASH_S      = 1.0   # seconds FLAG_TAGGED stays set (visual flash) before clearing for next tag
+MATCH_END_HOLD_S = 1.0   # after final tag: keep broadcasting FLAG_TAGGED so nodes see it before idle
 # Roles: player 1 = RUNNER (speed 0.05 rad/tick), player 2 = TAGGER (speed 0.08 rad/tick)
-# Tag fires when tagger enters runner's hitbox (dist < TAG_RADIUS). Runner (lower ID) is tagged.
-TAG_CLEAR_S   = 1.5   # seconds before FLAG_TAGGED is cleared (visual flash)
 
 class GameTick:
     def __init__(self, packet_queue, broadcast_queue, write_queue, tick_rate=20):
@@ -53,8 +54,10 @@ class GameTick:
         self.next_id       = 1      # player IDs start at 1
         self.match_started = False
         self.match_ended   = False
+        self.match_end_at  = None   # monotonic time to clear players after final tag broadcast
+        self.tag_count     = 0      # number of times runner has been tagged this match
+        self.tag_flash_at  = None   # monotonic time when current FLAG_TAGGED flash expires
         self.tick_count    = 0
-        self.tag_clear_at  = {}     # player_id → monotonic time when FLAG_TAGGED clears
 
     async def run(self):
         print(f"[T2 GameTick] running at {1/self.interval:.0f} Hz")
@@ -153,20 +156,41 @@ class GameTick:
     #   _check_match_end() : win condition (all tagged, time limit, score, etc.)
 
     async def _tick(self):
-        self._clear_expired_tags()
+        self._clear_tag_flash()
+        await self._check_match_end_hold()
         await self._check_proximity()
         await self._check_match_end()
         # await self._check_shooting()   # TODO: wire to C++ is_visible()
 
-    def _clear_expired_tags(self):
-        now = time.monotonic()
-        for p in self.players.values():
-            pid = p["player_id"]
-            if (p["flags"] & FLAG_TAGGED) and pid in self.tag_clear_at:
-                if now >= self.tag_clear_at[pid]:
+    def _clear_tag_flash(self):
+        """Clear FLAG_TAGGED after TAG_FLASH_S so the runner can be tagged again."""
+        if self.tag_flash_at is None or self.match_ended:
+            return
+        if time.monotonic() >= self.tag_flash_at:
+            for p in self.players.values():
+                if p["flags"] & FLAG_TAGGED:
                     p["flags"] &= ~FLAG_TAGGED
-                    del self.tag_clear_at[pid]
-                    print(f"[T2] player {pid} tag cleared")
+                    print(f"[T2] P{p['player_id']} tag flash cleared "
+                          f"({self.tag_count}/{TAGS_TO_WIN} tags)")
+            self.tag_flash_at = None
+
+    async def _check_match_end_hold(self):
+        """After final tag: keep broadcasting FLAG_TAGGED for MATCH_END_HOLD_S
+        so nodes are guaranteed to see it, then clear players and go idle."""
+        if self.match_end_at is None:
+            return
+        if time.monotonic() >= self.match_end_at:
+            print("[T2] match end hold expired — clearing players")
+            # Delete stale player HSET keys from Redis so monitor goes idle cleanly
+            for p in self.players.values():
+                self.write_queue.put({"op": "del", "key": f"player:{p['player_id']}"})
+            self.players       = {}
+            self.next_id       = 1
+            self.tag_count     = 0
+            self.tag_flash_at  = None
+            self.match_end_at  = None
+            self.match_started = False
+            self.match_ended   = False
 
     async def _check_proximity(self):
         """Generic pairwise distance check across all players.
@@ -190,37 +214,37 @@ class GameTick:
                 # (higher player_id = faster orbit, speed 0.08 vs 0.05).
                 if dist < TAG_RADIUS:
                     tagged = p1 if p1["player_id"] < p2["player_id"] else p2
-                    if not (tagged["flags"] & FLAG_TAGGED):
+                    # Only register a new tag if flash has cleared (no double-counting)
+                    if not (tagged["flags"] & FLAG_TAGGED) and self.tag_flash_at is None:
                         tagged["flags"] |= FLAG_TAGGED
-                        self.tag_clear_at[tagged["player_id"]] = (
-                            time.monotonic() + TAG_CLEAR_S
-                        )
-                        print(f"[T2] player {tagged['player_id']} tagged "
-                              f"(dist={dist:.2f}) — clears in {TAG_CLEAR_S}s")
+                        self.tag_count   += 1
+                        self.tag_flash_at = time.monotonic() + TAG_FLASH_S
+                        print(f"[T2] P{tagged['player_id']} tagged (dist={dist:.2f}) "
+                              f"— tag {self.tag_count}/{TAGS_TO_WIN}")
                         await self._push_event({
                             "event":     "player_tagged",
                             "player_id": tagged["player_id"],
                             "dist":      round(dist, 2),
+                            "tag_count": self.tag_count,
+                            "tags_to_win": TAGS_TO_WIN,
                         })
 
     async def _check_match_end(self):
-        """Match ends the moment the runner (lowest player_id) gets tagged.
-        Fires match_end event and clears all players — server waits for fresh
-        re-registrations before starting the next match.
+        """Match ends when runner has been tagged TAGS_TO_WIN times.
+        Fires match_end event and schedules player clear after MATCH_END_HOLD_S,
+        giving nodes time to receive the final FLAG_TAGGED broadcast before going idle.
         """
         if not self.match_started or self.match_ended:
             return
-        runner = min(self.players.values(), key=lambda p: p["player_id"], default=None)
-        if runner and (runner["flags"] & FLAG_TAGGED):
-            self.match_ended = True
-            print(f"[T2] match ended — runner P{runner['player_id']} tagged")
-            await self._push_event({"event": "match_end", "winner": "tagger"})
-            # Clear all players so the loop goes idle until sims re-register
-            self.players       = {}
-            self.next_id       = 1
-            self.tag_clear_at  = {}
-            self.match_started = False
-            self.match_ended   = False
+        if self.tag_count >= TAGS_TO_WIN:
+            self.match_ended  = True
+            self.match_end_at = time.monotonic() + MATCH_END_HOLD_S
+            print(f"[T2] match ended — runner tagged {self.tag_count}x "
+                  f"(clearing players in {MATCH_END_HOLD_S}s)")
+            await self._push_event({
+                "event": "match_end", "winner": "tagger",
+                "tag_count": self.tag_count,
+            })
 
     # ── Broadcast ─────────────────────────────────────────────────────────────
 
