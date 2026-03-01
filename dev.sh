@@ -81,8 +81,9 @@ tmux send-keys -t "$SESSION:0.4" "cd $REPO && python3 interfacing_+_sim/node_sim
 tmux select-pane -t "$SESSION:0.5" -T "redis stats"
 tmux send-keys -t "$SESSION:0.5" "ssh -t -i $KEY $EC2 'redis-cli --stat'"
 
-# Open browser (WSL: cd to /mnt/c first to avoid UNC path error in cmd.exe)
-cd /mnt/c && cmd.exe /c start http://localhost:8080
+# Open browser — use WSL IP since SSH tunnel binds to WSL interface, not Windows localhost
+WSL_IP=$(hostname -I | awk '{print $1}')
+cd /mnt/c && cmd.exe /c start "http://${WSL_IP}:8080"
 
 # Focus server pane on attach
 tmux select-pane -t "$SESSION:0.0"
