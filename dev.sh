@@ -29,11 +29,25 @@ if [ "$UNPUSHED" -gt 0 ]; then
   [[ "$confirm" =~ ^[Yy]$ ]] || exit 1
 fi
 
-# Kill stale session and EC2 processes, pull latest code
+# Kill stale tmux session
 tmux kill-session -t "$SESSION" 2>/dev/null
-echo "--- pulling latest code on EC2 ---"
-ssh -i "$KEY" "$EC2" "pkill -f server.py; pkill -f sidecar.py; pkill -f monitor.py; fuser -k 8080/tcp 2>/dev/null; sleep 2; cd ~/ServerSide_PYNQ_Raycaster && git pull"
-echo "--- done ---"
+
+# Kill any local process holding port 8080 (stale SSH tunnel from a previous run)
+fuser -k 8080/tcp 2>/dev/null || true
+
+echo "--- killing stale EC2 processes and pulling latest code ---"
+# Each pkill uses '|| true' so a "no process found" exit-1 doesn't abort the chain.
+# fuser on EC2 also frees port 8080 server-side in case monitor.py crashed mid-bind.
+# git pull is last and its exit code is checked.
+ssh -i "$KEY" "$EC2" "
+  pkill -f server.py  2>/dev/null || true
+  pkill -f sidecar.py 2>/dev/null || true
+  pkill -f monitor.py 2>/dev/null || true
+  fuser -k 8080/tcp   2>/dev/null || true
+  sleep 1
+  cd ~/ServerSide_PYNQ_Raycaster && git pull --ff-only
+" || { echo "!!! EC2 setup failed — check SSH / git pull above"; exit 1; }
+echo "--- EC2 ready ---"
 
 # Create session (6 panes)
 tmux new-session -d -s "$SESSION" -x 220 -y 50
@@ -68,9 +82,9 @@ tmux send-keys -t "$SESSION:0.0" "ssh -t -i $KEY $EC2 'source ~/venv/bin/activat
 tmux select-pane -t "$SESSION:0.1" -T "sidecar"
 tmux send-keys -t "$SESSION:0.1" "ssh -t -i $KEY $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster && python3 ec2/sidecar/sidecar.py'"
 
-# Monitor: SSH tunnel (-L 8080) + monitor.py — open http://localhost:8080 in browser
+# Monitor: kill any lingering local :8080 bind, then open SSH tunnel + monitor.py
 tmux select-pane -t "$SESSION:0.2" -T "monitor :8080"
-tmux send-keys -t "$SESSION:0.2" "ssh -i $KEY -L 0.0.0.0:8080:localhost:8080 $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster && python3 ec2/monitor/monitor.py'"
+tmux send-keys -t "$SESSION:0.2" "fuser -k 8080/tcp 2>/dev/null || true; ssh -i $KEY -L 0.0.0.0:8080:localhost:8080 $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster && python3 ec2/monitor/monitor.py'"
 
 tmux select-pane -t "$SESSION:0.3" -T "node sim 1"
 tmux send-keys -t "$SESSION:0.3" "cd $REPO && python3 interfacing_+_sim/node_simulator.py 18.175.238.148 9000 --nodes 1"
