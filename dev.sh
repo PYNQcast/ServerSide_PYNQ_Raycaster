@@ -48,15 +48,16 @@ tmux split-window -t "$SESSION:0.3" -h -p 50   # 3=bottom-mid   4=bottom-right
 tmux select-pane -t "$SESSION:0.0" -T "seda server"
 tmux send-keys -t "$SESSION:0.0" "ssh -t -i $KEY $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster && python3 ec2/server/server.py'"
 
-# Sidecar + SSH tunnel for monitor on same connection (-L 8080:localhost:8080)
-tmux select-pane -t "$SESSION:0.1" -T "sidecar + monitor tunnel :8080"
-tmux send-keys -t "$SESSION:0.1" "ssh -t -i $KEY -L 8080:localhost:8080 $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster && python3 ec2/sidecar/sidecar.py'"
+# Sidecar: SSH tunnel (-L 8080) baked in so monitor is reachable at http://localhost:8080
+# Start sidecar first, then in a second terminal (or after Ctrl+C) run monitor.py
+tmux select-pane -t "$SESSION:0.1" -T "sidecar | tunnel :8080"
+tmux send-keys -t "$SESSION:0.1" "ssh -t -i $KEY -L 8080:localhost:8080 $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster && python3 ec2/sidecar/sidecar.py & python3 ec2/monitor/monitor.py'"
 
 tmux select-pane -t "$SESSION:0.2" -T "node sim 1"
-tmux send-keys -t "$SESSION:0.2" "cd $REPO && python3 interfacing/node_simulator.py 18.175.238.148 9000 --nodes 1"
+tmux send-keys -t "$SESSION:0.2" "cd $REPO && python3 interfacing_+_sim/node_simulator.py 18.175.238.148 9000 --nodes 1"
 
 tmux select-pane -t "$SESSION:0.3" -T "node sim 2"
-tmux send-keys -t "$SESSION:0.3" "cd $REPO && python3 interfacing/node_simulator.py 18.175.238.148 9000 --nodes 1 --player-id 2"
+tmux send-keys -t "$SESSION:0.3" "cd $REPO && python3 interfacing_+_sim/node_simulator.py 18.175.238.148 9000 --nodes 1 --player-id 2"
 
 tmux select-pane -t "$SESSION:0.4" -T "redis stats"
 tmux send-keys -t "$SESSION:0.4" "ssh -t -i $KEY $EC2 'redis-cli --stat'"
