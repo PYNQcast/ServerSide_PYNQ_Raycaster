@@ -1,6 +1,6 @@
 // ec2/game_logic/raycaster.cpp
 //
-// Generic raycaster engine primitives — stubs with TODOs.
+// Generic raycaster engine primitives : stubs with TODOs.
 // See raycaster.h for documentation on each function.
 
 #include "raycaster.h"
@@ -27,7 +27,7 @@ float ray_intersects_wall(float x, float y, float angle, const Map& map, float m
 
 bool is_visible(Vec2 a, Vec2 b, const Map& map) {
     // TODO: cast a ray from a toward b, check for wall intersections
-    // Can reuse ray_intersects_wall — if hit distance >= distance(a,b), LOS is clear
+    // Can reuse ray_intersects_wall : if hit distance >= distance(a,b), LOS is clear
     (void)a; (void)b; (void)map;
     return true;
 }

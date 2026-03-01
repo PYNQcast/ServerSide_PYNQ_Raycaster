@@ -1,6 +1,6 @@
 # ec2/server/server.py
 #
-# Python SEDA game server — entry point.
+# Python SEDA game server : entry point.
 #
 # Same 4-stage pipeline as the classic C++ SEDA design, implemented as
 # asyncio tasks connected by asyncio.Queue objects instead of threads and

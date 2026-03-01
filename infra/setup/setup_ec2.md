@@ -25,7 +25,7 @@ sudo apt update && sudo apt install -y \
 ```
 
 `cmake` and `g++` are for the C++ game_logic module only.
-No hiredis needed — the Python server uses redis-py.
+No hiredis needed : the Python server uses redis-py.
 
 ## Python environment
 ```bash

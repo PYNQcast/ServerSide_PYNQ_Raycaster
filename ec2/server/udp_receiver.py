@@ -1,11 +1,11 @@
 # ec2/server/udp_receiver.py
 #
-# T1 — UDPReceiver
+# T1 : UDPReceiver
 #
 # Listens on UDP port 9000. On each incoming packet, pushes a RawPacket
 # dict onto packet_queue for T2 (GameTick) to process.
 #
-# This stage does NO packet parsing — it just receives raw bytes and
+# This stage does NO packet parsing : it just receives raw bytes and
 # passes them downstream. Parsing happens in T2.
 #
 # Queue output: {"data": bytes, "addr": (ip, port)}
@@ -13,7 +13,7 @@
 import asyncio
 
 class UDPReceiverProtocol(asyncio.DatagramProtocol):
-    """asyncio UDP transport — called by the event loop on each incoming datagram."""
+    """asyncio UDP transport : called by the event loop on each incoming datagram."""
 
     def __init__(self, queue: asyncio.Queue):
         self.queue = queue

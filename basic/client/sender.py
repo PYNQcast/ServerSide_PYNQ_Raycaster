@@ -1,6 +1,6 @@
 # basic/client/sender.py
 #
-# Minimal PYNQ node simulator — single file, no classes, no threading.
+# Minimal PYNQ node simulator : single file, no classes, no threading.
 #
 # Purpose: prove that a client can send position packets to the EC2 server
 # and receive game state back. Stand-in for the real PYNQ node.
@@ -9,7 +9,7 @@
 #   python sender.py
 #
 # Change SERVER_IP to your EC2 elastic IP before running against EC2.
-# Packet format lives in protocol/protocol.py — edit there, not here.
+# Packet format lives in protocol/protocol.py : edit there, not here.
 
 import sys
 import os
@@ -55,7 +55,7 @@ def receive():
     if pkt_type != PKT_GAME_STATE:
         return
 
-    print(f"  Game state — {len(players)} player(s):")
+    print(f"  Game state : {len(players)} player(s):")
     for p in players:
         print(f"    player {p['player_id']}  x={p['x']:.2f}  y={p['y']:.2f}  angle={p['angle']:.2f}")
 

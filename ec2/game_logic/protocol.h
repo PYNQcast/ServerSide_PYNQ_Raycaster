@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
 
-// Packet format — must exactly match interfacing/protocol.py byte layout.
+// Packet format : must exactly match interfacing/protocol.py byte layout.
 // All multi-byte fields are little-endian.
 
 // ── Node → Server (24 bytes) ────────────────────────────────────────────────

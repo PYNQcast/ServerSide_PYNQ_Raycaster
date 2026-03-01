@@ -20,7 +20,7 @@ PKT_ACK          = 0x0030   # server → node:  confirms registration
 # ── Flags bitmask ─────────────────────────────────────────────────────────────
 #
 # These two flags are specific to the tag game demo.
-# They are just names for bits 0 and 1 — any game can redefine them.
+# They are just names for bits 0 and 1 : any game can redefine them.
 # Examples: FLAG_JUMPING = 0x01, FLAG_CROUCHING = 0x02, FLAG_INTERACTING = 0x04
 # Bits 2–7 are free for game-specific use.
 
@@ -64,7 +64,7 @@ assert HEADER_SIZE == 8, f"ServerPacketHeader must be 8 bytes, got {HEADER_SIZE}
 #     5       4    f   y
 #     9       4    f   angle
 #    13       1    B   flags
-#    14       —    x   padding
+#    14       :    x   padding
 
 PLAYER_FMT  = '<BfffB'
 PLAYER_SIZE = struct.calcsize(PLAYER_FMT)

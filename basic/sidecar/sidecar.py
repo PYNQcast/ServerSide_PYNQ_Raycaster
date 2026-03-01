@@ -1,6 +1,6 @@
 # basic/sidecar/sidecar.py
 #
-# Minimal Python sidecar — single file.
+# Minimal Python sidecar : single file.
 #
 # Purpose: show how the sidecar pattern works end to end.
 # server.py writes to Redis. This sidecar reads from Redis
@@ -8,7 +8,7 @@
 #
 # What it does:
 #   1. Connects to Redis and DynamoDB
-#   2. Blocks on BRPOP "game:events" — wakes up only when server.py pushes an event
+#   2. Blocks on BRPOP "game:events" : wakes up only when server.py pushes an event
 #   3. On match_start: reads all player positions from Redis, writes to DynamoDB
 #   4. Goes back to sleep waiting for the next event
 #
@@ -87,10 +87,10 @@ HANDLERS = {
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 print(f"Waiting for events on Redis key '{REDIS_EVENT_KEY}'...")
-print("(Sidecar sleeps here until server.py pushes an event — BRPOP blocks)")
+print("(Sidecar sleeps here until server.py pushes an event : BRPOP blocks)")
 
 while True:
-    # BRPOP blocks until server.py pushes something — 0 = wait forever
+    # BRPOP blocks until server.py pushes something : 0 = wait forever
     # Returns (key, value) tuple or None on timeout
     result = r.brpop(REDIS_EVENT_KEY, timeout=0)
     if result is None:

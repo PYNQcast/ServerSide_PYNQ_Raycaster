@@ -1,6 +1,6 @@
 # basic/server/server.py
 #
-# Minimal Python UDP game server — single file, no classes, no framework.
+# Minimal Python UDP game server : single file, no classes, no framework.
 #
 # Purpose: prove that a PYNQ node can send a position packet to EC2,
 # receive game state back, and that match events reach Redis so the
@@ -40,9 +40,9 @@ MAX_NODES  = 4
 REDIS_HOST = "127.0.0.1"   # change to ElastiCache endpoint on real EC2
 REDIS_PORT = 6379
 
-# ── Redis (optional — server runs without it if Redis unavailable) ────────────
+# ── Redis (optional : server runs without it if Redis unavailable) ────────────
 # Tries to connect and ping Redis. If it fails, r=None is set and every Redis
-# helper returns early ("if not r: return") — the UDP game loop keeps running,
+# helper returns early ("if not r: return") : the UDP game loop keeps running,
 # only persistence (sidecar → DynamoDB) is lost.
 
 try:
@@ -51,7 +51,7 @@ try:
     r.ping()
     print(f"Connected to Redis at {REDIS_HOST}:{REDIS_PORT}")
 except Exception as e:
-    print(f"Redis not available ({e}) — continuing without it")
+    print(f"Redis not available ({e}) : continuing without it")
     r = None
 
 def redis_write_player(player_id, x, y, angle):

@@ -2,7 +2,7 @@
 
 ## SNS Topic
 - Name: `fpga-raycaster-game-end`
-- Type: Standard (not FIFO — delivery order doesn't matter here)
+- Type: Standard (not FIFO : delivery order doesn't matter here)
 - After creation, copy ARN into `.env` as `SNS_TOPIC_ARN`
 
 ## Lambda Function

@@ -2,7 +2,7 @@
 
 **Not needed yet.** Build this after the sidecar is writing to DynamoDB successfully.
 
-**Owner: open for the team — pure Python, no C++, no real-time constraints.**
+**Owner: open for the team : pure Python, no C++, no real-time constraints.**
 
 ---
 
@@ -19,7 +19,7 @@ Sidecar
       → writes results back
 ```
 
-You don't run or manage it — AWS invokes it in response to the SNS message. It scales automatically, costs essentially nothing at our volume, and if it fails it can be retried without affecting the game.
+You don't run or manage it : AWS invokes it in response to the SNS message. It scales automatically, costs essentially nothing at our volume, and if it fails it can be retried without affecting the game.
 
 ## What it could do
 
@@ -29,7 +29,7 @@ You don't run or manage it — AWS invokes it in response to the SNS message. It
 - Write a summary back to DynamoDB for the dashboard to display
 
 **Player profile updates**
-- Increment lifetime win/loss/tag counters for each player using DynamoDB `UpdateItem` with `ADD` expressions (atomic increment — no read-modify-write needed)
+- Increment lifetime win/loss/tag counters for each player using DynamoDB `UpdateItem` with `ADD` expressions (atomic increment : no read-modify-write needed)
 
 **Replay indexing**
 - Generate a pre-signed S3 URL for the replay file uploaded by the sidecar
@@ -41,7 +41,7 @@ You don't run or manage it — AWS invokes it in response to the SNS message. It
 2. SNS topic must exist (`infra/setup/setup_sns_lambda.md`)
 3. Create the Lambda function in AWS console (Python 3.12, 128 MB, 30s timeout)
 4. Subscribe it to the SNS topic
-5. Start with just printing the `match_id` — confirm it triggers correctly
+5. Start with just printing the `match_id` : confirm it triggers correctly
 6. Add stat computation once the trigger is confirmed working
 
 ## Structure (when you build it)
@@ -49,7 +49,7 @@ You don't run or manage it — AWS invokes it in response to the SNS message. It
 ```
 lambda/
   stats_processor/
-    handler.py          # entry point — def handler(event, context)
+    handler.py          # entry point : def handler(event, context)
     requirements.txt    # boto3 is pre-installed on Lambda, list any extras here
   deploy.sh             # zip handler.py and push to AWS with the CLI
 ```

@@ -1,10 +1,10 @@
-# Storage Design — Three-Tier Strategy
+# Storage Design : Three-Tier Strategy
 
 ## Why three tiers?
 
-Game state changes 20 times per second. DynamoDB at 1–10ms write latency cannot keep up with the tick loop. Redis at <1ms fits. But Redis is ephemeral — we need persistent storage for match history. S3 is cheapest for bulk replay data. Hence: hot cache → warm DB → cold archive.
+Game state changes 20 times per second. DynamoDB at 1–10ms write latency cannot keep up with the tick loop. Redis at <1ms fits. But Redis is ephemeral : we need persistent storage for match history. S3 is cheapest for bulk replay data. Hence: hot cache → warm DB → cold archive.
 
-## Tier 1 — Redis (ElastiCache)
+## Tier 1 : Redis (ElastiCache)
 
 **Purpose:** Live game state, written every tick by the Python server.
 **Written by:** T4 RedisWriter (redis.asyncio).
@@ -21,7 +21,7 @@ node:{node_id}:heartbeat   STRING  TTL=5s (auto-expiry = node considered dead)
 lobby:waiting              SET   node IDs waiting for a match
 ```
 
-## Tier 2 — DynamoDB (Single-table)
+## Tier 2 : DynamoDB (Single-table)
 
 **Purpose:** Durable match results and player profiles.
 **Written by:** Python sidecar after game end.
@@ -35,7 +35,7 @@ Single-table access patterns:
 | PLAYER#{player_id}  | PROFILE        | total wins, losses, tags      |
 | STATUS#COMPLETED    | {start_time}   | GSI for recent match listing  |
 
-## Tier 3 — S3
+## Tier 3 : S3
 
 **Purpose:** Bulk replay archives and periodic snapshots.
 **Written by:** Python sidecar.

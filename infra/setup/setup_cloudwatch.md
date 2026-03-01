@@ -1,6 +1,6 @@
 # CloudWatch Setup
 
-> **Not needed yet.** CloudWatch is pure observability — nothing in the game depends on it. Skip this until the server is running and you want to monitor it unattended. During development, `stdout` is enough.
+> **Not needed yet.** CloudWatch is pure observability : nothing in the game depends on it. Skip this until the server is running and you want to monitor it unattended. During development, `stdout` is enough.
 >
 > Priority order: EC2 → Redis → PYNQ comms → Sidecar → DynamoDB → S3 → SNS/Lambda → Dashboard → CloudWatch (if ever).
 

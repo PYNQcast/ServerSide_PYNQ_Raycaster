@@ -1,14 +1,14 @@
 # ec2/server/redis_writer.py
 #
-# T4 — RedisWriter
+# T4 : RedisWriter
 #
 # Drains write_queue and batches state updates to Redis.
-# Decoupled from the game tick — Redis writes happen asynchronously
+# Decoupled from the game tick : Redis writes happen asynchronously
 # and do not block the T2/T3 hot path.
 #
 # Two Redis operations:
-#   HSET player:<id> x <x> y <y> angle <a>  — live position (overwritten each tick)
-#   LPUSH game:events <json>                 — match events (sidecar reads these)
+#   HSET player:<id> x <x> y <y> angle <a>  : live position (overwritten each tick)
+#   LPUSH game:events <json>                 : match events (sidecar reads these)
 #
 # Queue input: {"key": str, "value": str}
 #

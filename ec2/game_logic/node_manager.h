@@ -4,9 +4,9 @@
 #include <string>
 #include "state.h"
 
-// Node manager — tracks registered PYNQ nodes.
+// Node manager : tracks registered PYNQ nodes.
 // Handles first-contact REGISTER packets, heartbeat TTL, and player_id assignment.
-// Accessed only from GameTick thread — no synchronisation needed.
+// Accessed only from GameTick thread : no synchronisation needed.
 
 struct NodeInfo {
     uint8_t  player_id;

@@ -8,14 +8,14 @@ Two tasks here, both are good starting points for anyone wanting to contribute w
 
 **Task: implement the Python packet encoder/decoder.**
 
-`protocol.py` is the single source of truth for the wire format. The Python server (`ec2/server/game_tick.py`) unpacks the same bytes using the same `struct` format strings. If you change a field, size, or order here you must update the server-side unpack logic to match — and vice versa. The `assert` size checks at the top of this file catch mismatches at startup.
+`protocol.py` is the single source of truth for the wire format. The Python server (`ec2/server/game_tick.py`) unpacks the same bytes using the same `struct` format strings. If you change a field, size, or order here you must update the server-side unpack logic to match : and vice versa. The `assert` size checks at the top of this file catch mismatches at startup.
 
 ### Packet format
 
 **Node → Server (24 bytes, little-endian)**
 ```
 offset  size  field
-0       2     type       (uint16)  packet type — see types below
+0       2     type       (uint16)  packet type : see types below
 2       2     seq        (uint16)  incrementing sequence number
 4       4     timestamp  (uint32)  milliseconds since epoch
 8       4     x          (float)   world-space X position
@@ -56,7 +56,7 @@ Create `protocol.py` using Python's `struct` module with little-endian format st
 ```python
 import struct
 
-NODE_FMT   = '<HHIfffB3x'  # 24 bytes — verify with struct.calcsize()
+NODE_FMT   = '<HHIfffB3x'  # 24 bytes : verify with struct.calcsize()
 HEADER_FMT = '<HHI'        # 8 bytes
 PLAYER_FMT = '<BfffB'      # 14 bytes
 
@@ -74,7 +74,7 @@ Add `assert struct.calcsize(NODE_FMT) == 24` etc. to catch mistakes early.
 
 **Task: build a fake PYNQ node for testing the server without hardware.**
 
-**Runs on your laptop — not on EC2.** This is a client, not a server component. It impersonates a PYNQ board by sending the same UDP packets a real node would send, across the internet to the EC2 server.
+**Runs on your laptop : not on EC2.** This is a client, not a server component. It impersonates a PYNQ board by sending the same UDP packets a real node would send, across the internet to the EC2 server.
 
 ```
 Your laptop
@@ -103,4 +103,4 @@ Start with one node. Add a `--nodes N` argument later to simulate both players f
 
 ### Dependency
 
-Needs `protocol.py` to exist first — build that one before this.
+Needs `protocol.py` to exist first : build that one before this.

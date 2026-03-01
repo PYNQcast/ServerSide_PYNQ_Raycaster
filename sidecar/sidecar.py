@@ -8,7 +8,7 @@ REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
 
 r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 
-print(f"Sidecar running — watching Redis at {REDIS_HOST}:{REDIS_PORT}")
+print(f"Sidecar running : watching Redis at {REDIS_HOST}:{REDIS_PORT}")
 
 while True:
     result = r.blpop("game:events", timeout=30)
@@ -24,4 +24,4 @@ while True:
         # TODO: write to DynamoDB
         # TODO: upload replay to S3
         # TODO: publish SNS
-        print(f"Match {match_id} ended — persistence not yet implemented")
+        print(f"Match {match_id} ended : persistence not yet implemented")

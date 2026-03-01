@@ -1,7 +1,7 @@
 #pragma once
 #include "state.h"
 
-// Anticheat — called by GameTick for each incoming position update.
+// Anticheat : called by GameTick for each incoming position update.
 // Keeps all validation logic isolated so it's easy to adjust thresholds.
 
 namespace Anticheat {

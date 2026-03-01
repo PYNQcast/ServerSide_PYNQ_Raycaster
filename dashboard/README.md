@@ -2,7 +2,7 @@
 
 Not built yet. This folder is a placeholder.
 
-The dashboard is a browser UI that connects to the game server via WebSocket and shows live game state. Build it when the Python server is sending real data — there's no point building the frontend before you know what the JSON looks like.
+The dashboard is a browser UI that connects to the game server via WebSocket and shows live game state. Build it when the Python server is sending real data : there's no point building the frontend before you know what the JSON looks like.
 
 ## How it connects
 
@@ -16,21 +16,21 @@ Browser → renders it
 
 ## Suggested stack
 
-- **React + Vite** — fast to set up, good for live-updating UI
-- **No extra state management** — the WebSocket message replaces the store, just `useState` on the latest frame
+- **React + Vite** : fast to set up, good for live-updating UI
+- **No extra state management** : the WebSocket message replaces the store, just `useState` on the latest frame
 - Run with `npm run dev`, proxied to EC2 or tunnelled via `ssh -L`
 
 ## Suggested panels
 
-- **Node status** — online/offline, last heartbeat time, IP for each PYNQ node
-- **Minimap** — `<canvas>` drawing player positions as dots on a grid, updated each frame
-- **Tick graph** — rolling line chart of tick duration in ms (spot overruns immediately)
-- **Admin bar** — buttons for start/stop match, kick a node; these POST to a small REST endpoint on the server
+- **Node status** : online/offline, last heartbeat time, IP for each PYNQ node
+- **Minimap** : `<canvas>` drawing player positions as dots on a grid, updated each frame
+- **Tick graph** : rolling line chart of tick duration in ms (spot overruns immediately)
+- **Admin bar** : buttons for start/stop match, kick a node; these POST to a small REST endpoint on the server
 
 ## Suggested libraries
 
-- `recharts` — simple line charts for tick duration history, zero config
-- Nothing else — keep it small, it's a debug tool not a product
+- `recharts` : simple line charts for tick duration history, zero config
+- Nothing else : keep it small, it's a debug tool not a product
 
 ## When to build it
 

@@ -4,7 +4,7 @@
 #include <string>
 
 // Shared game state structs.
-// GameState lives entirely in Thread 2 (GameTick) — no shared access across threads.
+// GameState lives entirely in Thread 2 (GameTick) : no shared access across threads.
 // Snapshots are serialised into BroadcastMsg / WriteMsg before being pushed to queues.
 
 struct PlayerState {

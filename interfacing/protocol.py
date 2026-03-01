@@ -8,8 +8,8 @@
 # mismatches at startup.
 #
 # Used by:
-#   interfacing/node_simulator.py   — test client, runs on laptop
-#   PYNQ Jupyter notebooks          — runs on the FPGA board
+#   interfacing/node_simulator.py   : test client, runs on laptop
+#   PYNQ Jupyter notebooks          : runs on the FPGA board
 
 import struct
 import time
@@ -25,7 +25,7 @@ PKT_ACK          = 0x0030   # server → node:  confirms registration
 # ── Flags bitmask (uint8 flags field) ─────────────────────────────────────────
 
 FLAG_SHOOTING = 0x01   # player fired this tick
-FLAG_TAGGED   = 0x02   # player has been tagged — game over signal
+FLAG_TAGGED   = 0x02   # player has been tagged : game over signal
 
 # ── Wire format ───────────────────────────────────────────────────────────────
 #
@@ -64,7 +64,7 @@ assert HEADER_SIZE == 8, f"ServerPacketHeader must be 8 bytes, got {HEADER_SIZE}
 #     5       4    f   y
 #     9       4    f   angle
 #    13       1    B   flags
-#    14       —    x   (implicit — 14 bytes total, no tail padding needed)
+#    14       :    x   (implicit : 14 bytes total, no tail padding needed)
 
 PLAYER_FMT  = '<BfffBx'
 PLAYER_SIZE = struct.calcsize(PLAYER_FMT)

@@ -9,7 +9,7 @@ A tick is one complete cycle of the game loop. Every tick the server:
 3. Calls C++ game_logic for physics / visibility checks
 4. Sends the new game state back to all nodes
 
-We run at **20 Hz** — 20 ticks per second, one tick every **50 ms**. Think of it like a heartbeat. The game only "moves" at the tick rate, not continuously. Between ticks, the server is sleeping.
+We run at **20 Hz** : 20 ticks per second, one tick every **50 ms**. Think of it like a heartbeat. The game only "moves" at the tick rate, not continuously. Between ticks, the server is sleeping.
 
 Why 20 Hz? It's a common game server rate. Fast enough that movement feels smooth. Slow enough that a t2.micro can easily keep up, and that UDP packet volume stays low (2 nodes × 20 packets/sec = 40 packets/sec total inbound).
 
@@ -23,7 +23,7 @@ time ─────────────────────────
         │sleep│          │sleep│          │sleep│
 ```
 
-If the logic takes 5 ms, the task sleeps for 45 ms. If it ever takes more than 50 ms, the tick has overrun — the next tick is late.
+If the logic takes 5 ms, the task sleeps for 45 ms. If it ever takes more than 50 ms, the tick has overrun : the next tick is late.
 
 ---
 
@@ -31,13 +31,13 @@ If the logic takes 5 ms, the task sleeps for 45 ms. If it ever takes more than 5
 
 ### Python game server (`ec2/server/`)
 
-The server's hot path — receive packet, update state, send response — runs 20 times per second. The operations are:
+The server's hot path : receive packet, update state, send response : runs 20 times per second. The operations are:
 
-- UDP recv (asyncio DatagramProtocol — non-blocking)
-- Packet deserialisation (struct.unpack — fast)
-- State merge (dict operations — fast)
-- UDP send (asyncio sendto — non-blocking)
-- Redis write (redis.asyncio — non-blocking)
+- UDP recv (asyncio DatagramProtocol : non-blocking)
+- Packet deserialisation (struct.unpack : fast)
+- State merge (dict operations : fast)
+- UDP send (asyncio sendto : non-blocking)
+- Redis write (redis.asyncio : non-blocking)
 
 None of these are CPU-bound. asyncio handles all of them efficiently without threads. Python is the right tool: fast iteration, simple deployment, and boto3 / redis-py just work.
 
@@ -45,21 +45,21 @@ None of these are CPU-bound. asyncio handles all of them efficiently without thr
 
 Ray casting and line-of-sight are CPU-heavy inner loops. A raycaster fires hundreds of rays per frame, stepping through map cells one by one. Python would be 10–100x slower for this. C++ keeps these loops fast while Python handles all the I/O and AWS plumbing.
 
-This is the same pattern as NumPy — Python orchestrates, C++ does the maths.
+This is the same pattern as NumPy : Python orchestrates, C++ does the maths.
 
 **Rule of thumb:** C++ owns the compute. Python owns the I/O and AWS.
 
 ### Python sidecar (`sidecar/`)
 
-AWS operations (DynamoDB writes, S3 uploads, SNS publishes) happen once per match. Latency of 10–100 ms is fine. The sidecar is a completely separate process — if it crashes, the game server keeps running.
+AWS operations (DynamoDB writes, S3 uploads, SNS publishes) happen once per match. Latency of 10–100 ms is fine. The sidecar is a completely separate process : if it crashes, the game server keeps running.
 
 ---
 
-## SEDA — what it is and why it's the industry standard
+## SEDA : what it is and why it's the industry standard
 
 **SEDA** stands for Staged Event-Driven Architecture. Described in a Berkeley paper in 2001, it has been the dominant model for high-throughput servers ever since.
 
-The core idea: split processing into **stages**, each with its own thread (or task) and its own **queue**. Stages communicate only through those queues — they never call each other directly.
+The core idea: split processing into **stages**, each with its own thread (or task) and its own **queue**. Stages communicate only through those queues : they never call each other directly.
 
 ```
 Stage A → [queue] → Stage B → [queue] → Stage C
@@ -71,9 +71,9 @@ This is exactly what we've built. Our stages are the 4 asyncio tasks; our queues
 
 Before SEDA, servers used one of two models:
 
-**Thread-per-connection** — every client gets its own thread. Simple, but threads are expensive (~1–8 MB stack each). With 10,000 connections you run out of memory. This is what Apache HTTP Server did, and why it struggled at scale.
+**Thread-per-connection** : every client gets its own thread. Simple, but threads are expensive (~1–8 MB stack each). With 10,000 connections you run out of memory. This is what Apache HTTP Server did, and why it struggled at scale.
 
-**Single-threaded event loop** — one thread, non-blocking I/O, callbacks everywhere. Scales to many connections but a single slow callback stalls everything.
+**Single-threaded event loop** : one thread, non-blocking I/O, callbacks everywhere. Scales to many connections but a single slow callback stalls everything.
 
 SEDA solved both: threads/tasks are bounded and purposeful (not one-per-client), and blocking operations are isolated in their own stage so they can't stall others.
 
@@ -89,7 +89,7 @@ SEDA solved both: threads/tasks are bounded and purposeful (not one-per-client),
 
 ### 1. Full async/await single loop
 
-One asyncio event loop doing everything — no separate tasks.
+One asyncio event loop doing everything : no separate tasks.
 
 **Pro:** Simplest possible model.
 **Con:** The tick loop timer competes with UDP recv. A slow game_logic call stalls incoming packets. Hard to isolate Redis write latency from the send path.
@@ -101,7 +101,7 @@ One asyncio event loop doing everything — no separate tasks.
 Each PYNQ node gets its own Python thread.
 
 **Pro:** Simple per-node logic.
-**Con:** Python GIL means threads don't actually parallelise CPU work. Game state is shared — needs locks. Tick synchronisation across threads becomes hard (when do you broadcast combined state?).
+**Con:** Python GIL means threads don't actually parallelise CPU work. Game state is shared : needs locks. Tick synchronisation across threads becomes hard (when do you broadcast combined state?).
 
 **Why we didn't:** GIL negates the benefit. asyncio tasks are cleaner for I/O-bound work.
 

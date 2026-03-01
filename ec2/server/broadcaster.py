@@ -1,11 +1,11 @@
 # ec2/server/broadcaster.py
 #
-# T3 — Broadcaster
+# T3 : Broadcaster
 #
 # Drains broadcast_queue and sends the merged game state back to all
 # known PYNQ nodes via UDP.
 #
-# Also the right place to add WebSocket push to the dashboard — same
+# Also the right place to add WebSocket push to the dashboard : same
 # game state packet, different transport.
 #
 # Queue input: {"data": bytes, "targets": [(ip, port), ...]}
@@ -37,7 +37,7 @@ class Broadcaster:
         while True:
             msg = await self.queue.get()
             await self._send_udp(msg)
-            # TODO: await self._send_websocket(msg)  — push same state to dashboard
+            # TODO: await self._send_websocket(msg)  : push same state to dashboard
 
     async def _send_udp(self, msg: dict):
         data    = msg["data"]

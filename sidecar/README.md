@@ -1,8 +1,8 @@
-# Sidecar — Python AWS Bridge
+# Sidecar : Python AWS Bridge
 
 ## What is the sidecar?
 
-The sidecar is a separate Python process that runs alongside the game server on EC2. It watches Redis for game events and handles all AWS writes — DynamoDB, S3, SNS.
+The sidecar is a separate Python process that runs alongside the game server on EC2. It watches Redis for game events and handles all AWS writes : DynamoDB, S3, SNS.
 
 The two processes never communicate directly. Redis is the handoff.
 
@@ -23,7 +23,7 @@ Game server (Python)          Sidecar (Python)
 
 The sidecar sleeps 100% of the time during gameplay. It only wakes up when the server pushes an event to Redis. This means AWS latency never affects the game loop.
 
-Note: previously this was described as C++ server → Python sidecar. The server is now Python too — but the pattern is identical. Redis is still the boundary, the sidecar still owns all AWS writes.
+Note: previously this was described as C++ server → Python sidecar. The server is now Python too : but the pattern is identical. Redis is still the boundary, the sidecar still owns all AWS writes.
 
 ## What it does
 
@@ -44,4 +44,4 @@ Requires environment variables from `.env` (see `.env.example`).
 
 ## What needs implementing
 
-See `sidecar/sidecar.py` — the Redis connection and event loop are wired up. The AWS writes (DynamoDB, S3, SNS) are TODOs for the team.
+See `sidecar/sidecar.py` : the Redis connection and event loop are wired up. The AWS writes (DynamoDB, S3, SNS) are TODOs for the team.

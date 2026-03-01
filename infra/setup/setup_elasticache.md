@@ -3,7 +3,7 @@
 ## Cluster
 - Engine: Redis OSS 7.x
 - Deployment: Single-node (cluster mode disabled)
-- Node type: `cache.t3.micro` — free tier: 750 hrs/month for 12 months
+- Node type: `cache.t3.micro` : free tier: 750 hrs/month for 12 months
 - Region: eu-west-2
 
 ## VPC & Security

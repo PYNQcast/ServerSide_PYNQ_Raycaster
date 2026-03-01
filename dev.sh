@@ -1,5 +1,5 @@
 #!/bin/bash
-# dev.sh — open a 4-pane tmux session for the basic/ stack
+# dev.sh : open a 4-pane tmux session for the basic/ stack
 #
 # Layout:
 #   ┌─────────────────┬─────────────────┐  (large)

@@ -1,6 +1,6 @@
 # ec2/server/game_tick.py
 #
-# T2 — GameTick
+# T2 : GameTick
 #
 # The authoritative game loop. Runs at a fixed tick rate (20 Hz = every 50ms).
 # Each tick:
