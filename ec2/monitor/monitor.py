@@ -172,8 +172,9 @@ async def ws_handler(request):
                 if msg.type == web.WSMsgType.TEXT:
                     data = json.loads(msg.data)
                     if data.get("cmd") == "restart":
-                        r.lpush("game:control", json.dumps({"cmd": "restart"}))
-                        print("[monitor] restart signal → Redis game:control")
+                        payload = json.dumps({"cmd": "restart"})
+                        r.publish("game:control", payload)
+                        print(f"[monitor] restart signal → Redis game:control (pub/sub)")
             except asyncio.TimeoutError:
                 pass  # normal — no message from browser this tick
             except Exception:

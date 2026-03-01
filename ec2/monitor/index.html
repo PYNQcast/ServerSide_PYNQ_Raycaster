@@ -599,7 +599,7 @@ const statusEl = document.getElementById('status');
 let ws = null;
 function sendRestart() {
   if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({cmd: 'restart'}));
+    ws.send(JSON.stringify({cmd: 'restart', nodes: 2}));
     const btn = document.getElementById('restart-btn');
     btn.textContent = '✓ SENT';
     setTimeout(() => { btn.textContent = '▶ RESTART'; }, 1500);

@@ -208,17 +208,21 @@ class NodeSimulator:
 
     def run(self, duration_seconds=None, max_ticks=None, redis_host="127.0.0.1", redis_port=6379):
         """Run games in a loop. After game over, waits for 'Restart' button in dashboard
-        (Redis game:control) or keyboard Y/n input — whichever comes first."""
+        (Redis pub/sub on game:control) or keyboard Enter — whichever comes first."""
+        import select
+
+        ps = None  # pubsub handle — created once, reused across games
         try:
-            rc = redislib.Redis(host=redis_host, port=redis_port, decode_responses=True) if redislib else None
-            if rc:
-                rc.ping()  # verify tunnel is up
-                print(f"[NODE {self.player_id}] Redis control channel: {redis_host}:{redis_port}")
+            if redislib:
+                rc = redislib.Redis(host=redis_host, port=redis_port, decode_responses=True)
+                rc.ping()
+                ps = rc.pubsub(ignore_subscribe_messages=True)
+                ps.subscribe("game:control")
+                print(f"[NODE {self.player_id}] Subscribed to game:control "
+                      f"({redis_host}:{redis_port})")
         except Exception as e:
             print(f"[NODE {self.player_id}] Redis unavailable ({e}) — keyboard-only restart")
-            rc = None
-
-        CONTROL_KEY = "game:control"
+            ps = None
 
         try:
             while True:
@@ -226,42 +230,37 @@ class NodeSimulator:
                 if not tagged:
                     break
 
-                print(f"\n[NODE {self.player_id}] ── GAME OVER ── waiting for restart "
-                      f"(dashboard button or Y/n here)")
+                print(f"\n[NODE {self.player_id}] ── GAME OVER ──")
+                print(f"[NODE {self.player_id}] Waiting for dashboard ▶ RESTART button"
+                      f"{' or press Enter' if ps else ''}...")
 
-                # Drain any stale control messages from previous rounds
-                if rc:
-                    while rc.llen(CONTROL_KEY) > 0:
-                        rc.rpop(CONTROL_KEY)
+                # Drain any messages that arrived during the match (stale publishes)
+                if ps:
+                    while ps.get_message():
+                        pass
 
-                # Poll Redis + stdin until restart or quit
+                # Wait for restart: pub/sub message OR keyboard Enter
                 restarting = False
                 while not restarting:
-                    # Check Redis for restart signal (non-blocking)
-                    if rc:
-                        raw = rc.rpop(CONTROL_KEY)
-                        if raw:
+                    if ps:
+                        msg = ps.get_message()
+                        if msg and msg["type"] == "message":
                             try:
-                                cmd = json.loads(raw)
+                                cmd = json.loads(msg["data"])
                                 if cmd.get("cmd") == "restart":
                                     print(f"[NODE {self.player_id}] Restart from dashboard!")
                                     restarting = True
-                                    break
                             except Exception:
                                 pass
 
-                    # Check stdin (non-blocking via select)
-                    import select
-                    r_list, _, _ = select.select([sys.stdin], [], [], 0.2)
+                    # Also check keyboard Enter (non-blocking)
+                    r_list, _, _ = select.select([sys.stdin], [], [], 0)
                     if r_list:
-                        try:
-                            answer = sys.stdin.readline().strip().lower()
-                        except EOFError:
-                            answer = ''
-                        if answer in ('', 'y', 'yes'):
-                            restarting = True
-                        else:
-                            break  # 'n' or anything else → quit
+                        sys.stdin.readline()
+                        restarting = True
+
+                    if not restarting:
+                        time.sleep(0.1)  # 10 Hz poll — low CPU while waiting
 
                 if not restarting:
                     break
@@ -270,6 +269,8 @@ class NodeSimulator:
         except KeyboardInterrupt:
             pass
         finally:
+            if ps:
+                ps.close()
             print(f"[NODE {self.player_id}] Closed after {self.tick} ticks")
     
     def close(self):
