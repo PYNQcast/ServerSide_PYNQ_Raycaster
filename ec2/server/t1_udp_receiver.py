@@ -19,7 +19,7 @@ class UDPReceiverProtocol(asyncio.DatagramProtocol):
         self.queue = queue
 
     def datagram_received(self, data: bytes, addr: tuple):
-        # TODO: add rate limiting per sender IP here (flood protection)
+        # TODO: Possibly : add rate limiting per sender IP here (flood protection)
         self.queue.put_nowait({"data": data, "addr": addr})
 
     def error_received(self, exc: Exception):
@@ -33,7 +33,7 @@ class UDPReceiver:
     async def run(self, port: int):
         loop = asyncio.get_running_loop()
 
-        # TODO: bind to specific interface instead of 0.0.0.0 if needed
+        # TODO: Possibly: bind to specific interface instead of 0.0.0.0 if needed
         transport, _ = await loop.create_datagram_endpoint(
             lambda: UDPReceiverProtocol(self.queue),
             local_addr=("0.0.0.0", port),

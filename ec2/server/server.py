@@ -22,10 +22,10 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'interfacing'))
 
-from udp_receiver  import UDPReceiver
-from game_tick     import GameTick
-from broadcaster   import Broadcaster
-from redis_writer  import RedisWriter
+from t1_udp_receiver import UDPReceiver
+from t2_game_tick    import GameTick
+from t3_broadcaster  import Broadcaster
+from t4_redis_writer import RedisWriter
 
 UDP_PORT  = 9000
 TICK_RATE = 20   # Hz
