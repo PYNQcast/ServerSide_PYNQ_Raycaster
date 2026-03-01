@@ -159,12 +159,25 @@ async def ws_handler(request):
     print(f"[monitor] browser connected from {request.remote}")
     try:
         while not ws.closed:
+            # Push state to browser
             try:
                 state = collect_state()
                 await ws.send_str(json.dumps(state))
             except Exception as e:
                 print(f"[monitor] collect error: {e}")
-            await asyncio.sleep(1 / PUSH_RATE_HZ)
+
+            # Check for incoming browser commands (non-blocking, timeout = one push interval)
+            try:
+                msg = await asyncio.wait_for(ws.receive(), timeout=1 / PUSH_RATE_HZ)
+                if msg.type == web.WSMsgType.TEXT:
+                    data = json.loads(msg.data)
+                    if data.get("cmd") == "restart":
+                        r.lpush("game:control", json.dumps({"cmd": "restart"}))
+                        print("[monitor] restart signal → Redis game:control")
+            except asyncio.TimeoutError:
+                pass  # normal — no message from browser this tick
+            except Exception:
+                pass
     finally:
         print(f"[monitor] browser disconnected")
     return ws

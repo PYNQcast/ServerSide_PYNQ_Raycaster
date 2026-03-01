@@ -211,6 +211,7 @@
   <span id="status" class="disconnected">● DISCONNECTED</span>
   <span id="game-chip">no game</span>
   <span id="fps"></span>
+  <button id="restart-btn" onclick="sendRestart()" style="margin-left:auto;padding:4px 14px;background:#1a2a1a;color:#00ff88;border:1px solid #00ff8866;border-radius:4px;cursor:pointer;font-size:11px;letter-spacing:1px;">▶ RESTART</button>
 </header>
 
 <!-- ═══ SEDA Pipeline Strip ═══════════════════════════════════════════════ -->
@@ -595,8 +596,17 @@ function fitBounds(players) {
 
 // ── WebSocket ──────────────────────────────────────────────────────────────
 const statusEl = document.getElementById('status');
+let ws = null;
+function sendRestart() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({cmd: 'restart'}));
+    const btn = document.getElementById('restart-btn');
+    btn.textContent = '✓ SENT';
+    setTimeout(() => { btn.textContent = '▶ RESTART'; }, 1500);
+  }
+}
 function connect() {
-  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws = new WebSocket(`ws://${location.host}/ws`);
   ws.onopen = () => {
     statusEl.textContent = '● LIVE';
     statusEl.className   = 'connected';

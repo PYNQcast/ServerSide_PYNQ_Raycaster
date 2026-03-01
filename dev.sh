@@ -89,12 +89,17 @@ tmux send-keys -t "$SESSION:0.1" "ssh -t -i $KEY $EC2 'source ~/venv/bin/activat
 tmux select-pane -t "$SESSION:0.2" -T "monitor :8080"
 tmux send-keys -t "$SESSION:0.2" "fuser -k 8080/tcp 2>/dev/null || true; ssh -t -i $KEY -L 0.0.0.0:8080:localhost:8080 $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster && nohup python3 ec2/monitor/monitor.py > /tmp/monitor.log 2>&1 & until nc -z localhost 8080 2>/dev/null; do sleep 0.2; done && echo [monitor] port 8080 ready && tail -f /tmp/monitor.log'" Enter
 
+# Redis tunnel: forward local 6380 → EC2 6379 so node sims can read game:control signals
+fuser -k 6380/tcp 2>/dev/null || true
+ssh -f -N -i "$KEY" -L 127.0.0.1:6380:localhost:6379 "$EC2"
+
 # Node sims: pre-filled but NOT auto-started — press Enter in each pane when server is ready.
+# --redis-port 6380: tunnel to EC2 Redis so dashboard restart button reaches the sims.
 tmux select-pane -t "$SESSION:0.3" -T "node sim 1 (runner)  ← press Enter to start"
-tmux send-keys -t "$SESSION:0.3" "cd $REPO && python3 interfacing_+_sim/node_simulator.py 18.175.238.148 9000 --nodes 1 --node-index 0"
+tmux send-keys -t "$SESSION:0.3" "cd $REPO && python3 interfacing_+_sim/node_simulator.py 18.175.238.148 9000 --nodes 1 --node-index 0 --redis-port 6380"
 
 tmux select-pane -t "$SESSION:0.4" -T "node sim 2 (tagger)  ← press Enter to start"
-tmux send-keys -t "$SESSION:0.4" "cd $REPO && python3 interfacing_+_sim/node_simulator.py 18.175.238.148 9000 --nodes 1 --node-index 1"
+tmux send-keys -t "$SESSION:0.4" "cd $REPO && python3 interfacing_+_sim/node_simulator.py 18.175.238.148 9000 --nodes 1 --node-index 1 --redis-port 6380"
 
 tmux select-pane -t "$SESSION:0.5" -T "redis stats"
 tmux send-keys -t "$SESSION:0.5" "ssh -t -i $KEY $EC2 'redis-cli --stat'" Enter

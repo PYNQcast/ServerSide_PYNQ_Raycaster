@@ -29,6 +29,8 @@ import sys
 import math
 import argparse
 import threading
+import json
+import redis as redislib
 from protocol import (
     pack_node_packet,
     unpack_server_packet,
@@ -174,15 +176,15 @@ class NodeSimulator:
                 if max_ticks and self.tick >= max_ticks:
                     break
 
+                self.receive_game_state()
+                if not self.running:   # receive_game_state() called close() on tag
+                    tagged_out = True
+                    break
+
                 self.send_state_update()
 
                 if self.tag_after is not None and self.tick >= self.tag_after:
                     print(f"[NODE {self.player_id}] (local) GAME OVER: forced tag after {self.tag_after} ticks")
-                    tagged_out = True
-                    break
-
-                self.receive_game_state()
-                if not self.running:   # receive_game_state() called close() on tag
                     tagged_out = True
                     break
 
@@ -201,22 +203,63 @@ class NodeSimulator:
 
         return tagged_out
 
-    def run(self, duration_seconds=None, max_ticks=None):
-        """Run games in a loop, prompting to play again after each match ends."""
+    def run(self, duration_seconds=None, max_ticks=None, redis_host="127.0.0.1", redis_port=6379):
+        """Run games in a loop. After game over, waits for 'Restart' button in dashboard
+        (Redis game:control) or keyboard Y/n input — whichever comes first."""
+        try:
+            rc = redislib.Redis(host=redis_host, port=redis_port, decode_responses=True)
+        except Exception:
+            rc = None
+
+        CONTROL_KEY = "game:control"
+
         try:
             while True:
                 tagged = self._run_one_game(duration_seconds, max_ticks)
                 if not tagged:
                     break
-                print(f"\n[NODE {self.player_id}] ── GAME OVER ──")
-                try:
-                    answer = input(f"[NODE {self.player_id}] Play again? [Y/n]: ").strip().lower()
-                except EOFError:
-                    answer = 'n'   # non-interactive (piped/tmux without tty)
-                if answer in ('', 'y', 'yes'):
-                    print(f"[NODE {self.player_id}] Restarting...\n")
-                else:
+
+                print(f"\n[NODE {self.player_id}] ── GAME OVER ── waiting for restart "
+                      f"(dashboard button or Y/n here)")
+
+                # Drain any stale control messages from previous rounds
+                if rc:
+                    while rc.llen(CONTROL_KEY) > 0:
+                        rc.rpop(CONTROL_KEY)
+
+                # Poll Redis + stdin until restart or quit
+                restarting = False
+                while not restarting:
+                    # Check Redis for restart signal (non-blocking)
+                    if rc:
+                        raw = rc.rpop(CONTROL_KEY)
+                        if raw:
+                            try:
+                                cmd = json.loads(raw)
+                                if cmd.get("cmd") == "restart":
+                                    print(f"[NODE {self.player_id}] Restart from dashboard!")
+                                    restarting = True
+                                    break
+                            except Exception:
+                                pass
+
+                    # Check stdin (non-blocking via select)
+                    import select
+                    r_list, _, _ = select.select([sys.stdin], [], [], 0.2)
+                    if r_list:
+                        try:
+                            answer = sys.stdin.readline().strip().lower()
+                        except EOFError:
+                            answer = ''
+                        if answer in ('', 'y', 'yes'):
+                            restarting = True
+                        else:
+                            break  # 'n' or anything else → quit
+
+                if not restarting:
                     break
+                print(f"[NODE {self.player_id}] Restarting...\n")
+
         except KeyboardInterrupt:
             pass
         finally:
@@ -239,6 +282,10 @@ def main():
     parser.add_argument('--nodes', '-n', type=int, default=1, help='Number of nodes to simulate (default: 1)')
     parser.add_argument('--node-index', type=int, default=None,
                         help='Override node_index for orbit speed/start angle (default: 0,1,2... per node)')
+    parser.add_argument('--redis-host', default='127.0.0.1',
+                        help='Redis host for restart signal (default: 127.0.0.1)')
+    parser.add_argument('--redis-port', type=int, default=6380,
+                        help='Redis port for restart signal (default: 6380, SSH tunnel to EC2)')
     args = parser.parse_args()
 
     server_ip = args.server_ip
@@ -267,7 +314,11 @@ def main():
         nodes.append(node)
         
         # Run each node in its own thread
-        thread = threading.Thread(target=node.run, kwargs={'max_ticks': max_ticks})
+        thread = threading.Thread(target=node.run, kwargs={
+            'max_ticks': max_ticks,
+            'redis_host': args.redis_host,
+            'redis_port': args.redis_port,
+        })
         thread.daemon = False
         threads.append(thread)
         thread.start()

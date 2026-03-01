@@ -39,7 +39,7 @@ TAG_RADIUS       = 20.0  # units: players closer than this get tagged (orbit rad
 MATCH_PLAYERS    = 2     # number of players that triggers match_start
 MAX_PLAYERS      = 2     # reject registrations beyond this limit
 TAGS_TO_WIN      = 2     # tagger must tag runner this many times to win
-TAG_FLASH_S      = 1.0   # seconds FLAG_TAGGED stays set (visual flash) before clearing for next tag
+TAG_FLASH_S      = 3.0   # seconds FLAG_TAGGED stays set — long enough nodes separate before next tag
 MATCH_END_HOLD_S  = 1.0   # after final tag: keep broadcasting FLAG_TAGGED so nodes see it before idle
 LOCKOUT_S         = 3.0   # after match end: reject new registrations (gives sims time to stop+prompt)
 # Roles: player 1 = RUNNER (speed 0.05 rad/tick), player 2 = TAGGER (speed 0.08 rad/tick)
