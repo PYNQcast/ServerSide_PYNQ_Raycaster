@@ -51,7 +51,7 @@ tmux send-keys -t "$SESSION:0.0" "ssh -t -i $KEY $EC2 'source ~/venv/bin/activat
 # Sidecar: SSH tunnel (-L 8080) baked in so monitor is reachable at http://localhost:8080
 # Start sidecar first, then in a second terminal (or after Ctrl+C) run monitor.py
 tmux select-pane -t "$SESSION:0.1" -T "sidecar | tunnel :8080"
-tmux send-keys -t "$SESSION:0.1" "ssh -t -i $KEY -L 8080:localhost:8080 $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster && python3 ec2/sidecar/sidecar.py & python3 ec2/monitor/monitor.py'"
+tmux send-keys -t "$SESSION:0.1" "ssh -t -i $KEY -L 8080:localhost:8080 $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster && python3 ec2/sidecar/sidecar.py & python3 ~/ServerSide_PYNQ_Raycaster/ec2/monitor/monitor.py'"
 
 tmux select-pane -t "$SESSION:0.2" -T "node sim 1"
 tmux send-keys -t "$SESSION:0.2" "cd $REPO && python3 interfacing_+_sim/node_simulator.py 18.175.238.148 9000 --nodes 1"
