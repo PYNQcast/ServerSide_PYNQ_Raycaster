@@ -1,5 +1,20 @@
 # Interfacing
 
+## Quick Notes
+
+**Flags: **
+
+FLAG_SHOOTING = 0x01 (bit 0)
+FLAG_TAGGED   = 0x02 (bit 1)
+That gives you these possibilities in one byte:
+
+0x00 — neither shooting nor tagged
+0x01 — shooting only
+0x02 — tagged only
+0x03 — both shooting and tagged (both bits set)
+
+## Tasks
+
 Two tasks here, both are good starting points for anyone wanting to contribute without touching the server code.
 
 ---
