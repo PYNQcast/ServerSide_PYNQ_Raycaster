@@ -45,8 +45,17 @@ ssh -i "$KEY" "$EC2" "
   pkill -f monitor.py 2>/dev/null || true
   fuser -k 8080/tcp   2>/dev/null || true
   sleep 1
-  cd ~/ServerSide_PYNQ_Raycaster && git pull --ff-only
-" || { echo "!!! EC2 setup failed — check SSH / git pull above"; exit 1; }
+  cd ~/ServerSide_PYNQ_Raycaster || exit 1
+  echo '--- git status ---'
+  git status --short
+  echo '--- git pull ---'
+  git pull
+"
+SSH_EXIT=$?
+if [ $SSH_EXIT -ne 0 ]; then
+  echo "!!! EC2 setup failed (exit $SSH_EXIT) — check output above"
+  exit 1
+fi
 echo "--- EC2 ready ---"
 
 # Create session (6 panes)
