@@ -30,7 +30,10 @@ import math
 import argparse
 import threading
 import json
-import redis as redislib
+try:
+    import redis as redislib
+except ImportError:
+    redislib = None  # redis not installed — restart signal falls back to keyboard only
 from protocol import (
     pack_node_packet,
     unpack_server_packet,
@@ -207,8 +210,12 @@ class NodeSimulator:
         """Run games in a loop. After game over, waits for 'Restart' button in dashboard
         (Redis game:control) or keyboard Y/n input — whichever comes first."""
         try:
-            rc = redislib.Redis(host=redis_host, port=redis_port, decode_responses=True)
-        except Exception:
+            rc = redislib.Redis(host=redis_host, port=redis_port, decode_responses=True) if redislib else None
+            if rc:
+                rc.ping()  # verify tunnel is up
+                print(f"[NODE {self.player_id}] Redis control channel: {redis_host}:{redis_port}")
+        except Exception as e:
+            print(f"[NODE {self.player_id}] Redis unavailable ({e}) — keyboard-only restart")
             rc = None
 
         CONTROL_KEY = "game:control"
