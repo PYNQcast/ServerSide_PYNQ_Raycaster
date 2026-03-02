@@ -76,8 +76,8 @@ def handle_player_tagged(event: dict):
         print("player_tagged: no active match, ignoring")
         return
 
-    record_type = f"TAG#{tag_count}"
     tag_count  += 1
+    record_type = f"TAG#{tag_count}"
 
     table.put_item(Item={
         "match_id": current_match_id, "record_type": record_type,

@@ -117,10 +117,9 @@ def collect_state():
     clients = r.info("clients")
     persist = r.info("persistence")
 
-    # Merge any events still sitting in the Redis list into our local log.
-    # (Sidecar pops events via BRPOP so the list is usually short/empty;
-    #  LRANGE catches anything that arrived between pops.)
-    events_raw = r.lrange("game:seda-events", 0, 49)
+    # game:monitor-events is written by T4 alongside game:seda-events but
+    # never drained by the sidecar — so every event is visible here.
+    events_raw = r.lrange("game:monitor-events", 0, 49)
     parsed     = [json.loads(e) for e in events_raw if e]
     accumulate_events(parsed)
     events_in_list = r.llen("game:seda-events")

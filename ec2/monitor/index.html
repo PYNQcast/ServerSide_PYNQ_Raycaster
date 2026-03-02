@@ -423,7 +423,7 @@ function drawArena(players) {
   players.forEach((p, i) => {
     const [cx,cy] = worldToCanvas(p.x, p.y);
     const colour  = PLAYER_COLOURS[i % PLAYER_COLOURS.length];
-    const tagged  = (p.flags & 0x02) !== 0;   // FLAG_TAGGED = 0x02
+    const tagged  = (p.flags & 0x06) !== 0;   // FLAG_TAGGED=0x02 | FLAG_MATCH_END=0x04
 
     // Hitbox ring (TAG_RADIUS)
     ctx.beginPath(); ctx.arc(cx, cy, tagPx, 0, Math.PI*2);
@@ -482,7 +482,7 @@ function updatePlayers(players) {
     dist = Math.sqrt(dx*dx + dy*dy).toFixed(1) + 'u';
   }
   players.forEach((p, i) => {
-    const tagged = (p.flags & 0x02) !== 0;
+    const tagged = (p.flags & 0x06) !== 0;   // FLAG_TAGGED=0x02 | FLAG_MATCH_END=0x04
     const colour = PLAYER_COLOURS[i % PLAYER_COLOURS.length];
     const tr = document.createElement('tr');
     const role = (p.id === 1) ? 'runner' : 'tagger';
@@ -564,7 +564,7 @@ function updateEvents(events) {
 
     const type = ev.event || 'unknown';
     let text = type;
-    if (type === 'player_tagged') text = `P${ev.player_id} tagged  (dist ${ev.dist != null ? ev.dist.toFixed(1) : '?'}u)`;
+    if (type === 'player_tagged') text = `P${ev.player_id} tagged  (dist ${ev.dist != null ? (+ev.dist).toFixed(1) : '?'}u)`;
     else if (type === 'match_start') text = `match started  (${ev.players ?? '?'} players)`;
     else if (type === 'match_end')   text = `match ended  (winner: ${ev.winner ?? '?'})`;
 

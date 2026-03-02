@@ -106,6 +106,13 @@ class RedisWriter:
                 try:
                     self.client.lpush(m["key"], m["value"])
                     print(f"[T4] event: {m['value']}")
+                    # Mirror to monitor-events list (never drained by sidecar)
+                    # so monitor.py sees every event regardless of BRPOP timing.
+                    if m["key"] == "game:seda-events":
+                        pipe = self.client.pipeline(transaction=False)
+                        pipe.lpush("game:monitor-events", m["value"])
+                        pipe.ltrim("game:monitor-events", 0, 99)  # keep last 100
+                        pipe.execute()
                 except Exception as e:
                     print(f"[T4] LPUSH {m['key']} failed: {e}")
             else:
