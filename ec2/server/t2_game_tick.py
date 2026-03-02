@@ -265,7 +265,7 @@ class GameTick:
                               int(time.time() * 1000) & 0xFFFFFFFF)
         entries = b""
         for p in self.players.values():
-            entries += struct.pack('<BfffBx',
+            entries += struct.pack('<BfffB',
                                    p["player_id"], p["x"], p["y"],
                                    p["angle"], p["flags"])
 
