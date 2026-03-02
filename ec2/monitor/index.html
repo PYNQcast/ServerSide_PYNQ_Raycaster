@@ -119,6 +119,17 @@
     background: #1a1a1a;
   }
 
+  /* ── Left rail ── */
+  .left-rail {
+    width: 220px;
+    display: flex;
+    flex-direction: column;
+    background: #101010;
+    border-right: 1px solid #1e1e1e;
+    overflow-y: auto;
+    flex-shrink: 0;
+  }
+
   /* ── Canvas ── */
   .canvas-panel {
     flex: 1;
@@ -159,13 +170,12 @@
   .metric-row { display: flex; justify-content: space-between; margin-bottom: 5px; color: #aaa; }
   .metric-row span:last-child { color: #eee; font-weight: bold; }
   .metric-note { font-size: 10px; color: #555; margin-top: 3px; margin-bottom: 4px; line-height: 1.5; }
-  .control-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
+  .control-stack {
+    display: flex;
+    flex-direction: column;
     gap: 6px;
     margin-top: 8px;
   }
-  .control-grid .wide { grid-column: span 2; }
   .control-btn {
     padding: 6px 8px;
     background: #171717;
@@ -333,12 +343,7 @@
 <!-- ════════════════════════════════════════════════════════════════════════ -->
 
 <div class="main">
-  <div class="canvas-panel">
-    <span class="canvas-label">fixed world · orbit 50u · tag radius 20u</span>
-    <canvas id="arena" width="480" height="480"></canvas>
-  </div>
-
-  <div class="side">
+  <div class="left-rail">
 
     <!-- EC2 controls -->
     <div class="panel">
@@ -346,16 +351,25 @@
       <div class="metric-row"><span>server</span><span id="svc-server">—</span></div>
       <div class="metric-row"><span>sidecar</span><span id="svc-sidecar">—</span></div>
       <div class="metric-row"><span>monitor</span><span id="svc-monitor">—</span></div>
-      <div class="control-grid">
+      <div class="control-stack">
         <button class="control-btn start" onclick="sendControl('start_server', 'start server')">Start Server</button>
         <button class="control-btn stop" onclick="sendControl('stop_server', 'stop server')">Stop Server</button>
         <button class="control-btn start" onclick="sendControl('start_sidecar', 'start sidecar')">Start Sidecar</button>
         <button class="control-btn stop" onclick="sendControl('stop_sidecar', 'stop sidecar')">Stop Sidecar</button>
-        <button class="control-btn restart wide" onclick="sendControl('restart_stack', 'restart stack')">Restart Stack</button>
-        <button class="control-btn restart wide" onclick="sendControl('restart', 'restart match')">Restart Match</button>
+        <button class="control-btn restart" onclick="sendControl('restart_stack', 'restart stack')">Restart Stack</button>
+        <button class="control-btn restart" onclick="sendControl('restart', 'restart match')">Restart Match</button>
       </div>
       <div class="metric-note" id="svc-note">controls run on EC2 only; node simulators still start locally</div>
     </div>
+
+  </div>
+
+  <div class="canvas-panel">
+    <span class="canvas-label">fixed world · orbit 50u · tag radius 20u</span>
+    <canvas id="arena" width="480" height="480"></canvas>
+  </div>
+
+  <div class="side">
 
     <!-- Players -->
     <div class="panel">
