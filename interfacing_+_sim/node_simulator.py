@@ -80,20 +80,18 @@ def run_node(server_ip, server_port, player_id, node_index,
 
     # ── main loop ─────────────────────────────────────────────────────────────
     sock    = None
-    playing = False   # start in WAITING so we register cleanly on first entry
+    playing = False   # start in WAITING so first game requires explicit RESTART
     seq     = 0
     tick    = 0
 
     try:
         while True:
-            # ── Enter PLAYING: open socket, register ──────────────────────────
+            # ── WAITING: block until dashboard sends restart ──────────────────
             if not playing:
                 if ps:
-                    # drain stale messages from the match just ended
-                    while ps.get_message():
+                    while ps.get_message():   # drain stale messages
                         pass
-                    print(f"{tag} waiting for dashboard ▶ RESTART...")
-                    # block-poll until restart signal
+                    print(f"{tag} ── GAME OVER — waiting for ▶ RESTART...")
                     while True:
                         msg = ps.get_message()
                         if msg and msg["type"] == "message":
@@ -106,18 +104,14 @@ def run_node(server_ip, server_port, player_id, node_index,
                                 pass
                         time.sleep(0.1)
                 else:
-                    # no Redis — just wait here; user must Ctrl+C and re-run
                     print(f"{tag} no Redis — Ctrl+C and re-run to restart")
                     while True:
                         time.sleep(1)
 
-                # open fresh socket for the new game
                 if sock:
                     sock.close()
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 sock.settimeout(0.05)
-
-                # register
                 pkt = pack_node_packet(PKT_REGISTER, seq=0, x=0, y=0, angle=0, flags=0)
                 sock.sendto(pkt, server_addr)
                 print(f"{tag} REGISTER sent")
@@ -125,11 +119,10 @@ def run_node(server_ip, server_port, player_id, node_index,
                 tick    = 0
                 playing = True
 
-            # ── one PLAYING tick ──────────────────────────────────────────────
+            # ── PLAYING: one tick ─────────────────────────────────────────────
             tick_start = time.time()
 
-            # read all queued game-state packets
-            game_over = False
+            # receive all queued broadcasts; stop playing if FLAG_TAGGED seen
             while True:
                 try:
                     data, _ = sock.recvfrom(1024)
@@ -137,21 +130,18 @@ def run_node(server_ip, server_port, player_id, node_index,
                     if pkt_type == PKT_GAME_STATE:
                         for p in players:
                             if p["flags"] & FLAG_TAGGED:
-                                print(f"{tag} P{p['player_id']} TAGGED — game over")
-                                game_over = True
+                                print(f"{tag} P{p['player_id']} TAGGED — stopping")
+                                playing = False
                 except socket.timeout:
                     break
                 except Exception as e:
                     print(f"{tag} recv error: {e}")
                     break
 
-            if game_over:
-                playing = False
-                # close socket — server will clear the player after hold+lockout
+            if not playing:
                 sock.close()
                 sock = None
-                print(f"{tag} ── GAME OVER ──")
-                continue   # go back to top → WAITING state
+                continue   # → WAITING
 
             # send position update
             angle += rotation_speed
