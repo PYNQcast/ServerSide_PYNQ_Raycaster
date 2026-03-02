@@ -61,7 +61,8 @@ def run_node(server_ip, server_port, player_id, node_index,
     radius         = 50.0
     rotation_speed = 0.05 + node_index * 0.06  # runner=0.05, tagger=0.11 rad/tick
     shoot_freq     = 20  + node_index * 10
-    angle          = node_index * math.pi * 2 / 4   # spread starting positions
+    spawn_angle    = node_index * math.pi * 2 / 4   # spread starting positions
+    angle          = spawn_angle
 
     tag = f"[NODE {player_id}]"
 
@@ -84,6 +85,7 @@ def run_node(server_ip, server_port, player_id, node_index,
     playing = False   # start in WAITING so first game requires explicit RESTART
     seq     = 0
     tick    = 0
+    skip_advance_once = False
 
     try:
         while True:
@@ -115,7 +117,7 @@ def run_node(server_ip, server_port, player_id, node_index,
                 sock.settimeout(0.05)
                 # Reset angle to spread starting position so nodes begin far apart,
                 # not both at (0,0) which would trigger an instant tag.
-                angle = node_index * math.pi * 2 / 4
+                angle = spawn_angle
                 start_x = radius * math.cos(angle)
                 start_y = radius * math.sin(angle)
                 pkt = pack_node_packet(PKT_REGISTER, seq=0,
@@ -135,13 +137,17 @@ def run_node(server_ip, server_port, player_id, node_index,
                     data, _ = sock.recvfrom(1024)
                     pkt_type, _, _, players = unpack_server_packet(data)
                     if pkt_type == PKT_GAME_STATE:
+                        own_state = next((p for p in players if p["player_id"] == player_id), None)
+                        if own_state is not None:
+                            angle = own_state["angle"]
                         for p in players:
                             if p["flags"] & FLAG_MATCH_END:
                                 print(f"{tag} P{p['player_id']} TAGGED (final) — stopping")
                                 playing = False
                             elif p["flags"] & FLAG_TAGGED:
                                 print(f"{tag} P{p['player_id']} TAGGED (intermediate) — resetting angle")
-                                angle = node_index * math.pi * 2 / 4
+                                angle = spawn_angle
+                                skip_advance_once = True
                 except socket.timeout:
                     break
                 except Exception as e:
@@ -154,10 +160,12 @@ def run_node(server_ip, server_port, player_id, node_index,
                 continue   # → WAITING
 
             # send position update
-            angle += rotation_speed
+            if not skip_advance_once:
+                angle += rotation_speed
             x = radius * math.cos(angle)
             y = radius * math.sin(angle)
-            flags = FLAG_SHOOTING if (tick % shoot_freq == 0) else 0
+            flags = 0 if skip_advance_once else (FLAG_SHOOTING if (tick % shoot_freq == 0) else 0)
+            skip_advance_once = False
 
             pkt = pack_node_packet(0x0001, seq=seq, x=x, y=y, angle=angle, flags=flags)
             sock.sendto(pkt, server_addr)

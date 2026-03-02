@@ -372,23 +372,25 @@ const canvas = document.getElementById('arena');
 const ctx    = canvas.getContext('2d');
 const W = canvas.width, H = canvas.height;
 const TAG_RADIUS     = 20.0;   // must match t2_game_tick.py TAG_RADIUS
+const ORBIT_RADIUS   = 50.0;   // must match t2_game_tick.py ORBIT_RADIUS
 const PLAYER_COLOURS = ['#00ff88', '#00d4ff', '#ffaa00', '#ff6688'];
-const WORLD_EXTENT   = 100;
+const WORLD_EXTENT   = 70;
 const GRID_STEP      = 20;
+const CANVAS_PAD     = 36;
+const WORLD_SCALE    = (Math.min(W, H) - CANVAS_PAD * 2) / (WORLD_EXTENT * 2);
 
 // ── State ──────────────────────────────────────────────────────────────────
 let latestState    = null;
-let worldBounds    = { minX: -WORLD_EXTENT, maxX: WORLD_EXTENT, minY: -WORLD_EXTENT, maxY: WORLD_EXTENT };
 let wsHz = 0, wsUpdateCount = 0, wsLastTime = performance.now();
 let renderCount = 0, renderLastTime = performance.now();
 
 // ── Canvas ─────────────────────────────────────────────────────────────────
 function worldToCanvas(wx, wy) {
-  const pad = 36;
-  const rx  = worldBounds.maxX - worldBounds.minX;
-  const ry  = worldBounds.maxY - worldBounds.minY;
-  const sc  = Math.min((W - pad*2) / rx, (H - pad*2) / ry);
-  return [(pad + (wx - worldBounds.minX) * sc), (pad + (wy - worldBounds.minY) * sc), sc];
+  return [
+    W / 2 + wx * WORLD_SCALE,
+    H / 2 - wy * WORLD_SCALE,
+    WORLD_SCALE,
+  ];
 }
 
 function drawArena(players) {
@@ -413,14 +415,25 @@ function drawArena(players) {
   ctx.beginPath(); ctx.moveTo(0,oy); ctx.lineTo(W,oy); ctx.stroke();
 
   const [,,sc] = worldToCanvas(0,0);
-  const tagPx  = TAG_RADIUS * sc;
 
   // Arena ring
   ctx.beginPath();
-  ctx.arc(ox, oy, 50 * sc, 0, Math.PI * 2);
+  ctx.arc(ox, oy, ORBIT_RADIUS * sc, 0, Math.PI * 2);
   ctx.strokeStyle = 'rgba(0, 212, 255, 0.18)';
   ctx.lineWidth = 1.5;
   ctx.stroke();
+
+  // Spawn markers
+  [[ORBIT_RADIUS, 0], [0, ORBIT_RADIUS]].forEach(([sx, sy], idx) => {
+    const [mx, my] = worldToCanvas(sx, sy);
+    ctx.beginPath();
+    ctx.arc(mx, my, 5, 0, Math.PI * 2);
+    ctx.fillStyle = idx === 0 ? 'rgba(0, 255, 136, 0.18)' : 'rgba(0, 212, 255, 0.18)';
+    ctx.fill();
+    ctx.strokeStyle = idx === 0 ? 'rgba(0, 255, 136, 0.45)' : 'rgba(0, 212, 255, 0.45)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  });
 
   ctx.strokeStyle = '#20303a';
   ctx.strokeRect(18, 18, W - 36, H - 36);
@@ -447,17 +460,6 @@ function drawArena(players) {
     const colour  = PLAYER_COLOURS[i % PLAYER_COLOURS.length];
     const tagged  = (p.flags & 0x06) !== 0;   // FLAG_TAGGED=0x02 | FLAG_MATCH_END=0x04
 
-    // Hitbox ring (TAG_RADIUS)
-    ctx.beginPath(); ctx.arc(cx, cy, tagPx, 0, Math.PI*2);
-    ctx.strokeStyle = tagged ? 'rgba(255,68,68,0.55)' : 'rgba(255,255,255,0.07)';
-    ctx.lineWidth = tagged ? 2 : 1; ctx.stroke();
-
-    // Glow when tagged
-    if (tagged) {
-      ctx.beginPath(); ctx.arc(cx, cy, tagPx * 1.4, 0, Math.PI*2);
-      ctx.strokeStyle = 'rgba(255,68,68,0.12)'; ctx.lineWidth = 6; ctx.stroke();
-    }
-
     // Direction arrow
     ctx.strokeStyle = colour; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.moveTo(cx, cy);
@@ -473,10 +475,9 @@ function drawArena(players) {
       ctx.beginPath(); ctx.arc(cx, cy, dotR+3, 0, Math.PI*2); ctx.stroke();
     }
 
-    // Label: show role (P1=runner, P2=tagger) and tagged status
-    const role = (p.id === 1) ? 'runner' : 'tagger';
-    ctx.fillStyle = '#fff'; ctx.font = 'bold 11px Courier New';
-    ctx.fillText(`P${p.id} ${role}${tagged ? '  ★TAGGED' : ''}`, cx+10, cy-6);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 11px Courier New';
+    ctx.fillText(`P${p.id}`, cx + 9, cy - 8);
   });
 }
 
