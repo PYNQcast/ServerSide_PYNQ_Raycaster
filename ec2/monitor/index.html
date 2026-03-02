@@ -434,7 +434,7 @@
     <!-- Replay -->
     <div class="panel">
       <h2>Replay</h2>
-      <div class="metric-note">Replays are loaded from S3. Select a recent saved match to play back its authoritative state frames.</div>
+      <div class="metric-note">Replays are loaded from S3. Only matches with saved state frames are listed below.</div>
       <div class="metric-note" id="replay-status">no replay loaded</div>
       <div class="replay-list" id="replay-list">
         <button class="replay-btn empty" disabled>waiting for replayable matches...</button>
@@ -756,15 +756,15 @@ function updateMatches(matches) {
     </div>
   `).join('');
 
-  const replayable = matches.filter(m => m.has_replay);
+  const replayable = matches.filter(m => m.has_state_replay);
   if (!replayable.length) {
-    replayEl.innerHTML = '<button class="replay-btn empty" disabled>no recent replays in S3</button>';
+    replayEl.innerHTML = '<button class="replay-btn empty" disabled>no recent state replays in S3</button>';
     return;
   }
 
   replayEl.innerHTML = replayable.map(m => `
     <button class="replay-btn" onclick="loadReplay('${m.match_id}')">
-      replay ${m.match_id.replace(/^match-/, '')}
+      replay ${m.match_id.replace(/^match-/, '')} (${m.replay_frames}f)
     </button>
   `).join('');
 }

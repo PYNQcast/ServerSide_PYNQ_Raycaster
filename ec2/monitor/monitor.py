@@ -91,7 +91,7 @@ def poll_dynamodb():
             kwargs = {
                 "FilterExpression": "record_type = :rt",
                 "ExpressionAttributeValues": {":rt": "META"},
-                "ProjectionExpression": "match_id, #s, #ts, replay_s3_key",
+                "ProjectionExpression": "match_id, #s, #ts, replay_s3_key, replay_frame_count, summary_snapshot_frames",
                 "ExpressionAttributeNames": {"#s": "status", "#ts": "timestamp"},
             }
             if last_evaluated_key:
@@ -108,7 +108,9 @@ def poll_dynamodb():
             {"match_id": i["match_id"],
              "status":   i.get("status", "?"),
              "timestamp": i.get("timestamp", "")[:19].replace("T", " "),
-             "has_replay": bool(i.get("replay_s3_key"))}
+             "has_replay": bool(i.get("replay_s3_key")),
+             "replay_frames": _as_int(i.get("summary_snapshot_frames", i.get("replay_frame_count", 0)), 0),
+             "has_state_replay": _as_int(i.get("summary_snapshot_frames", i.get("replay_frame_count", 0)), 0) > 0}
             for i in items
         ]
         _ddb_last_fetch = now
