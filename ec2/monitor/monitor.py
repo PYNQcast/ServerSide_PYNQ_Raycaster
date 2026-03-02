@@ -30,7 +30,7 @@ from aiohttp import web
 REDIS_HOST   = "127.0.0.1"
 REDIS_PORT   = 6379
 HTTP_PORT    = 8080
-PUSH_RATE_HZ = 10   # push to browser at 10 Hz
+PUSH_RATE_HZ = 20   # push to browser at 20 Hz (match game tick rate)
 
 DYNAMO_TABLE = "pynq-raycaster-seda-matches"
 AWS_REGION   = "eu-west-2"
@@ -73,28 +73,73 @@ def poll_dynamodb():
         print(f"[monitor] DynamoDB poll error: {e}")
     return _ddb_cache
 
-# ── Event accumulator (append-only, survives BRPOP draining the Redis list) ───
+# ── Current-match event tracking ───────────────────────────────────────────────
 #
-# BRPOP in sidecar.py removes events from game:seda-events as it reads them,
-# so LLEN shrinks and index-based "new event" detection breaks.
-# Instead: monitor reads whatever events are currently in the list each tick,
-# and deduplicates by content hash into a local append-only log.
+# game:monitor-events is append-only (trimmed to the last 100 entries).
+# The monitor only wants the latest match's sequence:
+#   match_start -> player_tagged -> ... -> match_end
+# We keep a tiny local cache only to preserve stable display timestamps while
+# new events are prepended to the Redis list.
 
-_event_log  = []          # [{event, ts, ...}, ...] newest first
-_event_seen = set()       # set of json strings already logged
+_match_event_log  = []   # newest first, each event includes display_time
+_match_event_keys = []   # newest first json keys matching _match_event_log
 
-def accumulate_events(raw_events: list):
-    """Merge raw_events (from LRANGE, may be partial) into _event_log."""
-    added = 0
-    for e in raw_events:
-        key = json.dumps(e, sort_keys=True)
-        if key not in _event_seen:
-            _event_seen.add(key)
-            _event_log.insert(0, e)
-            added += 1
-    # Cap log at 200 entries
-    del _event_log[200:]
-    return added
+def _event_key(event: dict) -> str:
+    return json.dumps(event, sort_keys=True)
+
+def current_match_events(raw_events: list):
+    """Return the newest match's events only, newest first, with stable times."""
+    global _match_event_log, _match_event_keys
+
+    current = []
+    found_start = False
+    for event in raw_events:
+        current.append(event)
+        if event.get("event") == "match_start":
+            found_start = True
+            break
+
+    if not current:
+        _match_event_log = []
+        _match_event_keys = []
+        return []
+
+    # If the newest event is match_start, this is a fresh match boundary.
+    # Reset immediately even though the payload is identical every match.
+    if current[0].get("event") == "match_start":
+        stamp = time.strftime("%H:%M:%S")
+        _match_event_log = [{**current[0], "display_time": stamp}]
+        _match_event_keys = [_event_key(current[0])]
+        return _match_event_log
+
+    # In normal flow the latest match always fits in the last 50 events.
+    # If we somehow don't have a full boundary yet, keep the last complete view.
+    if not found_start:
+        return _match_event_log
+
+    current_keys = [_event_key(event) for event in current]
+    old_keys     = _match_event_keys
+    old_events   = _match_event_log
+
+    common_suffix = 0
+    while common_suffix < len(current_keys) and common_suffix < len(old_keys):
+        if current_keys[-1 - common_suffix] != old_keys[-1 - common_suffix]:
+            break
+        common_suffix += 1
+
+    prefix_len = len(current) - common_suffix
+    stamp = time.strftime("%H:%M:%S")
+    rebuilt = []
+
+    for idx in range(prefix_len):
+        rebuilt.append({**current[idx], "display_time": stamp})
+
+    if common_suffix:
+        rebuilt.extend(old_events[-common_suffix:])
+
+    _match_event_log = rebuilt
+    _match_event_keys = current_keys
+    return _match_event_log
 
 # ── Redis state collection ─────────────────────────────────────────────────────
 
@@ -121,7 +166,7 @@ def collect_state():
     # never drained by the sidecar — so every event is visible here.
     events_raw = r.lrange("game:monitor-events", 0, 49)
     parsed     = [json.loads(e) for e in events_raw if e]
-    accumulate_events(parsed)
+    match_events = current_match_events(parsed)
     events_in_list = r.llen("game:seda-events")
 
     n_clients = clients.get("connected_clients", 0)
@@ -146,7 +191,7 @@ def collect_state():
             "ops_per_sec":     info.get("instantaneous_ops_per_sec", 0),
             "ddb_matches":     len(_ddb_cache),
         },
-        "events":  _event_log[:20],   # send newest 20 to browser
+        "events":  match_events[:20],   # newest-first, current match only
         "matches": poll_dynamodb(),
     }
 
