@@ -23,6 +23,7 @@ from decimal import Decimal
 
 import boto3
 import redis
+from boto3.dynamodb.conditions import Key
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -38,6 +39,11 @@ S3_BUCKET = os.environ.get("S3_BUCKET", "fpga-raycaster-data").strip()
 S3_REPLAY_PREFIX = os.environ.get("S3_REPLAY_PREFIX", "replays").strip("/")
 SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "").strip()
 SNS_TOPIC_NAME = os.environ.get("SNS_TOPIC_NAME", "fpga-raycaster-game-end").strip()
+S3_ARCHIVE_PREFIX = os.environ.get("S3_ARCHIVE_PREFIX", "ddb-archive").strip("/")
+DDB_WARM_MATCH_LIMIT = max(0, int(os.environ.get("DDB_WARM_MATCH_LIMIT", "25")))
+ENABLE_DDB_RETENTION = os.environ.get("ENABLE_DDB_RETENTION", "1").strip().lower() not in {
+    "0", "false", "no", "off"
+}
 
 # ── Connections ───────────────────────────────────────────────────────────────
 
@@ -130,6 +136,15 @@ def replay_key_for(match_id: str, started_at: str):
     )
 
 
+def archive_key_for(match_id: str, started_at: str):
+    prefix = S3_ARCHIVE_PREFIX or "ddb-archive"
+    started_dt = parse_iso(started_at) or utc_now()
+    return (
+        f"{prefix}/year={started_dt:%Y}/month={started_dt:%m}/"
+        f"{match_id}.json.gz"
+    )
+
+
 def upload_replay(match_id: str, events: list, started_at: str):
     if not s3 or not S3_BUCKET:
         print("S3 disabled: set S3_BUCKET to enable replay uploads")
@@ -154,6 +169,22 @@ def upload_replay(match_id: str, events: list, started_at: str):
     except Exception as exc:
         print(f"S3 upload failed for {match_id}: {exc}")
         return None
+
+
+def _plain_number(value: Decimal):
+    if value == value.to_integral_value():
+        return int(value)
+    return float(value)
+
+
+def to_plain_json(value):
+    if isinstance(value, Decimal):
+        return _plain_number(value)
+    if isinstance(value, dict):
+        return {key: to_plain_json(inner) for key, inner in value.items()}
+    if isinstance(value, list):
+        return [to_plain_json(inner) for inner in value]
+    return value
 
 
 def resolve_sns_topic_arn():
@@ -207,6 +238,128 @@ def publish_match_end(match_id: str, ended_at: str, replay_key: str, extra_paylo
     except Exception as exc:
         print(f"SNS publish failed for {match_id}: {exc}")
         return None
+
+
+def list_completed_meta_rows():
+    items = []
+    last_evaluated_key = None
+
+    while True:
+        kwargs = {
+            "FilterExpression": "record_type = :rt",
+            "ExpressionAttributeValues": {":rt": "META"},
+            "ProjectionExpression": "match_id, #ts, #st",
+            "ExpressionAttributeNames": {"#ts": "timestamp", "#st": "status"},
+        }
+        if last_evaluated_key:
+            kwargs["ExclusiveStartKey"] = last_evaluated_key
+
+        response = table.scan(**kwargs)
+        items.extend(response.get("Items", []))
+        last_evaluated_key = response.get("LastEvaluatedKey")
+        if not last_evaluated_key:
+            break
+
+    completed = [item for item in items if item.get("status") == "completed"]
+    return sorted(completed, key=lambda item: item.get("timestamp", ""), reverse=True)
+
+
+def load_match_rows(match_id: str):
+    items = []
+    last_evaluated_key = None
+
+    while True:
+        kwargs = {
+            "KeyConditionExpression": Key("match_id").eq(match_id),
+        }
+        if last_evaluated_key:
+            kwargs["ExclusiveStartKey"] = last_evaluated_key
+
+        response = table.query(**kwargs)
+        items.extend(response.get("Items", []))
+        last_evaluated_key = response.get("LastEvaluatedKey")
+        if not last_evaluated_key:
+            break
+
+    return items
+
+
+def upload_ddb_archive(match_meta: dict, rows: list):
+    if not s3 or not S3_BUCKET:
+        print("DDB retention skipped: S3 disabled")
+        return None
+
+    match_id = match_meta["match_id"]
+    timestamp = match_meta.get("timestamp", "")
+    archive_key = archive_key_for(match_id, timestamp)
+    archive_doc = {
+        "match_id": match_id,
+        "archived_at": utc_now_iso(),
+        "source_table": DYNAMO_TABLE,
+        "row_count": len(rows),
+        "rows": [to_plain_json(row) for row in rows],
+    }
+
+    try:
+        s3.put_object(
+            Bucket=S3_BUCKET,
+            Key=archive_key,
+            Body=gzip.compress(
+                json.dumps(archive_doc, separators=(",", ":"), sort_keys=True).encode("utf-8")
+            ),
+            ContentType="application/json",
+            ContentEncoding="gzip",
+        )
+        print(f"S3: archived DynamoDB rows for {match_id} to s3://{S3_BUCKET}/{archive_key}")
+        return archive_key
+    except Exception as exc:
+        print(f"DDB archive upload failed for {match_id}: {exc}")
+        return None
+
+
+def delete_match_rows(rows: list):
+    if not rows:
+        return 0
+
+    deleted = 0
+    with table.batch_writer() as batch:
+        for row in rows:
+            batch.delete_item(Key={
+                "match_id": row["match_id"],
+                "record_type": row["record_type"],
+            })
+            deleted += 1
+    return deleted
+
+
+def enforce_warm_retention():
+    if not ENABLE_DDB_RETENTION:
+        return
+    if not s3 or not S3_BUCKET:
+        print("DDB retention disabled: S3 bucket unavailable")
+        return
+
+    completed = list_completed_meta_rows()
+    if len(completed) <= DDB_WARM_MATCH_LIMIT:
+        return
+
+    archive_candidates = completed[DDB_WARM_MATCH_LIMIT:]
+    for match_meta in archive_candidates:
+        match_id = match_meta["match_id"]
+        try:
+            rows = load_match_rows(match_id)
+            if not rows:
+                continue
+            archive_key = upload_ddb_archive(match_meta, rows)
+            if not archive_key:
+                continue
+            deleted = delete_match_rows(rows)
+            print(
+                f"DDB retention: archived {match_id} "
+                f"({deleted} rows removed, warm limit {DDB_WARM_MATCH_LIMIT})"
+            )
+        except Exception as exc:
+            print(f"DDB retention failed for {match_id}: {exc}")
 
 
 def update_meta_record(match_id: str, fields: dict):
@@ -417,6 +570,7 @@ def handle_match_end(event: dict):
     if match_duration is not None:
         sns_fields["duration_ms"] = match_duration
     publish_match_end(current_match_id, ended_at, replay_key, sns_fields)
+    enforce_warm_retention()
     reset_match_state()
 
 
@@ -441,6 +595,7 @@ HANDLERS = {
 # ── Main Loop ─────────────────────────────────────────────────────────────────
 
 print(f"Waiting on '{EVENT_KEY}' / '{REPLAY_KEY}' (BRPOP — zero CPU until event arrives)...")
+enforce_warm_retention()
 
 while True:
     result = r.brpop([EVENT_KEY, REPLAY_KEY], timeout=0)

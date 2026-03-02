@@ -428,7 +428,7 @@
     <div class="panel">
       <h2>DynamoDB — recent matches</h2>
       <div id="match-list"><span style="color:#333">loading...</span></div>
-      <div class="ddb-note">full META scan every 2s · sorted by latest timestamp</div>
+      <div class="ddb-note">warm tier only · recent META rows kept in DynamoDB · older match rows archived to S3</div>
     </div>
 
     <!-- Replay -->
