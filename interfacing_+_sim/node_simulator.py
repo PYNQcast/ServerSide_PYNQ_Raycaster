@@ -132,7 +132,15 @@ def normalize_mode(mode: str):
     return "auto" if mode == "scripted" else mode
 
 
-def apply_control_command(tag: str, command: dict, current_mode: str):
+def apply_control_command(tag: str, command: dict, current_mode: str, node_index: int):
+    target_index = command.get("node_index")
+    if target_index is not None:
+        try:
+            if int(target_index) != node_index:
+                return current_mode, False
+        except (TypeError, ValueError):
+            return current_mode, False
+
     cmd = command.get("cmd")
     if cmd == "set_mode":
         requested = normalize_mode(str(command.get("mode", "")).lower())
@@ -227,7 +235,7 @@ def run_node(server_ip, server_port, player_id, node_index,
                             command = json.loads(msg["data"])
                         except Exception:
                             continue
-                        next_mode, should_restart = apply_control_command(tag, command, normalized_mode)
+                        next_mode, should_restart = apply_control_command(tag, command, normalized_mode, node_index)
                         switch_mode(next_mode)
                     print(f"{tag} ── GAME OVER — waiting for ▶ RESTART...")
                     while True:
@@ -238,7 +246,7 @@ def run_node(server_ip, server_port, player_id, node_index,
                             except Exception:
                                 command = None
                             if command:
-                                next_mode, should_restart = apply_control_command(tag, command, normalized_mode)
+                                next_mode, should_restart = apply_control_command(tag, command, normalized_mode, node_index)
                                 switch_mode(next_mode)
                                 if should_restart:
                                     print(f"{tag} restart received — rejoining in {RESTART_DELAY_S}s...")
@@ -281,7 +289,7 @@ def run_node(server_ip, server_port, player_id, node_index,
                         command = json.loads(msg["data"])
                     except Exception:
                         continue
-                    next_mode, should_restart = apply_control_command(tag, command, normalized_mode)
+                    next_mode, should_restart = apply_control_command(tag, command, normalized_mode, node_index)
                     switch_mode(next_mode)
                     if should_restart:
                         playing = False

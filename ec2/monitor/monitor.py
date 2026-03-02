@@ -213,18 +213,23 @@ def _stop_service(name: str):
 def handle_control_command(cmd: str):
     global _service_message
 
+    def publish_node_mode(node_index: int, mode: str):
+        payload = json.dumps({"cmd": "set_mode", "mode": mode, "node_index": node_index})
+        r.publish("game:control", payload)
+        return f"node {node_index + 1} switched to {mode} mode"
+
     if cmd == "restart":
         payload = json.dumps({"cmd": "restart"})
         r.publish("game:control", payload)
         _service_message = "restart signal sent to node simulators"
-    elif cmd == "nodes_auto":
-        payload = json.dumps({"cmd": "set_mode", "mode": "auto"})
-        r.publish("game:control", payload)
-        _service_message = "node simulators switched to auto mode"
-    elif cmd == "nodes_manual":
-        payload = json.dumps({"cmd": "set_mode", "mode": "manual"})
-        r.publish("game:control", payload)
-        _service_message = "node simulators switched to manual mode"
+    elif cmd == "node1_auto":
+        _service_message = publish_node_mode(0, "auto")
+    elif cmd == "node1_manual":
+        _service_message = publish_node_mode(0, "manual")
+    elif cmd == "node2_auto":
+        _service_message = publish_node_mode(1, "auto")
+    elif cmd == "node2_manual":
+        _service_message = publish_node_mode(1, "manual")
     elif cmd == "start_server":
         _service_message = _start_service("server")
     elif cmd == "stop_server":

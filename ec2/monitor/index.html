@@ -358,8 +358,16 @@
         <button class="control-btn stop" onclick="sendControl('stop_sidecar', 'stop sidecar')">Stop Sidecar</button>
         <button class="control-btn restart" onclick="sendControl('restart_stack', 'restart stack')">Restart Stack</button>
         <button class="control-btn restart" onclick="sendControl('restart', 'start match')">Start Match</button>
-        <button class="control-btn start" onclick="sendControl('nodes_auto', 'nodes auto mode')">Nodes Auto</button>
-        <button class="control-btn restart" onclick="sendControl('nodes_manual', 'nodes manual mode')">Nodes Manual</button>
+      </div>
+      <div class="metric-note" style="margin-top:8px">Node 1</div>
+      <div class="control-stack">
+        <button class="control-btn start" onclick="sendControl('node1_auto', 'node 1 auto mode')">P1 Auto</button>
+        <button class="control-btn restart" onclick="sendControl('node1_manual', 'node 1 manual mode')">P1 Manual</button>
+      </div>
+      <div class="metric-note" style="margin-top:8px">Node 2</div>
+      <div class="control-stack">
+        <button class="control-btn start" onclick="sendControl('node2_auto', 'node 2 auto mode')">P2 Auto</button>
+        <button class="control-btn restart" onclick="sendControl('node2_manual', 'node 2 manual mode')">P2 Manual</button>
       </div>
       <div class="metric-note">EC2 services are controlled here. Node simulators still run locally via `dev.sh`, but their mode can be switched over Redis.</div>
       <div class="metric-note">For manual mode, focus the relevant tmux pane before using arrow keys.</div>
