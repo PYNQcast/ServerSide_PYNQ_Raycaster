@@ -20,6 +20,7 @@
 #   http://localhost:8080
 
 import asyncio
+import gzip
 import json
 import os
 from pathlib import Path
@@ -59,6 +60,7 @@ SERVICE_SPECS = {
 
 r     = redislib.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 dyndb = boto3.resource("dynamodb", region_name=AWS_REGION).Table(DYNAMO_TABLE)
+s3    = boto3.client("s3", region_name=AWS_REGION)
 
 # ── DynamoDB poll (slow — every 5s) ───────────────────────────────────────────
 
@@ -67,6 +69,7 @@ _ddb_last_fetch = 0.0
 _service_cache  = {}
 _service_last_fetch = 0.0
 _service_message = "controls run on EC2 only; node simulators still start locally"
+_replay_cache = {}
 
 def _as_int(value, default=0):
     try:
@@ -88,7 +91,7 @@ def poll_dynamodb():
             kwargs = {
                 "FilterExpression": "record_type = :rt",
                 "ExpressionAttributeValues": {":rt": "META"},
-                "ProjectionExpression": "match_id, #s, #ts",
+                "ProjectionExpression": "match_id, #s, #ts, replay_s3_key",
                 "ExpressionAttributeNames": {"#s": "status", "#ts": "timestamp"},
             }
             if last_evaluated_key:
@@ -104,7 +107,8 @@ def poll_dynamodb():
         _ddb_cache = [
             {"match_id": i["match_id"],
              "status":   i.get("status", "?"),
-             "timestamp": i.get("timestamp", "")[:19].replace("T", " ")}
+             "timestamp": i.get("timestamp", "")[:19].replace("T", " "),
+             "has_replay": bool(i.get("replay_s3_key"))}
             for i in items
         ]
         _ddb_last_fetch = now
@@ -388,6 +392,46 @@ def collect_state():
         "matches": matches,
     }
 
+
+def fetch_replay(match_id: str):
+    if match_id in _replay_cache:
+        return _replay_cache[match_id]
+
+    resp = dyndb.get_item(Key={"match_id": match_id, "record_type": "META"})
+    item = resp.get("Item")
+    if not item:
+        raise web.HTTPNotFound(text=f"unknown match_id: {match_id}")
+
+    bucket = item.get("replay_s3_bucket")
+    key = item.get("replay_s3_key")
+    if not bucket or not key:
+        raise web.HTTPNotFound(text=f"no replay stored for {match_id}")
+
+    obj = s3.get_object(Bucket=bucket, Key=key)
+    body = obj["Body"].read()
+    if key.endswith(".gz"):
+        body = gzip.decompress(body)
+
+    events = []
+    for line in body.decode("utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        events.append(json.loads(line))
+
+    payload = {
+        "match_id": match_id,
+        "bucket": bucket,
+        "key": key,
+        "events": events,
+    }
+    _replay_cache[match_id] = payload
+    if len(_replay_cache) > 8:
+        oldest = next(iter(_replay_cache))
+        if oldest != match_id:
+            _replay_cache.pop(oldest, None)
+    return payload
+
 # ── WebSocket handler ──────────────────────────────────────────────────────────
 
 async def ws_handler(request):
@@ -426,12 +470,25 @@ async def index_handler(request):
     here = os.path.dirname(__file__)
     return web.FileResponse(os.path.join(here, "index.html"))
 
+
+async def replay_handler(request):
+    match_id = request.match_info["match_id"]
+    try:
+        payload = fetch_replay(match_id)
+    except web.HTTPException:
+        raise
+    except Exception as e:
+        print(f"[monitor] replay fetch error for {match_id}: {e}")
+        raise web.HTTPInternalServerError(text="failed to load replay")
+    return web.json_response(payload)
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 async def main():
     app = web.Application()
     app.router.add_get("/",   index_handler)
     app.router.add_get("/ws", ws_handler)
+    app.router.add_get("/api/replay/{match_id}", replay_handler)
 
     runner = web.AppRunner(app)
     await runner.setup()
