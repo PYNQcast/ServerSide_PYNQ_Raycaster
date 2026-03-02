@@ -1,59 +1,108 @@
 # Lambda
 
-**Not needed yet.** Build this after the sidecar is writing to DynamoDB successfully.
+The post-match Lambda is now wired as the final step after `match_end`.
 
-**Owner: open for the team : pure Python, no C++, no real-time constraints.**
+The structure is intentionally split into:
+- generic AWS plumbing
+- game-specific summary hooks
 
----
-
-## What it is
-
-A serverless Python function that runs automatically after every match. It is triggered by an SNS notification that the sidecar publishes when a match ends.
+That keeps it closer to a game-dev workflow: the transport and storage path stays stable, while the match logic can be swapped out.
 
 ```
-Sidecar
-  → publishes to SNS topic "fpga-raycaster-game-end"
-    → Lambda wakes up automatically
-      → reads match data from DynamoDB
-      → computes stats
-      → writes results back
+T2 / T4
+  → LPUSH game:seda-events
+    → ec2/sidecar/sidecar.py
+      → updates DynamoDB META row
+      → uploads replay to S3
+      → publishes SNS message
+        → Lambda wakes up
+          → reads replay from S3
+          → computes summary counts
+          → writes summary fields back to DynamoDB
 ```
 
-You don't run or manage it : AWS invokes it in response to the SNS message. It scales automatically, costs essentially nothing at our volume, and if it fails it can be retried without affecting the game.
-
-## What it could do
-
-**Post-game stats processing**
-- Read the match result and per-player rows written by the sidecar
-- Compute derived stats: who tagged whom, time-to-first-tag, average RTT across the match
-- Write a summary back to DynamoDB for the dashboard to display
-
-**Player profile updates**
-- Increment lifetime win/loss/tag counters for each player using DynamoDB `UpdateItem` with `ADD` expressions (atomic increment : no read-modify-write needed)
-
-**Replay indexing**
-- Generate a pre-signed S3 URL for the replay file uploaded by the sidecar
-- Store the URL in DynamoDB so the dashboard can link to it
-
-## When to build it
-
-1. Sidecar must be writing match results to DynamoDB first
-2. SNS topic must exist (`infra/setup/setup_sns_lambda.md`)
-3. Create the Lambda function in AWS console (Python 3.12, 128 MB, 30s timeout)
-4. Subscribe it to the SNS topic
-5. Start with just printing the `match_id` : confirm it triggers correctly
-6. Add stat computation once the trigger is confirmed working
-
-## Structure (when you build it)
+## Files
 
 ```
 lambda/
   stats_processor/
-    handler.py          # entry point : def handler(event, context)
-    requirements.txt    # boto3 is pre-installed on Lambda, list any extras here
-  deploy.sh             # zip handler.py and push to AWS with the CLI
+    handler.py
+    requirements.txt
+  deploy.sh
 ```
 
-## Setup notes
+`lambda/stats_processor/handler.py` expects an SNS message shaped like:
+
+```json
+{
+  "match_id": "match-20260302-142055",
+  "table": "pynq-raycaster-seda-matches",
+  "region": "eu-west-2",
+  "ended_at": "2026-03-02T14:21:01.234567+00:00",
+  "event_count": 4,
+  "tag_count": 2,
+  "winner": "tagger",
+  "s3_bucket": "fpga-raycaster-data",
+  "replay_key": "replays/year=2026/month=03/match-20260302-142055.ndjson.gz",
+  "duration_ms": 12840
+}
+```
+
+The handler:
+- loads the replay file from S3
+- counts total events and tag events
+- recomputes duration from the replay timestamps when available
+- updates the `META` row with:
+  - `summary_processed_at`
+  - `summary_event_count`
+  - `summary_tag_events`
+  - `summary_winner`
+  - `summary_duration_ms`
+
+## Plug-In Points
+
+In [handler.py](/home/akendall/Documents/ServerSide_PYNQ_Raycaster/lambda/stats_processor/handler.py), the split is:
+
+- `Generic Helpers`
+  - S3 read
+  - DynamoDB update
+  - SNS record handling
+- `Game Hooks: Current Tag Game`
+  - `game_compute_summary(events, message)`
+
+If you change game mode later, this is the main function you swap first. The rest of the Lambda can usually stay unchanged.
+
+## Deploy
+
+Create the zip locally:
+
+```bash
+bash lambda/deploy.sh
+```
+
+Then either:
+- upload the zip in the AWS Lambda console, or
+- run the printed `aws lambda update-function-code ...` command
+
+## AWS Console Settings
+
+- Function name: `fpga-raycaster-stats-processor`
+- Runtime: `Python 3.12`
+- Handler: `handler.handler`
+- Timeout: `30 seconds`
+- Memory: `128 MB`
+
+## Lambda Environment Variables
+
+Set these in the Lambda console:
+
+```text
+AWS_REGION      eu-west-2
+DYNAMODB_TABLE  pynq-raycaster-seda-matches
+```
+
+`boto3` is preinstalled on Lambda, so no extra dependency packaging is needed for the current handler.
+
+## Setup Notes
 
 See `infra/setup/setup_sns_lambda.md`.

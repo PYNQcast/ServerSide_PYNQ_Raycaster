@@ -1,33 +1,65 @@
 # S3 Setup
 
-## Bucket
+Use the AWS console first. The sidecar assumes the bucket already exists.
+
+## Bucket (AWS Console)
+
+Create a bucket with:
+
 - Name: `fpga-raycaster-data`
-- Region: eu-west-2
-- Versioning: disabled
-- Public access: blocked on all axes
+- Region: `eu-west-2` (same region as EC2 / DynamoDB / Lambda)
+- Object Ownership: `ACLs disabled`
+- Block Public Access: leave all four options enabled
+- Versioning: optional, off is fine for MVP
 
-## Directory Structure
-```
+After creation, do not make it public. The Lambda and sidecar read/write it through IAM.
+
+## Expected Replay Path
+
+The current sidecar writes:
+
+```text
 fpga-raycaster-data/
-├── replays/
-│   └── year=YYYY/month=MM/{match_id}.ndjson.gz
-├── snapshots/
-│   └── {match_id}/{tick:08d}.json.gz
-└── exports/
-    └── (manual Athena query results)
+└── replays/
+    └── year=YYYY/
+        └── month=MM/
+            └── {match_id}.ndjson.gz
 ```
 
-## Lifecycle Rules
-| Rule ID          | Prefix    | Action                              |
-|------------------|-----------|-------------------------------------|
-| archive-replays  | replays/  | Transition to GLACIER after 90 days |
+Example:
 
-## Athena Setup (optional)
-1. Create Glue crawler pointing at `s3://fpga-raycaster-data/replays/`
-2. Run crawler → creates Glue table `replays`
-3. Query in Athena: `SELECT * FROM replays WHERE year='2025' LIMIT 100`
+```text
+s3://fpga-raycaster-data/replays/year=2026/month=03/match-20260302-142055.ndjson.gz
+```
 
-## Automated setup
+## EC2 Sidecar Config
+
+`ec2/sidecar/sidecar.py` defaults to:
+
+```text
+S3_BUCKET=fpga-raycaster-data
+AWS_REGION=eu-west-2
+```
+
+So if you keep the default bucket name, no extra config is needed for S3 beyond creating the bucket.
+
+If you want a different name, set `S3_BUCKET` before starting the sidecar.
+
+## IAM Permissions
+
+The EC2 instance role (or AWS credentials used on EC2) needs:
+
+- `s3:PutObject` on `arn:aws:s3:::fpga-raycaster-data/replays/*`
+- `s3:GetObject` on the same prefix if you want EC2-side verification
+
+The Lambda role needs:
+
+- `s3:GetObject` on `arn:aws:s3:::fpga-raycaster-data/replays/*`
+
+## Optional CLI Setup
+
+If you want to create the bucket from code instead of the console:
+
 ```bash
-python s3/create_bucket.py
+python3 s3/create_bucket.py
 ```
