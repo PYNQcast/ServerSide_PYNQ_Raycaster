@@ -19,18 +19,26 @@ class BroadcasterProtocol(asyncio.DatagramProtocol):
 
 
 class Broadcaster:
-    def __init__(self, broadcast_queue: asyncio.Queue):
-        self.queue     = broadcast_queue
-        self.transport = None
+    def __init__(self, broadcast_queue: asyncio.Queue, shared_transport=None):
+        self.queue            = broadcast_queue
+        self.transport        = None
+        self._shared          = shared_transport   # T1's port-9000 socket if provided
 
     async def run(self):
         loop = asyncio.get_running_loop()
 
-        # Open a separate UDP socket for sending
-        self.transport, _ = await loop.create_datagram_endpoint(
-            BroadcasterProtocol,
-            family=2,   # AF_INET
-        )
+        if self._shared is not None:
+            # Reuse T1's socket — replies come from EC2:9000, matching the NAT mapping
+            # that the node's sendto(EC2:9000) created.
+            self.transport = self._shared
+            print("[T3 Broadcaster] reusing T1 socket (port 9000)")
+        else:
+            # Fallback: open a separate UDP socket for sending
+            self.transport, _ = await loop.create_datagram_endpoint(
+                BroadcasterProtocol,
+                family=2,   # AF_INET
+            )
+            print("[T3 Broadcaster] opened own socket (no shared transport)")
 
         print("[T3 Broadcaster] ready")
 

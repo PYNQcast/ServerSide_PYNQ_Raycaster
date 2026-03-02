@@ -9,6 +9,11 @@
 # passes them downstream. Parsing happens in T2.
 #
 # Queue output: {"data": bytes, "addr": (ip, port)}
+#
+# bind() must be called before run() so that server.py can pass
+# self.transport to T3 Broadcaster — both share the port-9000 socket
+# so that broadcast replies arrive at the client from EC2:9000,
+# matching the NAT mapping the node's outbound sendto created.
 
 import asyncio
 
@@ -28,20 +33,22 @@ class UDPReceiverProtocol(asyncio.DatagramProtocol):
 
 class UDPReceiver:
     def __init__(self, packet_queue: asyncio.Queue):
-        self.queue = packet_queue
+        self.queue     = packet_queue
+        self.transport = None   # set by bind(); shared with T3 Broadcaster
 
-    async def run(self, port: int):
+    async def bind(self, port: int):
+        """Bind the UDP socket. Must be called before run()."""
         loop = asyncio.get_running_loop()
-
-        # TODO: Possibly: bind to specific interface instead of 0.0.0.0 if needed
-        transport, _ = await loop.create_datagram_endpoint(
+        self.transport, _ = await loop.create_datagram_endpoint(
             lambda: UDPReceiverProtocol(self.queue),
             local_addr=("0.0.0.0", port),
         )
-
         print(f"[T1 UDPReceiver] listening on UDP :{port}")
 
+    async def run(self):
+        """Keep the socket alive. bind() must have been called first."""
         try:
             await asyncio.sleep(float("inf"))   # run forever
         finally:
-            transport.close()
+            if self.transport:
+                self.transport.close()
