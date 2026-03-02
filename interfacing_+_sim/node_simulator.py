@@ -129,6 +129,8 @@ def run_node(server_ip, server_port, player_id, node_index,
                     pkt_type, _, _, players = unpack_server_packet(data)
                     if pkt_type == PKT_GAME_STATE:
                         for p in players:
+                            if p["flags"] != 0 or tick % TICK_HZ == 0:
+                                print(f"{tag} recv P{p['player_id']} flags={p['flags']:#04x}")
                             if p["flags"] & FLAG_TAGGED:
                                 print(f"{tag} P{p['player_id']} TAGGED — stopping")
                                 playing = False
