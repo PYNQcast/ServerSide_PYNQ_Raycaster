@@ -332,14 +332,44 @@
     <div class="stage-label">process</div>
     <div class="stage-box stage-store">
       <div class="stage-name">Sidecar</div>
-      <div class="stage-desc">Redis → DynamoDB</div>
+      <div class="stage-desc">Redis → DDB · S3 · SNS</div>
       <div class="stage-val">blocked: <span id="pp-blocked">—</span></div>
     </div>
   </div>
 
   <div class="pipe-queue">
     <div class="q-arrow">→</div>
-    <div class="q-label">PutItem</div>
+    <div class="q-label">archive · notify</div>
+  </div>
+
+  <!-- S3 -->
+  <div class="pipe-stage">
+    <div class="stage-label">AWS</div>
+    <div class="stage-box stage-ext">
+      <div class="stage-name">S3 Cold</div>
+      <div class="stage-desc">replays + DDB archive</div>
+      <div class="stage-val">durable object store</div>
+    </div>
+  </div>
+
+  <div class="pipe-queue">
+    <div class="q-arrow">→</div>
+    <div class="q-label">match_end</div>
+  </div>
+
+  <!-- SNS / Lambda -->
+  <div class="pipe-stage">
+    <div class="stage-label">AWS</div>
+    <div class="stage-box stage-store">
+      <div class="stage-name">SNS/Lambda</div>
+      <div class="stage-desc">post-match summary</div>
+      <div class="stage-val">async processing</div>
+    </div>
+  </div>
+
+  <div class="pipe-queue">
+    <div class="q-arrow">→</div>
+    <div class="q-label">UpdateItem</div>
   </div>
 
   <!-- DynamoDB -->
@@ -347,8 +377,8 @@
     <div class="stage-label">AWS</div>
     <div class="stage-box stage-ext">
       <div class="stage-name">DynamoDB</div>
-      <div class="stage-desc">persistent store</div>
-      <div class="stage-val"><span id="pp-ddb">—</span> matches</div>
+      <div class="stage-desc">warm metadata index</div>
+      <div class="stage-val"><span id="pp-ddb">—</span> recent</div>
     </div>
   </div>
 
