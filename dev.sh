@@ -86,14 +86,14 @@ tmux split-window -t "$SESSION:0.2" -v -p 50   # 2=monitor 5=bot-R
 # Startup order matters: server must bind port 9000 before nodes register.
 
 tmux select-pane -t "$SESSION:0.0" -T "seda server"
-tmux send-keys -t "$SESSION:0.0" "ssh -t -i $KEY $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster/ec2/server && python3 server.py'" Enter
+tmux send-keys -t "$SESSION:0.0" "ssh -t -i $KEY $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster/sim_full/ec2/server && python3 server.py'" Enter
 
 tmux select-pane -t "$SESSION:0.1" -T "sidecar"
-tmux send-keys -t "$SESSION:0.1" "ssh -t -i $KEY $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster/ec2/sidecar && python3 sidecar.py'" Enter
+tmux send-keys -t "$SESSION:0.1" "ssh -t -i $KEY $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster/sim_full/ec2/sidecar && python3 sidecar.py'" Enter
 
 # Monitor: start on EC2, poll until port 8080 is bound, then tail log (tunnel already open via -L).
 tmux select-pane -t "$SESSION:0.2" -T "monitor :8080"
-tmux send-keys -t "$SESSION:0.2" "fuser -k 8080/tcp 2>/dev/null || true; ssh -t -i $KEY -L 0.0.0.0:8080:localhost:8080 $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster/ec2/monitor && nohup python3 monitor.py > /tmp/monitor.log 2>&1 & until nc -z localhost 8080 2>/dev/null; do sleep 0.2; done && echo [monitor] port 8080 ready && tail -f /tmp/monitor.log'" Enter
+tmux send-keys -t "$SESSION:0.2" "fuser -k 8080/tcp 2>/dev/null || true; ssh -t -i $KEY -L 0.0.0.0:8080:localhost:8080 $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster/sim_full/ec2/monitor && nohup python3 monitor.py > /tmp/monitor.log 2>&1 & until nc -z localhost 8080 2>/dev/null; do sleep 0.2; done && echo [monitor] port 8080 ready && tail -f /tmp/monitor.log'" Enter
 
 # Redis tunnel: forward local 6380 → EC2 6379 so node sims can read game:control signals
 fuser -k 6380/tcp 2>/dev/null || true

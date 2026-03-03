@@ -41,17 +41,17 @@ SERVICE_POLL_INTERVAL_S = 1.0
 
 DYNAMO_TABLE = "pynq-raycaster-seda-matches"
 AWS_REGION   = "eu-west-2"
-REPO_ROOT    = Path(__file__).resolve().parents[2]
+REPO_ROOT    = Path(__file__).resolve().parents[3]
 
 SERVICE_SPECS = {
     "server": {
-        "script": REPO_ROOT / "ec2" / "server" / "server.py",
-        "pattern": "ec2/server/server.py",
+        "script": REPO_ROOT / "sim_full" / "ec2" / "server" / "server.py",
+        "pattern": "sim_full/ec2/server/server.py",
         "log": Path("/tmp/seda-server.log"),
     },
     "sidecar": {
-        "script": REPO_ROOT / "ec2" / "sidecar" / "sidecar.py",
-        "pattern": "ec2/sidecar/sidecar.py",
+        "script": REPO_ROOT / "sim_full" / "ec2" / "sidecar" / "sidecar.py",
+        "pattern": "sim_full/ec2/sidecar/sidecar.py",
         "log": Path("/tmp/seda-sidecar.log"),
     },
 }
