@@ -48,7 +48,7 @@ echo "--- killing stale EC2 processes and pulling latest code ---"
 # Write a stop script to EC2 and run it — avoids pkill -f matching its own SSH command string
 ssh -i "$KEY" "$EC2" 'printf "#!/bin/bash\npkill -f server.py 2>/dev/null; pkill -f sidecar.py 2>/dev/null; pkill -f monitor.py 2>/dev/null; fuser -k 8080/tcp 2>/dev/null; true\n" > /tmp/_stop_seda.sh && bash /tmp/_stop_seda.sh'
 sleep 1
-ssh -i "$KEY" "$EC2" 'cd ~/ServerSide_PYNQ_Raycaster && git status --short && git pull'
+ssh -i "$KEY" "$EC2" 'cd ~/ServerSide_PYNQ_Raycaster && git fetch origin && git reset --hard origin/main'
 if [ $? -ne 0 ]; then
   echo "!!! EC2 git pull failed — check output above"
   exit 1
