@@ -1,19 +1,19 @@
 #!/bin/bash
-# dev.sh : open a 5-pane tmux session for the SEDA ec2/ stack
+# sim_dev.sh : open a 6-pane tmux session for the sim_full ec2/ stack
 #
 # Layout:
-#   ┌────────────────┬────────────┬────────────┐  (60% height)
+#   ┌────────────────┬────────────┬────────────┐  (50% height)
 #   │   seda server  │  sidecar   │  monitor   │
-#   ├────────────────┴┬───────────┴────────────┤  (40% height)
+#   ├────────────────┼────────────┼────────────┤  (50% height)
 #   │   node sim 1   │  node sim 2  │ redis    │
 #   └────────────────┴─────────────┴───────────┘
 #
-# Monitor (ec2/monitor/monitor.py) runs on EC2 port 8080.
+# Monitor (sim_full/ec2/monitor/monitor.py) runs on EC2 port 8080.
 # SSH tunnel in the monitor pane forwards it to http://localhost:8080
 #
-# Usage: ./dev.sh  (from repo root)
+# Usage: ./sim_dev.sh  (from repo root)
 # Requires: tmux, SSH key at repo root raycastpair.pem
-# For basic/ stack: ./basic/basicdev.sh 
+# For pynq_full stack: ./pynq_dev.sh
 
 SESSION="seda"
 EC2="ubuntu@18.175.238.148"

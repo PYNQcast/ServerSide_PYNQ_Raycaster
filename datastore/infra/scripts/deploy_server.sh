@@ -6,7 +6,7 @@ set -euo pipefail
 # Sync Python server files to EC2
 rsync -avz -e "ssh -i $EC2_KEY" \
     ec2/server/ \
-    interfacing_+_sim/protocol.py \
+    pynq_full/interfacing/protocol.py \
     requirements.txt \
     "$EC2_HOST:/opt/game_server/"
 
