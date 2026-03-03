@@ -1,34 +1,36 @@
 # DynamoDB Setup
 
 ## Table
-- Name: `fpga-raycaster`
-- Partition key: `PK` (String)
-- Sort key: `SK` (String)
-- Capacity mode: On-demand (PAY_PER_REQUEST)
-- Free tier: 25 RCU + 25 WCU always-free (sufficient for our write volume)
 
-## TTL
-Enable TTL on attribute `ttl` (Unix epoch seconds) after table creation:
-```bash
-aws dynamodb update-time-to-live \
-  --table-name fpga-raycaster \
-  --time-to-live-specification "Enabled=true,AttributeName=ttl"
-```
+- name: `pynq-raycaster-seda-matches`
+- region: `eu-west-2`
+- partition key: `match_id` (String)
+- sort key: `record_type` (String)
+- billing mode: `On-demand`
 
-## DynamoDB Streams
-Enable: `NEW_AND_OLD_IMAGES`
-Used for CDC → can trigger additional Lambdas in future.
+## What this table stores
 
-## GSI: status-index
-- Partition key: `status` (String)  e.g. "COMPLETED", "ACTIVE"
-- Sort key: `start_time` (String)   ISO 8601 timestamp
-- Projection: ALL
-- Purpose: query recent completed matches for dashboard history
+- `META` rows
+- `TAG#N` rows
+- replay pointers
+- Lambda summary fields
 
-## Automated setup
-```bash
-python dynamodb/create_table.py
-```
+## Current usage
 
-## Key Schema
-See `dynamodb/schema.md`.
+- the sidecar writes match rows
+- Lambda updates the `META` row after `match_end`
+- the monitor reads recent warm-tier matches
+
+## Important note
+
+This table is now the warm tier, not the permanent full archive.
+
+Older completed matches are archived to S3 by the sidecar and then removed from
+DynamoDB after the archive succeeds.
+
+## Setup
+
+Create the table in the AWS console with the key schema above, then give:
+
+- the EC2 sidecar role write access
+- the Lambda role `UpdateItem` access

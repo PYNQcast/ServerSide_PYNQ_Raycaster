@@ -32,6 +32,12 @@ Example:
 s3://fpga-raycaster-data/replays/year=2026/month=03/match-20260302-142055.ndjson.gz
 ```
 
+The sidecar also uses S3 for archived warm-tier DynamoDB rows:
+
+```text
+s3://fpga-raycaster-data/ddb-archive/year=YYYY/month=MM/{match_id}.json.gz
+```
+
 ## EC2 Sidecar Config
 
 `ec2/sidecar/sidecar.py` defaults to:
@@ -50,6 +56,7 @@ If you want a different name, set `S3_BUCKET` before starting the sidecar.
 The EC2 instance role (or AWS credentials used on EC2) needs:
 
 - `s3:PutObject` on `arn:aws:s3:::fpga-raycaster-data/replays/*`
+- `s3:PutObject` on `arn:aws:s3:::fpga-raycaster-data/ddb-archive/*`
 - `s3:GetObject` on the same prefix if you want EC2-side verification
 
 The Lambda role needs:

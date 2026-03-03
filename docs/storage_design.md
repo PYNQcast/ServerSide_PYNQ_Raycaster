@@ -1,49 +1,54 @@
-# Storage Design : Three-Tier Strategy
+# Storage Design
 
-## Why three tiers?
+The project now uses a managed three-tier storage model.
 
-Game state changes 20 times per second. DynamoDB at 1–10ms write latency cannot keep up with the tick loop. Redis at <1ms fits. But Redis is ephemeral : we need persistent storage for match history. S3 is cheapest for bulk replay data. Hence: hot cache → warm DB → cold archive.
+## Hot: Redis
 
-## Tier 1 : Redis (ElastiCache)
+Purpose:
+- live player state
+- transient event queues
+- control messages for node simulators
 
-**Purpose:** Live game state, written every tick by the Python server.
-**Written by:** T4 RedisWriter (redis.asyncio).
-**Read by:** Python sidecar on match end.
-**Retention:** Match duration only. Keys expire or are deleted by sidecar.
+Examples:
+- `player:1`
+- `player:2`
+- `game:seda-events`
+- `game:seda-replay`
+- `game:control`
 
-Key schema:
-```
-game:{match_id}:state      HASH  player_id → JSON blob (position, angle, flags)
-game:{match_id}:config     HASH  seed, tick_rate, max_players
-game:{match_id}:events     LIST  event log (RPUSH each significant tick)
-game:events                LIST  LPUSH {"event":"match_end","match_id":"..."} → triggers sidecar
-node:{node_id}:heartbeat   STRING  TTL=5s (auto-expiry = node considered dead)
-lobby:waiting              SET   node IDs waiting for a match
-```
+## Warm: DynamoDB
 
-## Tier 2 : DynamoDB (Single-table)
+Purpose:
+- recent match metadata
+- per-match tag rows
+- replay pointers
+- Lambda summary fields
 
-**Purpose:** Durable match results and player profiles.
-**Written by:** Python sidecar after game end.
-**Read by:** Dashboard (via REST), Lambda stats processor.
+Key shape:
+- partition key: `match_id`
+- sort key: `record_type`
 
-Single-table access patterns:
-| PK                  | SK             | Data                          |
-|---------------------|----------------|-------------------------------|
-| MATCH#{match_id}    | META           | winner, duration, tick_count  |
-| MATCH#{match_id}    | PLAYER#{id}    | tags, deaths, avg_rtt         |
-| PLAYER#{player_id}  | PROFILE        | total wins, losses, tags      |
-| STATUS#COMPLETED    | {start_time}   | GSI for recent match listing  |
+Common rows:
+- `META`
+- `TAG#1`
+- `TAG#2`
 
-## Tier 3 : S3
+## Cold: S3
 
-**Purpose:** Bulk replay archives and periodic snapshots.
-**Written by:** Python sidecar.
-**Read by:** Dashboard (pre-signed URL), Athena queries.
+Purpose:
+- replay files
+- archived DynamoDB match rows
 
-Key patterns:
-```
-replays/year=YYYY/month=MM/{match_id}.ndjson.gz    Full event log (Athena-partitioned)
-snapshots/{match_id}/{tick:08d}.json.gz             30-second state snapshots
-exports/                                            Athena query result CSVs
-```
+Paths:
+- `replays/year=YYYY/month=MM/{match_id}.ndjson.gz`
+- `ddb-archive/year=YYYY/month=MM/{match_id}.json.gz`
+
+## Retention
+
+The sidecar keeps DynamoDB as the warm tier:
+
+- recent completed matches stay in DynamoDB
+- older completed matches are copied to S3
+- only then are those older rows removed from DynamoDB
+
+This keeps replay history durable while keeping the warm metadata layer smaller.

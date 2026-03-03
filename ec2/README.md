@@ -1,89 +1,49 @@
-# ec2/ : Game Server
+# ec2/
 
-The real-time game server. Runs on an AWS EC2 t2.micro instance.
+This is the live server-side runtime.
 
-**Server:** Python asyncio (SEDA architecture : 4 tasks, 3 queues)
-**Game logic:** C++ compiled module (raycaster engine primitives)
+## Core runtime
 
----
+- [server.py](/home/akendall/Documents/ServerSide_PYNQ_Raycaster/ec2/server/server.py)
+  - starts the SEDA pipeline
+- [t1_udp_receiver.py](/home/akendall/Documents/ServerSide_PYNQ_Raycaster/ec2/server/t1_udp_receiver.py)
+  - UDP ingress on port `9000`
+- [t2_game_tick.py](/home/akendall/Documents/ServerSide_PYNQ_Raycaster/ec2/server/t2_game_tick.py)
+  - 20 Hz authoritative game tick
+- [t3_broadcaster.py](/home/akendall/Documents/ServerSide_PYNQ_Raycaster/ec2/server/t3_broadcaster.py)
+  - UDP fan-out to clients
+- [t4_redis_writer.py](/home/akendall/Documents/ServerSide_PYNQ_Raycaster/ec2/server/t4_redis_writer.py)
+  - writes live state and events to Redis
 
-## Why this split?
+## Support services
 
-The server is Python because it's mostly network plumbing : receive UDP, merge state, send UDP, write Redis. Python asyncio handles this easily and gives us boto3, fast iteration, and simple deployment.
+- [monitor/monitor.py](/home/akendall/Documents/ServerSide_PYNQ_Raycaster/ec2/monitor/monitor.py)
+  - live monitor backend, replay API, EC2 control actions
+- [monitor/index.html](/home/akendall/Documents/ServerSide_PYNQ_Raycaster/ec2/monitor/index.html)
+  - browser UI for live state and replay playback
+- [sidecar/sidecar.py](/home/akendall/Documents/ServerSide_PYNQ_Raycaster/ec2/sidecar/sidecar.py)
+  - persistence, replay upload, SNS trigger, warm-tier retention
 
-The game logic is C++ because it contains the computationally heavy inner loops : ray casting, line-of-sight, move validation. A real raycaster fires hundreds of rays per frame. Python would be 10–100x slower here. C++ keeps those loops fast while Python handles everything else.
+## Game logic
 
-This is the same pattern as NumPy: Python orchestrates, C++ does the maths.
+`game_logic/` contains the C++ helpers used for compute-heavy primitives:
 
----
+- ray casting
+- line-of-sight
+- anti-cheat / movement validation
+- node registry helpers
 
-## Architecture
+## Runtime shape
 
-```
-PYNQ Node ──┐
-             ├──► T1 UDPReceiver ──(packet_queue)──► T2 GameTick ──(broadcast_queue)──► T3 Broadcaster ──► PYNQ Nodes
-PYNQ Node ──┘                                             │
-                                                    calls game_logic/
-                                                    (C++ binary/so)
-                                                          │
-                                              (write_queue)──► T4 RedisWriter ──► Redis
-```
-
-All 4 stages run as asyncio tasks. `asyncio.Queue` replaces the lock-free queues from the classic C++ SEDA design : same concept, Python stdlib.
-
----
-
-## File map
-
-```
-ec2/
-├── server/
-│   ├── server.py          : entry point: spins up 4 asyncio tasks + 3 queues
-│   ├── udp_receiver.py    : T1: asyncio DatagramProtocol → packet_queue
-│   ├── game_tick.py       : T2: fixed-rate tick, calls game_logic, pushes results [TODO]
-│   ├── broadcaster.py     : T3: UDP sendto all nodes + WebSocket to dashboard     [TODO]
-│   └── redis_writer.py    : T4: async Redis writes via redis.asyncio              [TODO]
-│
-└── game_logic/            : C++ raycaster engine (compiled separately)
-    ├── raycaster.cpp/h    : ray_intersects_wall, is_visible, check_proximity      [TODO]
-    ├── anticheat.cpp/h    : validate_move: speed + wall penetration check         [TODO]
-    ├── node_manager.cpp/h : register nodes, assign player IDs                     [TODO]
-    ├── state.h            : PlayerState, GameState structs
-    ├── protocol.h         : C++ packet structs (for game_logic binary only)
-    └── CMakeLists.txt     : builds as shared lib (.so) or standalone binary
+```text
+UDP -> T1 -> T2 -> T3 -> clients
+             |
+             +-> T4 -> Redis -> sidecar -> DynamoDB / S3 / SNS
 ```
 
----
+## Notes
 
-## Running
-
-```bash
-pip install redis
-python ec2/server/server.py
-```
-
-Requires Redis running locally, or set `REDIS_HOST` in `redis_writer.py` to your ElastiCache endpoint.
-
----
-
-## Building game_logic (C++)
-
-```bash
-cd ec2/game_logic && mkdir -p build && cd build
-cmake .. && make -j$(nproc)
-```
-
-Requires: `sudo apt install cmake g++`
-
----
-
-## What needs implementing (in order)
-
-1. `server/game_tick.py` : deserialise packets properly, register players via node_manager
-2. `server/redis_writer.py` : connect redis.asyncio, implement HSET writes
-3. `server/broadcaster.py` : add WebSocket push for dashboard
-4. `game_logic/raycaster.cpp` : DDA ray-march, is_visible, check_proximity
-5. `game_logic/anticheat.cpp` : speed check, wall penetration validation
-6. Wire T2 → game_logic: call compiled C++ from Python game_tick.py
-
-See [Plan.md](../Plan.md) for the full MVP order.
+- the Python runtime path is live
+- the monitor is live
+- replay capture and S3 playback are live
+- Lambda post-match processing is live

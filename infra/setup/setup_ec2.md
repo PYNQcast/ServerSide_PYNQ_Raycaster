@@ -11,7 +11,7 @@ Open inbound:
 |------|----------|-------------|---------------------|
 | 22   | TCP      | Your IP     | SSH                 |
 | 9000 | UDP      | 0.0.0.0/0   | Game UDP            |
-| 8080 | TCP      | 0.0.0.0/0   | WebSocket dashboard |
+| 8080 | TCP      | Your IP     | Monitor UI (or tunnel only) |
 
 ## Elastic IP
 Attach an Elastic IP so the address persists across stop/start cycles.

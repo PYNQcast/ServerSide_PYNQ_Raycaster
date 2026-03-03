@@ -1,47 +1,51 @@
-# The Python Sidecar
+# Sidecar
 
-**Owner: open for the team to build.**
+The sidecar is the non-real-time AWS worker that runs beside the EC2 game server.
 
-The game server pushes a message to Redis when a match ends. The sidecar picks that up and handles all the AWS persistence : DynamoDB, S3, SNS. Self-contained Python project: no real-time constraints, no C++, just reading from Redis and writing to AWS.
+## What it does
 
-## The idea
+- consumes Redis event queues with `BRPOP`
+- writes match rows to DynamoDB
+- uploads replay files to S3
+- publishes `match_end` to SNS
+- keeps DynamoDB as the warm tier by archiving older completed matches to S3
 
-The game server runs at 20 Hz and must never block on slow operations. AWS SDK calls (DynamoDB, S3, SNS) take 10–100 ms : too slow to run inside the tick loop. So the server only talks to Redis (fast, <1 ms). When a match ends it pushes one event:
+## Why it is separate
 
-```
-Redis list "game:events"  →  {"event": "match_end", "match_id": "..."}
-```
+The game tick runs at 20 Hz and should not block on AWS calls.
 
-The sidecar blocks on `BRPOP` : sleeping at zero CPU cost until the event arrives. When it wakes up, it handles everything downstream:
+The sidecar keeps that boundary clean:
 
-```
-read match state from Redis
-  → write result to DynamoDB
-  → upload replay to S3
-  → publish to SNS  →  triggers Lambda
-  → clean up Redis keys
+```text
+T2 / T4 -> Redis -> sidecar -> DynamoDB / S3 / SNS
 ```
 
-## Why this split works well for the team
+Redis stays fast and local. AWS work happens off the gameplay path.
 
-- Completely independent of the game server : no shared code, no shared build system
-- Can be developed and tested without the server running (push fake events to Redis manually with `redis-cli LPUSH game:events '{"event":"match_end"}'`)
-- If it crashes, the game server keeps running : restart the sidecar and it processes any events still in Redis
-- Pure Python + boto3: easy to iterate on
+## Current queues
 
-Note: the server is now Python too : but the sidecar is still a **separate process**. The reason is the same: the server's asyncio loop shouldn't block on 10–100ms AWS calls. Redis is still the handoff.
+- `game:seda-events`
+  - `match_start`, `player_tagged`, `match_end`
+- `game:seda-replay`
+  - `state_snapshot` frames for replay playback
 
-## What needs building
+## Current outputs
 
-- [ ] Read match state from `game:{match_id}:state` Redis hash
-- [ ] Write match result row to DynamoDB
-- [ ] Write per-player stats rows to DynamoDB
-- [ ] Upload event log to S3 as a replay file
-- [ ] Publish SNS notification to trigger Lambda
-- [ ] Delete Redis keys after successful write
+- DynamoDB
+  - `META` row per match
+  - `TAG#N` rows for tag events
+- S3
+  - replay file: `replays/.../{match_id}.ndjson.gz`
+  - cold archive: `ddb-archive/.../{match_id}.json.gz`
+- SNS
+  - `match_end` notification for the Lambda summary processor
 
-Start with the DynamoDB write : get one row appearing in the AWS console, then build outward.
+## Code
 
-## Current state
+- main implementation: [ec2/sidecar/sidecar.py](/home/akendall/Documents/ServerSide_PYNQ_Raycaster/ec2/sidecar/sidecar.py)
+- legacy prototype: [sidecar/sidecar.py](/home/akendall/Documents/ServerSide_PYNQ_Raycaster/sidecar/sidecar.py)
 
-[sidecar/sidecar.py](../sidecar/sidecar.py) : connects to Redis, receives events, prints them. The AWS writes are all TODOs.
+## Current limitation
+
+Replay compression still happens inline during `match_end`. Moving that work to a
+background worker is one of the next clean scaling improvements.

@@ -8,6 +8,7 @@ A tick is one complete cycle of the game loop. Every tick the server:
 2. Updates every player's position
 3. Calls C++ game_logic for physics / visibility checks
 4. Sends the new game state back to all nodes
+5. Emits replay snapshots and match events for the sidecar / monitor path
 
 We run at **20 Hz** : 20 ticks per second, one tick every **50 ms**. Think of it like a heartbeat. The game only "moves" at the tick rate, not continuously. Between ticks, the server is sleeping.
 
@@ -37,7 +38,7 @@ The server's hot path : receive packet, update state, send response : runs 20 ti
 - Packet deserialisation (struct.unpack : fast)
 - State merge (dict operations : fast)
 - UDP send (asyncio sendto : non-blocking)
-- Redis write (redis.asyncio : non-blocking)
+- Redis write handoff (separate write stage)
 
 None of these are CPU-bound. asyncio handles all of them efficiently without threads. Python is the right tool: fast iteration, simple deployment, and boto3 / redis-py just work.
 
@@ -51,7 +52,9 @@ This is the same pattern as NumPy : Python orchestrates, C++ does the maths.
 
 ### Python sidecar (`sidecar/`)
 
-AWS operations (DynamoDB writes, S3 uploads, SNS publishes) happen once per match. Latency of 10–100 ms is fine. The sidecar is a completely separate process : if it crashes, the game server keeps running.
+AWS operations (DynamoDB writes, S3 uploads, SNS publishes) happen off the game
+loop in the separate sidecar process. If the sidecar stalls or crashes, gameplay
+can keep running.
 
 ---
 

@@ -175,4 +175,11 @@ The SDK story only holds once:
 
 Once those are done, the API boundaries will be obvious from how the code is already being used. The fork and packaging work is then straightforward.
 
-Current status: `basic/` reference stack proven end-to-end. `ec2/` SEDA server skeleton in place: T1 complete, T2–T4 to implement.
+Current status:
+
+- the EC2 SEDA runtime is live
+- the monitor is live
+- S3 replay storage is live
+- SNS/Lambda post-match processing is live
+- the next clean improvements are protocol hardening, Redis-backed recent matches,
+  sidecar replay offload, and CloudWatch metrics

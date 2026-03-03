@@ -69,9 +69,14 @@ Create a role for the Lambda with:
 Set these in the Lambda console:
 
 ```text
-AWS_REGION      eu-west-2
 DYNAMODB_TABLE  pynq-raycaster-seda-matches
 ```
+
+Note:
+
+- do not set `AWS_REGION` as a Lambda environment variable
+- Lambda reserves it internally
+- the current code already defaults to `eu-west-2`
 
 ## SNS Trigger
 

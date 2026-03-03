@@ -1,5 +1,12 @@
 # MVP Plan
 
+This is the original build-order document for the early MVP.
+
+For the current live architecture and next steps, use:
+
+- [README.md](/home/akendall/Documents/ServerSide_PYNQ_Raycaster/README.md)
+- [TODO.md](/home/akendall/Documents/ServerSide_PYNQ_Raycaster/TODO.md)
+
 Goal: two PYNQ nodes connect to the server, send positions, receive each other's state back. No persistence, no dashboard : just the game loop working end to end.
 
 ---
@@ -35,7 +42,7 @@ Work through the 4 asyncio tasks in order. Each can be tested before the next is
 ---
 
 ###  Python interfacing
-**Track: `interfacing/`**
+**Track: `interfacing_+_sim/`**
 
 Completely independent of the server work. Runs on your own laptop.
 

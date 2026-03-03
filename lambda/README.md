@@ -98,9 +98,11 @@ Then either:
 Set these in the Lambda console:
 
 ```text
-AWS_REGION      eu-west-2
 DYNAMODB_TABLE  pynq-raycaster-seda-matches
 ```
+
+Do not set `AWS_REGION` manually in Lambda environment variables. Lambda
+reserves it internally; the current handler already defaults to `eu-west-2`.
 
 `boto3` is preinstalled on Lambda, so no extra dependency packaging is needed for the current handler.
 

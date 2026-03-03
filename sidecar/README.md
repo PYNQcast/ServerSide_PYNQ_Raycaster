@@ -1,47 +1,21 @@
-# Sidecar : Python AWS Bridge
+# sidecar/
 
-## What is the sidecar?
+This folder is the older standalone prototype sidecar.
 
-The sidecar is a separate Python process that runs alongside the game server on EC2. It watches Redis for game events and handles all AWS writes : DynamoDB, S3, SNS.
+## Current source of truth
 
-The two processes never communicate directly. Redis is the handoff.
+Use the EC2 sidecar here instead:
 
-## Why not just write to AWS from the server?
+- [ec2/sidecar/sidecar.py](/home/akendall/Documents/ServerSide_PYNQ_Raycaster/ec2/sidecar/sidecar.py)
 
-The game server runs a 20 Hz tick loop. boto3 / AWS SDK calls add 10–100ms of latency and must not block the game loop.
+That is the live implementation and it now handles:
 
-The sidecar pattern solves this cleanly:
+- DynamoDB writes
+- S3 replay uploads
+- SNS publish on `match_end`
+- warm-tier retention (archive older completed DynamoDB rows to S3)
 
-```
-Game server (Python)          Sidecar (Python)
-  tick every 50ms    ──►  Redis  ◄── BRPOP (sleeps here)
-  write state fast              │
-                                │ wakes up on game-end event
-                                ▼
-                           DynamoDB / S3 / SNS
-```
+## Why this folder still exists
 
-The sidecar sleeps 100% of the time during gameplay. It only wakes up when the server pushes an event to Redis. This means AWS latency never affects the game loop.
-
-Note: previously this was described as C++ server → Python sidecar. The server is now Python too : but the pattern is identical. Redis is still the boundary, the sidecar still owns all AWS writes.
-
-## What it does
-
-1. Watches Redis for game-end signals (`BRPOP game:events`)
-2. Reads full match state from Redis
-3. Persists results to DynamoDB
-4. Archives replay to S3
-5. Publishes SNS → triggers Lambda stats processor
-6. Cleans up Redis keys
-
-## Running
-
-```bash
-python sidecar/sidecar.py
-```
-
-Requires environment variables from `.env` (see `.env.example`).
-
-## What needs implementing
-
-See `sidecar/sidecar.py` : the Redis connection and event loop are wired up. The AWS writes (DynamoDB, S3, SNS) are TODOs for the team.
+It is useful as a simpler reference for the earlier pattern, but it is not the
+main runtime path anymore.
