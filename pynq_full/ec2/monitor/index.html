@@ -427,7 +427,7 @@
   </div>
 
   <div class="canvas-panel">
-    <span class="canvas-label">fixed world · orbit 50u · tag radius 20u</span>
+    <span class="canvas-label">world view · tag radius 20u</span>
     <canvas id="arena" width="480" height="480"></canvas>
   </div>
 
@@ -488,8 +488,7 @@ const canvas = document.getElementById('arena');
 const ctx    = canvas.getContext('2d');
 const W = canvas.width, H = canvas.height;
 const TAG_RADIUS     = 20.0;   // must match t2_game_tick.py TAG_RADIUS
-const ORBIT_RADIUS   = 50.0;   // must match t2_game_tick.py ORBIT_RADIUS
-const WORLD_LIMIT    = ORBIT_RADIUS + TAG_RADIUS + 10.0;  // 80u total safe view
+const WORLD_LIMIT    = 80.0;   // half-width of canvas view in world units
 const PLAYER_COLOURS = ['#00ff88', '#00d4ff', '#ffaa00', '#ff6688'];
 
 // ── State ──────────────────────────────────────────────────────────────────
@@ -580,11 +579,6 @@ function drawArena(players) {
   const [,,sc] = worldToCanvas(0,0);
   const tagPx  = TAG_RADIUS * sc;
 
-  // Fixed orbit guide matching the actual node radius used by the game.
-  ctx.beginPath(); ctx.arc(ox, oy, ORBIT_RADIUS * sc, 0, Math.PI*2);
-  ctx.strokeStyle = 'rgba(0,212,255,0.12)';
-  ctx.lineWidth = 1;
-  ctx.stroke();
 
   // Distance line
   if (players.length >= 2) {
