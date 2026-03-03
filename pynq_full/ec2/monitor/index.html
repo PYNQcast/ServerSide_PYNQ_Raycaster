@@ -539,19 +539,20 @@ function worldToCanvas(wx, wy) {
   return [(pad + (wx - minX) * sc), (pad + (wy - minY) * sc), sc];
 }
 
-// Draw map tiles.  Tile (0,0) maps to world origin; each tile is 1 world unit.
-// The map is centred so its midpoint aligns with world (0,0).
+// Draw map tiles.  Each tile is TILE_SCALE world units wide/tall.
+// The map is centred on world (0,0).
+const TILE_SCALE = 8;   // world units per tile — scales 20×16 map to ±80u view
 function drawMap() {
   if (!mapData || !mapData.tiles.length) return;
   const { width, height, tiles } = mapData;
-  const offsetX = -width  / 2;   // world-space tile (0,0) corner
-  const offsetY = -height / 2;
+  const offsetX = -(width  * TILE_SCALE) / 2;
+  const offsetY = -(height * TILE_SCALE) / 2;
   for (let row = 0; row < height; row++) {
     for (let col = 0; col < width; col++) {
       if (!tiles[row][col]) continue;
-      const [cx, cy, sc] = worldToCanvas(offsetX + col, offsetY + row);
+      const [cx, cy, sc] = worldToCanvas(offsetX + col * TILE_SCALE, offsetY + row * TILE_SCALE);
       ctx.fillStyle = 'rgba(60,80,100,0.55)';
-      ctx.fillRect(cx, cy, sc, sc);
+      ctx.fillRect(cx, cy, sc * TILE_SCALE, sc * TILE_SCALE);
     }
   }
 }
