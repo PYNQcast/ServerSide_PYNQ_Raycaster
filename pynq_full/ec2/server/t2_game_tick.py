@@ -32,6 +32,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'interfac
 from protocol import (
     NODE_SIZE,
     PKT_REGISTER,
+    PKT_ACK,
+    HEADER_FMT,
     FLAG_TAGGED,
     FLAG_MATCH_END,
 )
@@ -43,6 +45,7 @@ TAGS_TO_WIN      = 2     # two tags end the match
 TAG_FLASH_S      = 0.3   # keep FLAG_TAGGED visible for 0.3s (enough for nodes to see it)
 MATCH_END_HOLD_S = 0.5   # broadcast FLAG_TAGGED for 0.5s on final tag
 LOCKOUT_S        = 0.5   # reject re-registration for 0.5s after match ends
+NODE_TIMEOUT_S   = 3.0   # evict a node that sends nothing for this long
 # Grace period after each tag reset — players are teleported to spawn so need
 # a moment before proximity detection resumes.
 GRACE_TICKS      = 10    # 0.5s at 20 Hz
@@ -53,11 +56,13 @@ SPAWN_ANGLES     = [0.0, math.pi / 2]   # player_id 1 → angle 0, player_id 2 �
 REPLAY_KEY       = "game:seda-replay"
 
 class GameTick:
-    def __init__(self, packet_queue, broadcast_queue, write_queue, tick_rate=20):
+    def __init__(self, packet_queue, broadcast_queue, write_queue, tick_rate=20,
+                 udp_transport=None):
         self.packet_queue    = packet_queue
         self.broadcast_queue = broadcast_queue
         self.write_queue     = write_queue
         self.interval        = 1.0 / tick_rate
+        self.udp_transport   = udp_transport  # T1 socket — used to send PKT_ACK
 
         self.players       = {}
         self.next_id       = 1
@@ -76,6 +81,7 @@ class GameTick:
             tick_start = time.monotonic()
 
             await self._drain_packets()
+            await self._evict_timed_out_nodes()
             await self._tick()
             await self._push_broadcast()
             await self._push_redis_writes()
@@ -122,12 +128,13 @@ class GameTick:
 
         # Register new players (on REGISTER packet or first STATE_UPDATE)
         if addr not in self.players:
-            self._register_player(addr)
+            self._register_player(addr, x, y, angle)
 
         if addr not in self.players:
             return  # registration was rejected (lockout or full) — drop packet
 
         p = self.players[addr]
+        p["last_seen"] = time.monotonic()  # heartbeat — updated on every packet
 
         if pkt_type == PKT_REGISTER:
             # Accept starting position from REGISTER so player doesn't sit at (0,0)
@@ -141,9 +148,9 @@ class GameTick:
         SERVER_FLAGS = FLAG_TAGGED | FLAG_MATCH_END
         p["flags"] = (p["flags"] & SERVER_FLAGS) | (flags & ~SERVER_FLAGS)
 
-    def _register_player(self, addr):
+    def _register_player(self, addr, x=0.0, y=0.0, angle=0.0):
         if self.lockout_until and time.monotonic() < self.lockout_until:
-            return  # silently drop — sims are still winding down after match end
+            return  # silently drop — nodes are still winding down after match end
         if len(self.players) >= MAX_PLAYERS:
             print(f"[T2] rejected connection from {addr} — already at {MAX_PLAYERS} players")
             return
@@ -152,10 +159,15 @@ class GameTick:
         self.next_id += 1
         self.players[addr] = {
             "player_id": player_id,
-            "x": 0.0, "y": 0.0, "angle": 0.0, "flags": 0,
+            "x": x, "y": y, "angle": angle, "flags": 0,
+            "last_seen": time.monotonic(),
         }
         print(f"[T2] registered player {player_id} from {addr} "
               f"(total: {len(self.players)})")
+
+        # ACK tells the node its player_id (1=RUNNER, 2=TAGGER) — boards must wait for
+        # this before sending STATE_UPDATEs and use it to determine their role.
+        self._send_ack(addr, player_id)
 
         if len(self.players) == MATCH_PLAYERS and not self.match_started:
             self.match_started = True
@@ -163,6 +175,39 @@ class GameTick:
             asyncio.ensure_future(self._push_event(
                 {"event": "match_start", "players": MATCH_PLAYERS}
             ))
+
+    def _send_ack(self, addr, player_id: int):
+        """Send PKT_ACK to a newly registered node. Contains the assigned player_id."""
+        if self.udp_transport is None:
+            return
+        ts  = int(time.time() * 1000) & 0xFFFFFFFF
+        pkt = struct.pack(HEADER_FMT, PKT_ACK, player_id, ts) + struct.pack('<B', player_id)
+        try:
+            self.udp_transport.sendto(pkt, addr)
+        except Exception as e:
+            print(f"[T2] failed to send ACK to {addr}: {e}")
+
+    async def _evict_timed_out_nodes(self):
+        """Remove any node that has sent no packets for NODE_TIMEOUT_S seconds."""
+        now     = time.monotonic()
+        evicted = [addr for addr, p in self.players.items()
+                   if now - p["last_seen"] > NODE_TIMEOUT_S]
+        for addr in evicted:
+            p = self.players.pop(addr)
+            print(f"[T2] evicted player {p['player_id']} from {addr} "
+                  f"— no packets for {NODE_TIMEOUT_S}s")
+            self.write_queue.put({"op": "del", "key": f"player:{p['player_id']}"})
+        if evicted and self.match_started and not self.match_ended:
+            # Match can't continue with fewer than MATCH_PLAYERS — reset
+            print(f"[T2] match aborted — not enough players after eviction")
+            self.match_started = False
+            self.match_ended   = False
+            self.match_end_at  = None
+            self.tag_count     = 0
+            self.tag_flash_at  = None
+            self.match_tick    = 0
+            self.lockout_until = now + LOCKOUT_S
+            asyncio.ensure_future(self._push_event({"event": "match_aborted"}))
 
     # ── Game logic ────────────────────────────────────────────────────────────
     #

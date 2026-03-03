@@ -506,6 +506,17 @@ let replayState = {
   timer: null,
   matchId: null,
 };
+let mapData = null;   // { width, height, tiles: [[0|1, ...], ...] }
+
+async function loadMap(name = 'level1') {
+  try {
+    const resp = await fetch(`/api/map/${encodeURIComponent(name)}`);
+    if (!resp.ok) return;
+    mapData = await resp.json();
+  } catch (e) {
+    console.warn('[monitor] map load failed:', e);
+  }
+}
 
 function normalisePlayers(players) {
   return (players || []).map((p) => ({
@@ -528,8 +539,28 @@ function worldToCanvas(wx, wy) {
   return [(pad + (wx - minX) * sc), (pad + (wy - minY) * sc), sc];
 }
 
+// Draw map tiles.  Tile (0,0) maps to world origin; each tile is 1 world unit.
+// The map is centred so its midpoint aligns with world (0,0).
+function drawMap() {
+  if (!mapData || !mapData.tiles.length) return;
+  const { width, height, tiles } = mapData;
+  const offsetX = -width  / 2;   // world-space tile (0,0) corner
+  const offsetY = -height / 2;
+  for (let row = 0; row < height; row++) {
+    for (let col = 0; col < width; col++) {
+      if (!tiles[row][col]) continue;
+      const [cx, cy, sc] = worldToCanvas(offsetX + col, offsetY + row);
+      ctx.fillStyle = 'rgba(60,80,100,0.55)';
+      ctx.fillRect(cx, cy, sc, sc);
+    }
+  }
+}
+
 function drawArena(players) {
   ctx.clearRect(0, 0, W, H);
+
+  // Map walls (background layer)
+  drawMap();
 
   // Grid
   ctx.strokeStyle = '#141414'; ctx.lineWidth = 1;
@@ -868,6 +899,7 @@ function connect() {
   ws.onopen = () => {
     statusEl.textContent = '● LIVE';
     statusEl.className   = 'connected';
+    if (!mapData) loadMap('level1');
   };
   ws.onmessage = (evt) => {
     const state = JSON.parse(evt.data);

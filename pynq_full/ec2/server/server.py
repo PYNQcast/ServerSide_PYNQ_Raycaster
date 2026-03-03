@@ -51,11 +51,12 @@ async def main():
     print(f"[server] SEDA pipeline starting on UDP port {UDP_PORT}")
     print(f"[server] T1/T2/T3: asyncio event loop  |  T4: OS thread")
 
-    # Bind T1 first — exposes receiver.transport for T3 to share.
-    # Sharing the socket means broadcasts come from EC2:9000, which matches
+    # Bind T1 first — exposes receiver.transport for T3 and T2 to share.
+    # Sharing the socket means broadcasts and ACKs come from EC2:9000, which matches
     # the NAT entry the node's outbound sendto(EC2:9000) created.
     await receiver.bind(UDP_PORT)
 
+    ticker.udp_transport = receiver.transport   # T2 needs it to send PKT_ACK
     broadcaster = Broadcaster(broadcast_queue, shared_transport=receiver.transport)
 
     # T1, T2, T3 run as asyncio coroutines

@@ -42,6 +42,7 @@ SERVICE_POLL_INTERVAL_S = 1.0
 DYNAMO_TABLE = "pynq-raycaster-seda-matches"
 AWS_REGION   = "eu-west-2"
 REPO_ROOT    = Path(__file__).resolve().parents[3]
+MAPS_DIR     = REPO_ROOT / "pynq_full" / "ec2" / "maps"
 
 SERVICE_SPECS = {
     "server": {
@@ -484,6 +485,29 @@ async def replay_handler(request):
         raise web.HTTPInternalServerError(text="failed to load replay")
     return web.json_response(payload)
 
+
+async def map_handler(request):
+    """Return the requested map as a JSON tile grid.
+    GET /api/map/level1  → loads maps/level1.txt
+    """
+    name = request.match_info["name"]
+    # Sanitise: only allow [a-zA-Z0-9_-]
+    if not name.replace("-", "").replace("_", "").isalnum():
+        raise web.HTTPBadRequest(text="invalid map name")
+    path = MAPS_DIR / f"{name}.txt"
+    if not path.exists():
+        raise web.HTTPNotFound(text=f"map not found: {name}")
+
+    rows = []
+    for line in path.read_text().splitlines():
+        line = line.rstrip("\r")
+        if not line:
+            continue
+        rows.append([1 if c == "#" else 0 for c in line])
+
+    return web.json_response({"name": name, "width": len(rows[0]) if rows else 0,
+                               "height": len(rows), "tiles": rows})
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 async def main():
@@ -491,6 +515,7 @@ async def main():
     app.router.add_get("/",   index_handler)
     app.router.add_get("/ws", ws_handler)
     app.router.add_get("/api/replay/{match_id}", replay_handler)
+    app.router.add_get("/api/map/{name}", map_handler)
 
     runner = web.AppRunner(app)
     await runner.setup()

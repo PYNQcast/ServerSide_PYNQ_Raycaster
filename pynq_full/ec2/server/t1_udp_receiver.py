@@ -16,6 +16,9 @@
 # matching the NAT mapping the node's outbound sendto created.
 
 import asyncio
+import socket
+
+RECV_BUF = 4 * 1024 * 1024  # 4 MB — prevents kernel-level drops under burst traffic
 
 class UDPReceiverProtocol(asyncio.DatagramProtocol):
     """asyncio UDP transport : called by the event loop on each incoming datagram."""
@@ -43,7 +46,10 @@ class UDPReceiver:
             lambda: UDPReceiverProtocol(self.queue),
             local_addr=("0.0.0.0", port),
         )
-        print(f"[T1 UDPReceiver] listening on UDP :{port}")
+        sock = self.transport.get_extra_info('socket')
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, RECV_BUF)
+        actual = sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+        print(f"[T1 UDPReceiver] listening on UDP :{port}  recv_buf={actual//1024}KB")
 
     async def run(self):
         """Keep the socket alive. bind() must have been called first."""

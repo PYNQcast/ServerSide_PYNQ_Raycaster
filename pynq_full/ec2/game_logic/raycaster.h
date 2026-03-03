@@ -1,12 +1,13 @@
 #pragma once
 // ec2/game_logic/raycaster.h
 //
-// Generic raycaster engine primitives.
-// These are the computationally heavy operations that justify using C++.
-// Called from the Python server (T2 GameTick) via subprocess or ctypes .so.
+// Server-side geometry checks for authoritative game logic.
+// Called from T2 GameTick (Python) via ctypes libgame_logic.so.
 //
-// None of these functions are game-specific : they are building blocks
-// usable for tag, deathmatch, co-op, or any other raycaster game mode.
+// NOTE: Full raycaster scene rendering (hundreds of rays per frame) is done
+// on the PYNQ FPGA — that is the hardware-accelerated part of this project.
+// This file only contains lightweight per-tick authority checks (single rays,
+// proximity) that the server must own to prevent cheating.
 
 #include <cstdint>
 

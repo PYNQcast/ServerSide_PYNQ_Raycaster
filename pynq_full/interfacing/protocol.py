@@ -21,6 +21,9 @@ PKT_GAME_STATE   = 0x0002   # server → node:  all player positions
 PKT_HEARTBEAT    = 0x0010   # node  → server: keepalive
 PKT_REGISTER     = 0x0020   # node  → server: first contact, triggers ACK
 PKT_ACK          = 0x0030   # server → node:  confirms registration
+                             #   byte 8 = player_id (1=RUNNER, 2=TAGGER) — wait for this
+                             #   before sending STATE_UPDATEs. No node-to-node comms needed;
+                             #   opponent position arrives in every PKT_GAME_STATE broadcast.
 
 # ── Flags bitmask (uint8 flags field) ─────────────────────────────────────────
 
