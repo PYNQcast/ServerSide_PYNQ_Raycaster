@@ -24,6 +24,9 @@ PKT_ACK          = 0x0030   # server → node:  confirms registration
                              #   byte 8 = player_id (1=RUNNER, 2=TAGGER) — wait for this
                              #   before sending STATE_UPDATEs. No node-to-node comms needed;
                              #   opponent position arrives in every PKT_GAME_STATE broadcast.
+PKT_MAP          = 0x0040   # server → node:  map tile data, sent once after PKT_ACK
+                             #   header (8 bytes) + MapHeader (4 bytes) + tiles (width*height bytes)
+                             #   node stores tiles in DRAM; FPGA raycaster reads them each frame.
 
 # ── Flags bitmask (uint8 flags field) ─────────────────────────────────────────
 
@@ -74,7 +77,34 @@ PLAYER_FMT  = '<BfffB'
 PLAYER_SIZE = struct.calcsize(PLAYER_FMT)
 assert PLAYER_SIZE == 14, f"PlayerEntry must be 14 bytes, got {PLAYER_SIZE}"
 
+# MapHeader (follows the 8-byte ServerPacketHeader in a PKT_MAP packet): 4 bytes
+#
+#   Offset  Size  Fmt  Field
+#     0       1    B   width       map width in tiles
+#     1       1    B   height      map height in tiles
+#     2       1    B   tile_scale  world units per tile (e.g. 8 → each tile = 8×8 world units)
+#     3       1    x   pad         reserved, zero
+#
+# Followed immediately by width*height bytes of tile data (row-major, 0=empty 1=wall).
+# Total PKT_MAP size: 8 + 4 + width*height bytes.
+# For a 20×16 map: 8 + 4 + 320 = 332 bytes — well within UDP MTU.
+
+MAP_HEADER_FMT  = '<BBBx'
+MAP_HEADER_SIZE = struct.calcsize(MAP_HEADER_FMT)
+assert MAP_HEADER_SIZE == 4, f"MapHeader must be 4 bytes, got {MAP_HEADER_SIZE}"
+
 # ── Pack helpers (build outgoing packets) ─────────────────────────────────────
+
+def pack_map_packet(seq, width, height, tile_scale, tiles):
+    """
+    Pack a PKT_MAP packet for sending to a node after registration.
+    tiles: flat bytes or bytearray of width*height values (0=empty, 1=wall), row-major.
+    Returns ready-to-send bytes.
+    """
+    timestamp = int(time.time() * 1000) & 0xFFFFFFFF
+    header    = struct.pack(HEADER_FMT, PKT_MAP, seq & 0xFFFF, timestamp)
+    map_hdr   = struct.pack(MAP_HEADER_FMT, width & 0xFF, height & 0xFF, tile_scale & 0xFF)
+    return header + map_hdr + bytes(tiles)
 
 def pack_node_packet(pkt_type, seq, x, y, angle, flags=0):
     """
@@ -115,6 +145,18 @@ def unpack_player_entries(payload):
             "flags":     flags,
         })
     return players
+
+def unpack_map_packet(data):
+    """
+    Unpack a PKT_MAP packet received by a node.
+    Returns (width, height, tile_scale, tiles) where tiles is a bytearray.
+    """
+    if len(data) < HEADER_SIZE + MAP_HEADER_SIZE:
+        raise ValueError(f"PKT_MAP too short: {len(data)} bytes")
+    width, height, tile_scale = struct.unpack_from(MAP_HEADER_FMT, data, HEADER_SIZE)
+    tile_start = HEADER_SIZE + MAP_HEADER_SIZE
+    tiles = bytearray(data[tile_start : tile_start + width * height])
+    return width, height, tile_scale, tiles
 
 def unpack_server_packet(data):
     """

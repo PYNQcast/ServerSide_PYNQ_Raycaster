@@ -71,6 +71,7 @@ _service_cache  = {}
 _service_last_fetch = 0.0
 _service_message = "controls run on EC2 only; node simulators still start locally"
 _replay_cache = {}
+_active_map = "level1"   # tracks which map the server is using
 
 def _as_int(value, default=0):
     try:
@@ -245,6 +246,17 @@ def handle_control_command(cmd: str):
         _service_message = _start_service("sidecar")
     elif cmd == "stop_sidecar":
         _service_message = _stop_service("sidecar")
+    elif cmd.startswith("set_map:"):
+        global _active_map
+        map_name = cmd.split(":", 1)[1]
+        map_path = MAPS_DIR / f"{map_name}.txt"
+        if not map_path.exists():
+            _service_message = f"unknown map: {map_name}"
+        else:
+            payload = json.dumps({"cmd": "set_map", "map": map_name})
+            r.publish("game:control", payload)
+            _active_map = map_name
+            _service_message = f"map set to {map_name} (takes effect next match)"
     elif cmd == "restart_stack":
         _stop_service("sidecar")
         _stop_service("server")
@@ -393,6 +405,7 @@ def collect_state():
         },
         "events":  match_events[:20],   # newest-first, current match only
         "matches": matches,
+        "active_map": _active_map,
     }
 
 
@@ -486,6 +499,12 @@ async def replay_handler(request):
     return web.json_response(payload)
 
 
+async def maps_list_handler(request):
+    """GET /api/maps — list all available map names."""
+    names = sorted(p.stem for p in MAPS_DIR.glob("*.txt"))
+    return web.json_response({"maps": names})
+
+
 async def map_handler(request):
     """Return the requested map as a JSON tile grid.
     GET /api/map/level1  → loads maps/level1.txt
@@ -515,6 +534,7 @@ async def main():
     app.router.add_get("/",   index_handler)
     app.router.add_get("/ws", ws_handler)
     app.router.add_get("/api/replay/{match_id}", replay_handler)
+    app.router.add_get("/api/maps", maps_list_handler)
     app.router.add_get("/api/map/{name}", map_handler)
 
     runner = web.AppRunner(app)

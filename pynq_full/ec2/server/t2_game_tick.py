@@ -27,6 +27,7 @@ import json
 import sys
 import os
 import struct
+import threading
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'interfacing'))
 from protocol import (
@@ -36,7 +37,33 @@ from protocol import (
     HEADER_FMT,
     FLAG_TAGGED,
     FLAG_MATCH_END,
+    pack_map_packet,
 )
+
+MAP_PATH         = os.path.join(os.path.dirname(__file__), '..', '..', 'maps', 'level1.txt')
+MAP_TILE_SCALE   = 8     # world units per tile — must match monitor TILE_SCALE
+
+def _load_map(path):
+    """Load a text map file into (width, height, tile_scale, flat bytearray)."""
+    rows = []
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.rstrip('\r\n')
+                if not line:
+                    continue
+                rows.append(bytes(1 if c == '#' else 0 for c in line))
+        width  = len(rows[0]) if rows else 0
+        height = len(rows)
+        tiles  = bytearray(b''.join(rows))
+        print(f"[T2] map loaded: {path}  {width}x{height}")
+        return width, height, tiles
+    except Exception as e:
+        print(f"[T2] WARNING: could not load map {path}: {e}")
+        return 0, 0, bytearray()
+
+_MAP_WIDTH, _MAP_HEIGHT, _MAP_TILES = _load_map(MAP_PATH)
+_MAP_NAME = "level1"   # track which map is active (for logging)
 
 TAG_RADIUS       = 20.0  # units
 MATCH_PLAYERS    = 2
@@ -77,6 +104,7 @@ class GameTick:
 
     async def run(self):
         print(f"[T2 GameTick] running at {1/self.interval:.0f} Hz")
+        asyncio.ensure_future(self._listen_control())
         while True:
             tick_start = time.monotonic()
 
@@ -94,6 +122,43 @@ class GameTick:
 
             self.tick_count += 1
             await asyncio.sleep(sleep_for)
+
+    # ── Redis control channel ─────────────────────────────────────────────────
+
+    async def _listen_control(self):
+        """Subscribe to game:control (Redis pub/sub) in a background thread.
+        Handles set_map — reloads map data; takes effect on next registration."""
+        try:
+            import redis as redislib
+            loop = asyncio.get_event_loop()
+
+            def _blocking_subscribe():
+                global _MAP_WIDTH, _MAP_HEIGHT, _MAP_TILES, _MAP_NAME
+                rc  = redislib.Redis(host="127.0.0.1", port=6379, decode_responses=True)
+                pub = rc.pubsub()
+                pub.subscribe("game:control")
+                for msg in pub.listen():
+                    if msg["type"] != "message":
+                        continue
+                    try:
+                        data = json.loads(msg["data"])
+                    except Exception:
+                        continue
+                    cmd = data.get("cmd")
+                    if cmd == "set_map":
+                        map_name = data.get("map", "level1")
+                        maps_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'maps')
+                        path     = os.path.join(maps_dir, f"{map_name}.txt")
+                        w, h, tiles = _load_map(path)
+                        if w > 0:
+                            _MAP_WIDTH, _MAP_HEIGHT, _MAP_TILES = w, h, tiles
+                            _MAP_NAME = map_name
+                            print(f"[T2] map changed to '{map_name}' — "
+                                  f"takes effect on next player registration")
+
+            await asyncio.to_thread(_blocking_subscribe)
+        except Exception as e:
+            print(f"[T2] control listener error: {e}")
 
     # ── Metrics ───────────────────────────────────────────────────────────────
 
@@ -168,6 +233,8 @@ class GameTick:
         # ACK tells the node its player_id (1=RUNNER, 2=TAGGER) — boards must wait for
         # this before sending STATE_UPDATEs and use it to determine their role.
         self._send_ack(addr, player_id)
+        # MAP follows immediately — node stores tiles in DRAM for FPGA raycaster.
+        self._send_map(addr)
 
         if len(self.players) == MATCH_PLAYERS and not self.match_started:
             self.match_started = True
@@ -175,6 +242,18 @@ class GameTick:
             asyncio.ensure_future(self._push_event(
                 {"event": "match_start", "players": MATCH_PLAYERS}
             ))
+
+    def _send_map(self, addr):
+        """Send PKT_MAP to a newly registered node."""
+        if self.udp_transport is None or not _MAP_TILES:
+            return
+        pkt = pack_map_packet(self.tick_count, _MAP_WIDTH, _MAP_HEIGHT,
+                              MAP_TILE_SCALE, _MAP_TILES)
+        try:
+            self.udp_transport.sendto(pkt, addr)
+            print(f"[T2] sent PKT_MAP to {addr} ({len(pkt)} bytes)")
+        except Exception as e:
+            print(f"[T2] failed to send PKT_MAP to {addr}: {e}")
 
     def _send_ack(self, addr, player_id: int):
         """Send PKT_ACK to a newly registered node. Contains the assigned player_id."""

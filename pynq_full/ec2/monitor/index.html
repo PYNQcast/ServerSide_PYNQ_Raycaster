@@ -424,6 +424,15 @@
       <div class="metric-note" id="svc-note">controls run on EC2 only; node simulators still start locally</div>
     </div>
 
+    <!-- Map selector -->
+    <div class="panel">
+      <h2>Map Select</h2>
+      <div class="metric-note">Takes effect on next match. Current map shown highlighted.</div>
+      <div class="control-stack" id="map-btn-list">
+        <span style="color:#333">loading maps...</span>
+      </div>
+    </div>
+
   </div>
 
   <div class="canvas-panel">
@@ -515,6 +524,46 @@ async function loadMap(name = 'level1') {
   } catch (e) {
     console.warn('[monitor] map load failed:', e);
   }
+}
+
+let _availableMaps = [];
+let _activeMapName = 'level1';
+
+async function loadMapList() {
+  try {
+    const resp = await fetch('/api/maps');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    _availableMaps = data.maps || [];
+    renderMapButtons();
+  } catch (e) {
+    console.warn('[monitor] map list load failed:', e);
+  }
+}
+
+function renderMapButtons() {
+  const el = document.getElementById('map-btn-list');
+  if (!_availableMaps.length) { el.innerHTML = '<span style="color:#333">no maps found</span>'; return; }
+  el.innerHTML = _availableMaps.map(name => `
+    <button id="mapbtn-${name}"
+      class="control-btn${name === _activeMapName ? ' start' : ''}"
+      onclick="selectMap('${name}')">${name}</button>
+  `).join('');
+}
+
+function updateMapSelector(activeMap) {
+  if (!activeMap || activeMap === _activeMapName) return;
+  _activeMapName = activeMap;
+  renderMapButtons();
+  // Also switch the canvas preview to the newly active map
+  loadMap(activeMap);
+}
+
+function selectMap(name) {
+  sendControl(`set_map:${name}`, `map → ${name}`);
+  _activeMapName = name;
+  renderMapButtons();
+  loadMap(name);   // preview the new map on canvas immediately
 }
 
 function normalisePlayers(players) {
@@ -895,6 +944,7 @@ function connect() {
     statusEl.textContent = '● LIVE';
     statusEl.className   = 'connected';
     if (!mapData) loadMap('level1');
+    loadMapList();
   };
   ws.onmessage = (evt) => {
     const state = JSON.parse(evt.data);
@@ -905,6 +955,7 @@ function connect() {
     updatePipeline(state.pipeline);
     updateMatches(state.matches);
     updateEvents(state.events);
+    updateMapSelector(state.active_map);
     wsUpdateCount++;
     const now = performance.now();
     if (now - wsLastTime >= 1000) {
