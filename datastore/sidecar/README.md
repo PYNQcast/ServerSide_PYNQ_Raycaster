@@ -1,21 +1,17 @@
 # sidecar/
 
-This folder is the older standalone prototype sidecar.
+The canonical sidecar. Both stacks symlink here:
 
-## Current source of truth
+- `pynq_full/ec2/sidecar/sidecar.py` → `datastore/sidecar/sidecar.py`
+- `sim_full/ec2/sidecar/sidecar.py`  → `datastore/sidecar/sidecar.py`
 
-Use the EC2 sidecar here instead:
+The sidecar has no dependency on whether the UDP source is a PYNQ board or a
+simulator — it only consumes Redis events and writes to AWS.
 
-- [ec2/sidecar/sidecar.py](/home/akendall/Documents/ServerSide_PYNQ_Raycaster/ec2/sidecar/sidecar.py)
+## What it does
 
-That is the live implementation and it now handles:
-
-- DynamoDB writes
-- S3 replay uploads
-- SNS publish on `match_end`
-- warm-tier retention (archive older completed DynamoDB rows to S3)
-
-## Why this folder still exists
-
-It is useful as a simpler reference for the earlier pattern, but it is not the
-main runtime path anymore.
+- DynamoDB writes (match META + TAG rows)
+- S3 replay uploads (streaming multipart for long matches, single-shot fallback)
+- Keyframe markers every 60 snapshots for O(1) seek
+- SNS publish on `match_end` (triggers Lambda post-match processing)
+- Warm-tier retention (archives older DynamoDB rows to S3)
