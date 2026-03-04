@@ -592,13 +592,19 @@ function drawArena(players) {
       tagFlash[p.id] = now;
       tagPos[p.id]   = { x: p.x, y: p.y };
     }
-    if (!tagged) { delete tagFlash[p.id]; delete tagPos[p.id]; }
     prevFlags[p.id] = tagged;
 
     // How far through the tag animation are we? (0→1 over TAG_ANIM_MS)
     const flashStart = tagFlash[p.id];
     const t = (flashStart !== undefined) ? Math.min((now - flashStart) / TAG_ANIM_MS, 1.0) : null;
     const isAnimating = t !== null && t < 1.0;
+
+    // Only clear frozen state once the timer has fully expired — not when flag drops.
+    // The server resets positions before TAG_ANIM_MS is up, so we must hold the freeze
+    // until the animation is done, then let live positions take over.
+    if (!isAnimating && tagFlash[p.id] !== undefined) {
+      delete tagFlash[p.id]; delete tagPos[p.id];
+    }
 
     // Use frozen position while animating so the shockwave stays at the tag point
     const drawX = (isAnimating && tagPos[p.id]) ? tagPos[p.id].x : p.x;
