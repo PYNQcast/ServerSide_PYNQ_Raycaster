@@ -59,7 +59,7 @@ LOCKOUT_S        = 0.5   # reject re-registration for 0.5s after match ends
 NODE_TIMEOUT_S   = 3.0   # evict a node that sends nothing for this long
 # Grace period after each tag reset — players are teleported to spawn so need
 # a moment before proximity detection resumes.
-GRACE_TICKS      = 10    # 0.5s at 20 Hz
+GRACE_TICKS      = 30    # 0.5s at 60 Hz
 # Roles: player 1 = RUNNER (speed 0.05 rad/tick), player 2 = TAGGER (speed 0.11 rad/tick)
 # Spawn positions mirror node_simulator.py: angle = player_id-1 * π/2, radius = 50
 ORBIT_RADIUS     = 50.0
@@ -101,7 +101,7 @@ class GameTick:
             elapsed   = time.monotonic() - tick_start
             sleep_for = max(0.0, self.interval - elapsed)
 
-            if self.tick_count % 20 == 0:
+            if self.tick_count % 60 == 0:
                 self._print_metrics(elapsed)
 
             self.tick_count += 1

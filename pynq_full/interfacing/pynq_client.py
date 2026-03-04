@@ -47,11 +47,12 @@ ORBIT_RADIUS = 50.0
 SPAWN_ANGLES = [0.0, math.pi / 2]  # player_id 1 → angle 0, player_id 2 → angle π/2
 RUNNER_SPEED = 0.05                 # rad/tick (player 1)
 TAGGER_SPEED = 0.11                 # rad/tick (player 2)
-TICK_RATE    = 20                   # Hz — match server
+TICK_RATE    = 60                   # Hz — match server
 
 # ── AXI-Lite register offsets ─────────────────────────────────────────────────
 
-REG_PLAYER_X     = 0x00
+REG_PLAYER_X     = 0x0
+
 REG_PLAYER_Y     = 0x04
 REG_PLAYER_ANGLE = 0x08
 REG_DONE         = 0x0C            # read to check if frame is rendered

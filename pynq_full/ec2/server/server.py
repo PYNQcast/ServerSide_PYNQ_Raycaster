@@ -34,7 +34,7 @@ from t3_broadcaster  import Broadcaster
 from t4_redis_writer import RedisWriter
 
 UDP_PORT  = 9000
-TICK_RATE = 20   # Hz
+TICK_RATE = 60   # Hz
 
 async def main():
     packet_queue    = asyncio.Queue()    # T1 → T2 : raw UDP packets
