@@ -682,11 +682,6 @@ function drawArena(players) {
     const drawY = (isAnimating && tagPos[p.id]) ? tagPos[p.id].y : p.y;
     const [cx,cy] = worldToCanvas(drawX, drawY);
 
-    // How far through the tag animation are we? (0→1 over TAG_ANIM_MS)
-    const flashStart = tagFlash[p.id];
-    const t = (flashStart !== undefined) ? Math.min((now - flashStart) / TAG_ANIM_MS, 1.0) : null;
-    const isAnimating = t !== null;
-
     // Hitbox ring — pulses red while tagged
     ctx.beginPath(); ctx.arc(cx, cy, tagPx, 0, Math.PI*2);
     ctx.strokeStyle = tagged ? `rgba(255,68,68,${0.3 + 0.25 * Math.sin(now / 120)})` : 'rgba(255,255,255,0.07)';
