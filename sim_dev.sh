@@ -89,7 +89,7 @@ tmux select-pane -t "$SESSION:0.0" -T "seda server"
 tmux send-keys -t "$SESSION:0.0" "ssh -t -i $KEY $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster/sim_full/ec2/server && python3 server.py'" Enter
 
 tmux select-pane -t "$SESSION:0.1" -T "sidecar"
-tmux send-keys -t "$SESSION:0.1" "ssh -t -i $KEY $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster/sim_full/ec2/sidecar && python3 sidecar.py'" Enter
+tmux send-keys -t "$SESSION:0.1" "ssh -t -i $KEY $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster/sidecar && python3 sidecar.py'" Enter
 
 # Monitor: start on EC2, poll until port 8080 is bound, then tail log (tunnel already open via -L).
 tmux select-pane -t "$SESSION:0.2" -T "monitor :8080"

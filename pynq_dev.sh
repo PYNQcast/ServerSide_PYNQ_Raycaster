@@ -81,7 +81,7 @@ tmux select-pane -t "$SESSION:0.0" -T "pynq server"
 tmux send-keys -t "$SESSION:0.0" "ssh -t -i $KEY $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster/pynq_full/ec2/server && python3 server.py'" Enter
 
 tmux select-pane -t "$SESSION:0.1" -T "sidecar"
-tmux send-keys -t "$SESSION:0.1" "ssh -t -i $KEY $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster/pynq_full/ec2/sidecar && python3 sidecar.py'" Enter
+tmux send-keys -t "$SESSION:0.1" "ssh -t -i $KEY $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster/sidecar && python3 sidecar.py'" Enter
 
 # Monitor: SSH tunnel + start on EC2, wait for port 8080, then tail log.
 tmux select-pane -t "$SESSION:0.2" -T "monitor :8080"

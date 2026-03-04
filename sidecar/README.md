@@ -1,12 +1,10 @@
 # sidecar/
 
-The canonical sidecar. Both stacks symlink here:
-
-- `pynq_full/ec2/sidecar/sidecar.py` → `datastore/sidecar/sidecar.py`
-- `sim_full/ec2/sidecar/sidecar.py`  → `datastore/sidecar/sidecar.py`
+Redis → DynamoDB / S3 / SNS persistence pipeline. Shared by both stacks —
+both `sim_dev.sh` and `pynq_dev.sh` launch this same file.
 
 The sidecar has no dependency on whether the UDP source is a PYNQ board or a
-simulator — it only consumes Redis events and writes to AWS.
+simulator; it only consumes Redis events.
 
 ## What it does
 
