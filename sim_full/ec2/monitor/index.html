@@ -791,7 +791,6 @@ function drawArena(players, bits, bitsMask) {
     ctx.fill();
 
     // Label
-    const isGhost = (p.flags & FLAG_GHOST) !== 0;
     const role = isGhost ? 'ghost' : (p.id === 1) ? 'runner' : 'tagger';
     ctx.fillStyle = isGhost ? '#888' : '#fff'; ctx.font = 'bold 11px Courier New';
     ctx.fillText(`P${p.id} ${role}`, cx+10, cy-6);
