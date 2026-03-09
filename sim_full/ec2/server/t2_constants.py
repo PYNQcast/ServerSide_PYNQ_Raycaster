@@ -12,7 +12,7 @@ TAGS_TO_WIN      = 2      # runner must be tagged this many times to end the mat
 # Spawned when both humans declare RUNNER — max 3 to keep the match fair.
 
 MAX_GHOSTS       = 3
-GHOST_SPEED      = 3.0    # world units per tick — slightly slower than player max
+GHOST_SPEED      = 1.2    # world units per tick (~24 wu/s at 20 Hz — clearly slower than player)
 
 # ── Bits (GAME_MODE_CHASE_BITS) ───────────────────────────────────────────────
 
@@ -31,10 +31,18 @@ NODE_TIMEOUT_S   = 3.0    # evict node that sends no packets for this long
 GRACE_TICKS      = 10     # 0.5 s at 20 Hz
 
 # ── Spawn geometry ────────────────────────────────────────────────────────────
-# Player 1 = RUNNER, Player 2 = TAGGER.
-# Spawn angles mirror node_simulator.py (π/2 apart on a circle of radius 50).
-ORBIT_RADIUS     = 50.0
-SPAWN_ANGLES     = [0.0, math.pi / 2]   # player_id 1 → 0 rad, player_id 2 → π/2 rad
+# Map-relative spawn points for a 32×32 tile map at MAP_TILE_SCALE=8 (256×256 wu).
+# Runner and tagger start in opposite quadrants; ghosts spread to other corners.
+# All points are inside open corridors of the default chase.txt map.
+ORBIT_RADIUS     = 50.0   # kept for node_simulator orbit mode (legacy)
+SPAWN_POSITIONS  = [
+    (-56.0, -56.0),   # player_id 1 — runner   (upper-left quadrant)
+    ( 56.0,  56.0),   # player_id 2 — tagger   (lower-right quadrant)
+    (-56.0,  56.0),   # player_id 3 — ghost 1  (lower-left)
+    ( 56.0, -56.0),   # player_id 4 — ghost 2  (upper-right)
+    (  0.0,   0.0),   # player_id 5 — ghost 3  (centre)
+]
+SPAWN_ANGLES     = [0.0, math.pi, math.pi / 2, 3 * math.pi / 2, math.pi / 4]
 
 # ── Map ───────────────────────────────────────────────────────────────────────
 

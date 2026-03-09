@@ -66,15 +66,16 @@ class RedisIO:
                     "flags": p["flags"],
                 },
             })
-        # Write match-level state so monitor can read bits_mask per tick
-        self.write_queue.put({
-            "op": "hset", "key": "game:state",
-            "mapping": {
-                "game_mode":  self.state.game_mode,
-                "bits_mask":  self.state.bits_mask,
-                "match_tick": match_tick,
-            },
-        })
+        # Write match-level state so monitor can read bits_mask and positions per tick
+        mapping = {
+            "game_mode":  self.state.game_mode,
+            "bits_mask":  self.state.bits_mask,
+            "match_tick": match_tick,
+        }
+        if self.state.bits:
+            mapping["bits"] = json.dumps([[round(b[0], 2), round(b[1], 2)]
+                                          for b in self.state.bits])
+        self.write_queue.put({"op": "hset", "key": "game:state", "mapping": mapping})
         if self.state.match_started and self.state.players:
             self.write_queue.put({
                 "op":    "lpush",

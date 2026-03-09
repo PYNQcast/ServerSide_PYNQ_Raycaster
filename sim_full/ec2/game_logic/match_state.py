@@ -3,10 +3,9 @@
 # Lives in game_logic/ because match state is a pure data structure — no queues,
 # no asyncio. Any module can import it without pulling in SEDA orchestration.
 
-import math
 import time
 from t2_constants import (
-    ORBIT_RADIUS, SPAWN_ANGLES, LOCKOUT_S, GRACE_TICKS,
+    SPAWN_POSITIONS, SPAWN_ANGLES, LOCKOUT_S, GRACE_TICKS,
 )
 from protocol import GAME_MODE_CHASE
 
@@ -40,11 +39,11 @@ class MatchState:
 
     def reset_positions(self):
         for p in self.players.values():
-            idx   = p["player_id"] - 1
-            angle = SPAWN_ANGLES[idx] if idx < len(SPAWN_ANGLES) else 0.0
-            p["x"]     = ORBIT_RADIUS * math.cos(angle)
-            p["y"]     = ORBIT_RADIUS * math.sin(angle)
-            p["angle"] = angle
+            idx       = p["player_id"] - 1
+            sx, sy    = SPAWN_POSITIONS[idx] if idx < len(SPAWN_POSITIONS) else (0.0, 0.0)
+            p["x"]    = sx
+            p["y"]    = sy
+            p["angle"] = SPAWN_ANGLES[idx] if idx < len(SPAWN_ANGLES) else 0.0
         self.match_tick = 0   # restart grace period so proximity check pauses
         print("[T2] positions reset to spawn, grace period restarted")
 

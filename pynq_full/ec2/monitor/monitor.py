@@ -370,12 +370,19 @@ def collect_state():
     match_events = current_match_events(parsed)
     matches = poll_dynamodb()
 
-    # Extract bit positions from the current match's match_start event
+    # Bit positions: prefer live game:state hash (written each tick once bits are set),
+    # fall back to match_start event in case of a Redis flush mid-match.
     bits_positions = []
-    for ev in match_events:
-        if ev.get("event") == "match_start" and ev.get("bits"):
-            bits_positions = ev["bits"]
-            break
+    if game_raw and game_raw.get("bits"):
+        try:
+            bits_positions = json.loads(game_raw["bits"])
+        except Exception:
+            pass
+    if not bits_positions:
+        for ev in match_events:
+            if ev.get("event") == "match_start" and ev.get("bits"):
+                bits_positions = ev["bits"]
+                break
 
     n_clients = _as_int(clients.get("connected_clients", 0))
     blocked   = _as_int(clients.get("blocked_clients", 0))
