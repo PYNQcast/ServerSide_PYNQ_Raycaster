@@ -21,6 +21,7 @@ HTTP_PORT    = 8080
 PUSH_RATE_HZ = 20   # push to browser at 20 Hz (match game tick rate)
 DDB_POLL_INTERVAL_S = 2.0
 SERVICE_POLL_INTERVAL_S = 1.0
+REDIS_STATS_POLL_INTERVAL_S = 1.0
 
 DYNAMO_TABLE = "pynq-raycaster-seda-matches"
 AWS_REGION   = "eu-west-2"
@@ -55,6 +56,10 @@ _service_last_fetch = 0.0
 _service_message = "controls run on EC2 only; node simulators still start locally"
 _replay_cache = {}
 _active_map = "chase"    # tracks which map the server is using
+_redis_stats_cache = {}
+_redis_stats_last_fetch = 0.0
+_state_cache = {}
+_state_cache_json = "{}"
 
 def _as_int(value, default=0):
     try:
@@ -167,6 +172,48 @@ def poll_services(force: bool = False):
     }
     _service_last_fetch = now
     return _service_cache
+
+
+def poll_redis_stats():
+    global _redis_stats_cache, _redis_stats_last_fetch
+    now = time.monotonic()
+    if _redis_stats_cache and now - _redis_stats_last_fetch < REDIS_STATS_POLL_INTERVAL_S:
+        return _redis_stats_cache
+
+    info = r.info("stats")
+    mem = r.info("memory")
+    clients = r.info("clients")
+    client_rows = r.client_list()
+
+    n_clients = _as_int(clients.get("connected_clients", 0))
+    blocked = _as_int(clients.get("blocked_clients", 0))
+    pubsub_clients = sum(
+        1 for row in client_rows
+        if _as_int(row.get("sub", 0)) > 0 or _as_int(row.get("psub", 0)) > 0
+    )
+    direct_clients = max(0, n_clients - blocked - pubsub_clients)
+
+    shared_refresh_cmds_per_sec = PUSH_RATE_HZ
+    stats_cmds_per_sec = 4 / REDIS_STATS_POLL_INTERVAL_S
+    recent_matches_cmds_per_sec = 1 / DDB_POLL_INTERVAL_S
+    monitor_cmds_per_sec = shared_refresh_cmds_per_sec + stats_cmds_per_sec + recent_matches_cmds_per_sec
+
+    _redis_stats_cache = {
+        "ops_per_sec":       info.get("instantaneous_ops_per_sec", 0),
+        "mem_used":          mem.get("used_memory_human", "?"),
+        "connected_clients": n_clients,
+        "blocked_clients":   blocked,
+        "keyspace_hits":     info.get("keyspace_hits", 0),
+        "keyspace_misses":   info.get("keyspace_misses", 0),
+        "pubsub_clients":    pubsub_clients,
+        "direct_clients":    direct_clients,
+        "monitor_push_hz":   PUSH_RATE_HZ,
+        "monitor_cmds_per_push": round(monitor_cmds_per_sec / PUSH_RATE_HZ, 2),
+        "monitor_cmds_per_sec": round(monitor_cmds_per_sec, 1),
+        "monitor_shared_cache": True,
+    }
+    _redis_stats_last_fetch = now
+    return _redis_stats_cache
 
 def _start_service(name: str):
     spec = SERVICE_SPECS[name]
@@ -367,9 +414,15 @@ def _live_match_summary(match_events: list, active_map: str, game_mode: int):
 # ── Redis state collection ─────────────────────────────────────────────────────
 
 def collect_state():
-    players = []
+    pipe = r.pipeline(transaction=False)
     for pid in range(1, 10):
-        raw = r.hgetall(f"player:{pid}")
+        pipe.hgetall(f"player:{pid}")
+    pipe.hgetall("game:state")
+    pipe.lrange("game:monitor-events", 0, 49)
+    redis_rows = pipe.execute()
+
+    players = []
+    for pid, raw in enumerate(redis_rows[:9], start=1):
         if not raw:
             continue
         players.append({
@@ -380,21 +433,17 @@ def collect_state():
             "flags": int(raw.get("flags", 0)),
         })
 
-    game_raw  = r.hgetall("game:state")
+    game_raw  = redis_rows[9]
     game_mode = int(game_raw.get("game_mode", 0)) if game_raw else 0
     bits_mask = int(game_raw.get("bits_mask", 0xFFFF)) if game_raw else 0xFFFF
 
-    info    = r.info("stats")
-    mem     = r.info("memory")
-    clients = r.info("clients")
-    client_rows = r.client_list()
-
     # game:monitor-events is written by T4 alongside game:seda-events but
     # never drained by the sidecar — so every event is visible here.
-    events_raw = r.lrange("game:monitor-events", 0, 49)
+    events_raw = redis_rows[10]
     parsed     = [json.loads(e) for e in events_raw if e]
     match_events = current_match_events(parsed)
     matches = poll_dynamodb()
+    redis_stats = poll_redis_stats()
 
     # Bit positions: prefer live game:state hash (written each tick once bits are set),
     # fall back to match_start event in case of a Redis flush mid-match.
@@ -424,40 +473,15 @@ def collect_state():
         if live_match is not None:
             matches = [live_match] + matches
 
-    n_clients = _as_int(clients.get("connected_clients", 0))
-    blocked   = _as_int(clients.get("blocked_clients", 0))
-    pubsub_clients = sum(
-        1 for row in client_rows
-        if _as_int(row.get("sub", 0)) > 0 or _as_int(row.get("psub", 0)) > 0
-    )
-    direct_clients = max(0, n_clients - blocked - pubsub_clients)
-
-    player_probe_reads = 9
-    monitor_cmds_per_push = player_probe_reads + 5  # 3x INFO + CLIENT LIST + LRANGE
-
     return {
         "players": players,
-        "redis": {
-            "ops_per_sec":       info.get("instantaneous_ops_per_sec", 0),
-            "mem_used":          mem.get("used_memory_human", "?"),
-            # clients breakdown: server(T4) + sidecar + monitor + redis-cli = 4
-            "connected_clients": n_clients,
-            "blocked_clients":   blocked,
-            # blocked=1 is normal: sidecar sleeping on BRPOP waiting for next event
-            "keyspace_hits":     info.get("keyspace_hits", 0),
-            "keyspace_misses":   info.get("keyspace_misses", 0),
-            "pubsub_clients":    pubsub_clients,
-            "direct_clients":    direct_clients,
-            "monitor_push_hz":   PUSH_RATE_HZ,
-            "monitor_cmds_per_push": monitor_cmds_per_push,
-            "monitor_cmds_per_sec": monitor_cmds_per_push * PUSH_RATE_HZ,
-        },
+        "redis": redis_stats,
         "services": poll_services(),
         "pipeline": {
             "players_online":  len(players),
             "match_events":    len(match_events),
-            "sidecar_blocked": blocked,
-            "ops_per_sec":     info.get("instantaneous_ops_per_sec", 0),
+            "sidecar_blocked": redis_stats.get("blocked_clients", 0),
+            "ops_per_sec":     redis_stats.get("ops_per_sec", 0),
             "ddb_matches":     len(matches),
         },
         "events":     match_events[:20],   # newest-first, current match only
@@ -467,6 +491,26 @@ def collect_state():
         "bits_mask":  bits_mask,           # bitmask of active bits this tick
         "active_map": active_map,          # name of the currently loaded map
     }
+
+
+def refresh_state_cache():
+    global _state_cache, _state_cache_json
+    state = collect_state()
+    _state_cache = state
+    _state_cache_json = json.dumps(state)
+    return state
+
+
+async def state_cache_loop():
+    interval = 1 / PUSH_RATE_HZ
+    while True:
+        started_at = time.monotonic()
+        try:
+            await asyncio.to_thread(refresh_state_cache)
+        except Exception as e:
+            print(f"[monitor] state refresh error: {e}")
+        elapsed = time.monotonic() - started_at
+        await asyncio.sleep(max(0.0, interval - elapsed))
 
 
 def fetch_replay(match_id: str):
@@ -518,8 +562,7 @@ async def ws_handler(request):
         while not ws.closed:
             # Push state to browser
             try:
-                state = collect_state()
-                await ws.send_str(json.dumps(state))
+                await ws.send_str(_state_cache_json)
             except Exception as e:
                 print(f"[monitor] collect error: {e}")
 
@@ -602,13 +645,22 @@ async def main():
     app.router.add_get("/api/replay/{match_id}", replay_handler)
     app.router.add_get("/api/maps",         maps_list_handler)
     app.router.add_get("/api/map/{name}",   map_handler)
+    await asyncio.to_thread(refresh_state_cache)
+    app["state_cache_task"] = asyncio.create_task(state_cache_loop())
 
     runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", HTTP_PORT)
-    await site.start()
-    print(f"[monitor] http://localhost:{HTTP_PORT}  (WebSocket: ws://localhost:{HTTP_PORT}/ws)")
-    await asyncio.sleep(float("inf"))
+    try:
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", HTTP_PORT)
+        await site.start()
+        print(f"[monitor] http://localhost:{HTTP_PORT}  (WebSocket: ws://localhost:{HTTP_PORT}/ws)")
+        await asyncio.sleep(float("inf"))
+    finally:
+        app["state_cache_task"].cancel()
+        try:
+            await app["state_cache_task"]
+        except asyncio.CancelledError:
+            pass
 
 if __name__ == "__main__":
     asyncio.run(main())

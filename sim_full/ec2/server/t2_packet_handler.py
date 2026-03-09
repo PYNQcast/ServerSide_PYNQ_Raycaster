@@ -27,7 +27,8 @@ from protocol import (
 )
 from game_logic.anticheat import validate_position, DEFAULT_MAX_SPEED_PER_TICK
 from game_logic.match_state import MatchState
-from t2_constants import MATCH_PLAYERS, NODE_TIMEOUT_S, MAX_GHOSTS
+from t2_constants import MATCH_PLAYERS, NODE_TIMEOUT_S, MAX_GHOSTS, PLAYER_COLLISION_RADIUS
+from t2_map_loader import resolve_walkable_world
 
 
 # Drains the inbound packet queue and maintains the player registry
@@ -105,12 +106,17 @@ class PacketHandler:
 
         last = p["last_seq"]
         min_x, min_y, max_x, max_y = self._world_bounds()
+        next_x, next_y = x, y
+        if movement_mode != MOVEMENT_MODE_INTENT_ONLY:
+            next_x, next_y = resolve_walkable_world(
+                self.map_state, p["x"], p["y"], x, y, PLAYER_COLLISION_RADIUS
+            )
         if (
             movement_mode != MOVEMENT_MODE_INTENT_ONLY
             and last is not None
             and not validate_position(
                 last, p["x"], p["y"], p["angle"],
-                x, y, angle, seq,
+                next_x, next_y, angle, seq,
                 min_x, min_y, max_x, max_y,
                 DEFAULT_MAX_SPEED_PER_TICK,
             )
@@ -122,7 +128,7 @@ class PacketHandler:
         p["protocol_version"] = protocol_version
 
         if movement_mode != MOVEMENT_MODE_INTENT_ONLY:
-            p["x"], p["y"], p["angle"] = x, y, angle
+            p["x"], p["y"], p["angle"] = next_x, next_y, angle
 
         client_input = raw_flags & CLIENT_INPUT_FLAGS
         p["flags"] = (p["flags"] & SERVER_STATE_FLAGS) | client_input
@@ -189,6 +195,7 @@ class PacketHandler:
 
         self.state.pending_roles = {}
         self.state.next_id = len(self.state.players) + 1
+        self.state.set_spawn_positions(self.map_state.get("spawn_positions", []))
 
         bits = self.map_state.get("bits", [])
         if bits:
@@ -198,10 +205,11 @@ class PacketHandler:
         else:
             self.state.game_mode = GAME_MODE_CHASE
             self.state.bits = []
-            self.state.bits_mask = 0xFFFF
+            self.state.bits_mask = 0
 
         self.state.match_started = True
         self.state.match_tick = 0
+        self.state.reset_positions()
         self._on_match_start()
 
     # ── Ghost management ──────────────────────────────────────────────────────
@@ -213,9 +221,11 @@ class PacketHandler:
         ghost_addr = f"ghost:{ghost_count + 1}"
         ghost_id = len(self.state.players) + 1
         angle = math.pi / 2
+        spawn_positions = self.state.spawn_positions
+        x, y = spawn_positions[ghost_id - 1] if ghost_id - 1 < len(spawn_positions) else (0.0, 0.0)
         self.state.players[ghost_addr] = {
             "player_id":        ghost_id,
-            "x":                0.0, "y": 0.0, "angle": angle,
+            "x":                x, "y": y, "angle": angle,
             "flags":            FLAG_GHOST,
             "last_seen":        time.monotonic(),
             "last_seq":         None,

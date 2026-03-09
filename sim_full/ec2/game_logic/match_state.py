@@ -33,8 +33,9 @@ class MatchState:
         self.match_tick    = 0      # ticks elapsed since match started (grace period)
         self.game_mode     = GAME_MODE_CHASE
         self.bits          = []     # list of [x, y, active]
-        self.bits_mask     = 0xFFFF
+        self.bits_mask     = 0
         self.pending_roles = {}     # addr → preferred_role from PKT_REGISTER
+        self.spawn_positions = list(SPAWN_POSITIONS)
 
     # ── Player position helpers ───────────────────────────────────────────────
     # Teleporting to spawn after a tag prevents immediate re-tag after flash clears
@@ -42,7 +43,7 @@ class MatchState:
     def reset_positions(self):
         for p in self.players.values():
             idx       = p["player_id"] - 1
-            sx, sy    = SPAWN_POSITIONS[idx] if idx < len(SPAWN_POSITIONS) else (0.0, 0.0)
+            sx, sy    = self.spawn_positions[idx] if idx < len(self.spawn_positions) else (0.0, 0.0)
             p["x"]    = sx
             p["y"]    = sy
             p["angle"] = SPAWN_ANGLES[idx] if idx < len(SPAWN_ANGLES) else 0.0
@@ -66,9 +67,12 @@ class MatchState:
         self.match_tick    = 0
         self.game_mode     = GAME_MODE_CHASE
         self.bits          = []
-        self.bits_mask     = 0xFFFF
+        self.bits_mask     = 0
         self.pending_roles = {}
         self.lockout_until = time.monotonic() + LOCKOUT_S
+
+    def set_spawn_positions(self, positions):
+        self.spawn_positions = [tuple(pos) for pos in positions] if positions else list(SPAWN_POSITIONS)
 
     # Return the player dict for the runner (player_id=1), or None if not yet registered
     def runner(self):

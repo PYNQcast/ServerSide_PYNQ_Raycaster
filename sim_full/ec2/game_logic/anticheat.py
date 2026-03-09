@@ -10,7 +10,7 @@
 
 import math
 
-DEFAULT_MAX_SPEED_PER_TICK = 10.0
+DEFAULT_MAX_SPEED_PER_TICK = 12.0
 
 
 # Reject a position update if the move is faster than max_speed_per_tick or out of bounds.
@@ -27,7 +27,8 @@ def validate_position(prev_seq, prev_x, prev_y, prev_angle,
         return False
     dx = new_x - prev_x
     dy = new_y - prev_y
-    return (dx * dx) + (dy * dy) <= (max_speed_per_tick * max_speed_per_tick)
+    allowed_distance = max_speed_per_tick * max(1, delta)
+    return (dx * dx) + (dy * dy) <= (allowed_distance * allowed_distance)
 
 
 # Euclidean distance between two world-space points — used for tag detection

@@ -22,6 +22,7 @@ import math
 import argparse
 import sys
 import os
+import time
 
 sys.path.insert(0, os.path.dirname(__file__))
 from protocol import (
@@ -51,6 +52,8 @@ SPAWN_ANGLES = [0.0, math.pi / 2]  # player_id 1 → angle 0, player_id 2 → an
 RUNNER_SPEED = 0.05                 # rad/tick (player 1)
 TAGGER_SPEED = 0.11                 # rad/tick (player 2)
 TICK_RATE    = 60                   # Hz — match server
+PLAYER_COLLISION_RADIUS = 2.5
+AUTHORITATIVE_STATE_TIMEOUT_S = 0.4
 
 # ── AXI-Lite register offsets ─────────────────────────────────────────────────
 
@@ -260,6 +263,8 @@ class PYNQNode:
         self.seq         = 0
         self.registered  = False
         self.match_ended = False
+        self.have_authoritative_state = False
+        self.last_authoritative_state_at = 0.0
         self.movement_mode = MOVEMENT_MODE_INTENT_WITH_PREDICTION
         self.game_mode   = 0
         self.bits_mask   = 0xFFFF
@@ -293,10 +298,12 @@ class PYNQNode:
             player_id = struct.unpack_from('<B', data, HEADER_SIZE)[0]
             self.player_id   = player_id
             self.orbit_angle = SPAWN_ANGLES[player_id - 1] if player_id <= 2 else 0.0
-            self.x = ORBIT_RADIUS * math.cos(self.orbit_angle)
-            self.y = ORBIT_RADIUS * math.sin(self.orbit_angle)
-            self.angle       = self.orbit_angle
+            self.angle = self.orbit_angle
             self.registered  = True
+            self.match_ended = False
+            self.have_authoritative_state = False
+            self.last_authoritative_state_at = 0.0
+            self.server_flags = 0
             role = "RUNNER" if player_id == 1 else "TAGGER"
             print(f"[Node] registered as player {player_id} ({role})")
 
@@ -314,7 +321,13 @@ class PYNQNode:
             peer_updated = False
             for p in players:
                 if p["player_id"] == self.player_id:
+                    self.x = p["x"]
+                    self.y = p["y"]
+                    self.angle = p["angle"]
+                    self.orbit_angle = p["angle"]
                     self.server_flags = p["flags"]
+                    self.have_authoritative_state = True
+                    self.last_authoritative_state_at = time.monotonic()
                     if self.server_flags & FLAG_TAGGED:
                         print(f"[Node] P{self.player_id} tagged!")
                     if self.server_flags & FLAG_MATCH_END:
@@ -332,14 +345,65 @@ class PYNQNode:
 
     # ── Movement logic (orbiting circle, same as node_simulator) ──────────
 
+    def _is_walkable(self, x: float, y: float, radius: float = PLAYER_COLLISION_RADIUS) -> bool:
+        if not self.tiles or self.map_w <= 0 or self.map_h <= 0 or self.tile_scale <= 0:
+            return True
+
+        offsets = [(0.0, 0.0)]
+        if radius > 0.0:
+            offsets.extend([
+                (radius, 0.0), (-radius, 0.0),
+                (0.0, radius), (0.0, -radius),
+                (radius, radius), (radius, -radius),
+                (-radius, radius), (-radius, -radius),
+            ])
+
+        for dx, dy in offsets:
+            col = int(math.floor(((x + dx) / self.tile_scale) + (self.map_w / 2.0)))
+            row = int(math.floor(((y + dy) / self.tile_scale) + (self.map_h / 2.0)))
+            if col < 0 or row < 0 or col >= self.map_w or row >= self.map_h:
+                return False
+            if self.tiles[row * self.map_w + col]:
+                return False
+        return True
+
+    def _resolve_move(self, desired_x: float, desired_y: float):
+        if self._is_walkable(desired_x, desired_y):
+            return desired_x, desired_y
+        if self._is_walkable(desired_x, self.y):
+            return desired_x, self.y
+        if self._is_walkable(self.x, desired_y):
+            return self.x, desired_y
+        if not self._is_walkable(self.x, self.y):
+            return self.x, self.y
+
+        low_x, low_y = self.x, self.y
+        high_x, high_y = desired_x, desired_y
+        for _ in range(10):
+            mid_x = (low_x + high_x) / 2.0
+            mid_y = (low_y + high_y) / 2.0
+            if self._is_walkable(mid_x, mid_y):
+                low_x, low_y = mid_x, mid_y
+            else:
+                high_x, high_y = mid_x, mid_y
+        return low_x, low_y
+
     def _step(self):
-        if not self.registered or self.match_ended:
+        if not self.registered or self.match_ended or not self.have_authoritative_state:
             return
-        speed = RUNNER_SPEED if self.player_id == 1 else TAGGER_SPEED
-        self.orbit_angle += speed
-        self.x     = ORBIT_RADIUS * math.cos(self.orbit_angle)
-        self.y     = ORBIT_RADIUS * math.sin(self.orbit_angle)
-        self.angle = self.orbit_angle
+        turn_step = RUNNER_SPEED if self.player_id == 1 else TAGGER_SPEED
+        move_speed = ORBIT_RADIUS * turn_step
+        desired_x = self.x + move_speed * math.cos(self.angle)
+        desired_y = self.y + move_speed * math.sin(self.angle)
+        next_x, next_y = self._resolve_move(desired_x, desired_y)
+        if next_x == self.x and next_y == self.y:
+            self.angle += turn_step * 2.5
+            desired_x = self.x + move_speed * math.cos(self.angle)
+            desired_y = self.y + move_speed * math.sin(self.angle)
+            next_x, next_y = self._resolve_move(desired_x, desired_y)
+        self.x = next_x
+        self.y = next_y
+        self.orbit_angle = self.angle
 
     # ── Send helpers ───────────────────────────────────────────────────────
 
@@ -386,6 +450,11 @@ class PYNQNode:
                         self._send_register()
                         reg_retry_at = loop.time() + 2.0
                 else:
+                    if (
+                        self.have_authoritative_state
+                        and time.monotonic() - self.last_authoritative_state_at > AUTHORITATIVE_STATE_TIMEOUT_S
+                    ):
+                        self.have_authoritative_state = False
                     self._step()
                     self._send_state()
 

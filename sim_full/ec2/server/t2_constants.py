@@ -17,6 +17,8 @@ GHOST_SPEED      = 1.2    # world units per tick (~24 wu/s at 20 Hz — clearly 
 # ── Bits (GAME_MODE_CHASE_BITS) ───────────────────────────────────────────────
 
 BIT_COLLECT_RADIUS = 10.0   # world units — smaller than TAG_RADIUS
+PLAYER_COLLISION_RADIUS = 2.5
+SPAWN_CLEARANCE_RADIUS = 3.25
 
 # ── Timing (seconds) ──────────────────────────────────────────────────────────
 

@@ -160,3 +160,134 @@ def test_sim_abort_match_clears_players_and_resets_ids():
         assert state.players == {}
         assert state.next_id == 1
         assert state.match_started is False
+
+
+def test_sim_anticheat_allows_packet_gaps_within_speed_budget():
+    with sim_import_context():
+        anticheat_mod = importlib.import_module("game_logic.anticheat")
+
+        assert anticheat_mod.validate_position(
+            10, 0.0, 0.0, 0.0,
+            20.0, 0.0, 0.0, 12,
+            -100.0, -100.0, 100.0, 100.0,
+            10.0,
+        )
+
+
+def test_sim_map_loader_builds_walkable_spawn_positions():
+    with sim_import_context():
+        constants = importlib.import_module("t2_constants")
+        map_loader = importlib.import_module("t2_map_loader")
+
+        map_state = map_loader.load_map(str(ROOT / "pynq_full" / "ec2" / "maps" / "chase.txt"))
+        clearance_radius = max(
+            constants.PLAYER_COLLISION_RADIUS + 0.5,
+            constants.SPAWN_CLEARANCE_RADIUS,
+        )
+
+        assert map_state["spawn_positions"]
+        for x, y in map_state["spawn_positions"]:
+            assert map_loader.is_walkable_world(map_state, x, y, clearance_radius)
+
+
+def test_sim_map_loader_resolves_blocked_moves_without_leaving_walkable_space():
+    with sim_import_context():
+        map_loader = importlib.import_module("t2_map_loader")
+
+        map_state = {
+            "width": 3,
+            "height": 3,
+            "tile_scale": 8,
+            "tiles": bytearray([
+                0, 0, 0,
+                0, 1, 0,
+                0, 0, 0,
+            ]),
+        }
+
+        resolved_x, resolved_y = map_loader.resolve_walkable_world(
+            map_state,
+            -8.0, 0.0,
+            0.0, 0.0,
+            0.0,
+        )
+
+        assert resolved_x < 0.0
+        assert resolved_y == 0.0
+        assert map_loader.is_walkable_world(map_state, resolved_x, resolved_y, 0.0)
+
+
+def test_sim_ghosts_steer_without_crossing_walls():
+    with sim_import_context():
+        protocol = importlib.import_module("protocol")
+        core_logic_mod = importlib.import_module("game_logic.core_logic")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+        map_loader = importlib.import_module("t2_map_loader")
+        constants = importlib.import_module("t2_constants")
+
+        map_state = {
+            "width": 5,
+            "height": 5,
+            "tile_scale": 8,
+            "tiles": bytearray([
+                0, 0, 0, 0, 0,
+                0, 0, 1, 0, 0,
+                0, 0, 1, 0, 0,
+                0, 0, 1, 0, 0,
+                0, 0, 0, 0, 0,
+            ]),
+        }
+
+        state = match_state_mod.MatchState()
+        state.match_started = True
+        state.game_mode = protocol.GAME_MODE_CHASE
+        state.players = {
+            ("runner", 1): {
+                "player_id": 1,
+                "x": 12.0,
+                "y": 0.0,
+                "angle": 0.0,
+                "flags": 0,
+                "last_seen": 0.0,
+                "last_seq": 0,
+                "movement_mode": 0,
+                "protocol_version": 1,
+            },
+            "ghost:1": {
+                "player_id": 3,
+                "x": -12.0,
+                "y": 0.0,
+                "angle": 0.0,
+                "flags": protocol.FLAG_GHOST,
+                "last_seen": 0.0,
+                "last_seq": 0,
+                "movement_mode": 0,
+                "protocol_version": 1,
+            },
+        }
+
+        async def on_event(event):
+            return None
+
+        logic = core_logic_mod.CoreLogic(
+            state,
+            queue.SimpleQueue(),
+            on_event=on_event,
+            on_force_end_consumed=lambda: None,
+            map_state=map_state,
+        )
+
+        positions = []
+        for _ in range(6):
+            logic._move_ghosts()
+            ghost = state.players["ghost:1"]
+            positions.append((ghost["x"], ghost["y"]))
+            assert map_loader.is_walkable_world(
+                map_state,
+                ghost["x"],
+                ghost["y"],
+                constants.PLAYER_COLLISION_RADIUS,
+            )
+
+        assert positions[-1][0] > -12.0
+        assert any(abs(y) > 0.5 for _, y in positions)

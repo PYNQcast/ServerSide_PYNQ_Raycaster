@@ -13,23 +13,25 @@ import time
 from protocol import FLAG_TAGGED, FLAG_MATCH_END, GAME_MODE_CHASE_BITS
 from game_logic.anticheat import Anticheat
 from game_logic.match_state import MatchState
+from t2_map_loader import resolve_walkable_world
 from t2_constants import (
     TAG_RADIUS, TAGS_TO_WIN,
     TAG_FLASH_S, MATCH_END_HOLD_S, LOCKOUT_S,
-    BIT_COLLECT_RADIUS, GHOST_SPEED,
+    BIT_COLLECT_RADIUS, GHOST_SPEED, PLAYER_COLLISION_RADIUS,
 )
 
 
 # Runs the per-tick game rules against shared MatchState
 class CoreLogic:
 
-    def __init__(self, state: MatchState, write_queue, on_event, on_force_end_consumed):
+    def __init__(self, state: MatchState, write_queue, on_event, on_force_end_consumed, map_state=None):
         self.state                  = state
         self.write_queue            = write_queue
         self._on_event              = on_event
         self._on_force_end_consumed = on_force_end_consumed
         self._force_end_flag        = False  # set by Redis control channel
         self._anticheat             = Anticheat()
+        self.map_state              = map_state if map_state is not None else {}
 
     # ── Main tick entry point ─────────────────────────────────────────────────
     # Run all per-tick game-rule checks in the correct order each tick
@@ -57,14 +59,89 @@ class CoreLogic:
         for addr, p in self.state.players.items():
             if not str(addr).startswith("ghost:"):
                 continue
-            dx = rx - p["x"]
-            dy = ry - p["y"]
-            dist = math.hypot(dx, dy)
-            if dist < 0.01:
-                continue
-            step = min(GHOST_SPEED, dist)
-            p["x"] += (dx / dist) * step
-            p["y"] += (dy / dist) * step
+            next_x, next_y, next_angle = self._choose_ghost_step(p, rx, ry)
+            p["x"] = next_x
+            p["y"] = next_y
+            p["angle"] = next_angle
+
+    def _choose_ghost_step(self, ghost: dict, target_x: float, target_y: float):
+        current_x = ghost["x"]
+        current_y = ghost["y"]
+        dx = target_x - current_x
+        dy = target_y - current_y
+        dist = math.hypot(dx, dy)
+        if dist < 0.01:
+            return current_x, current_y, ghost.get("angle", 0.0)
+
+        base_angle = math.atan2(dy, dx)
+        current_angle = ghost.get("angle", base_angle)
+        step = min(GHOST_SPEED, dist)
+        steer_dir = int(ghost.get("steer_dir", 0) or 0)
+        if steer_dir > 0:
+            offsets = (
+                0.0,
+                0.35, 0.7, 1.05, math.pi / 2,
+                -0.35, -0.7, -1.05, -math.pi / 2,
+                math.pi,
+            )
+        elif steer_dir < 0:
+            offsets = (
+                0.0,
+                -0.35, -0.7, -1.05, -math.pi / 2,
+                0.35, 0.7, 1.05, math.pi / 2,
+                math.pi,
+            )
+        else:
+            offsets = (
+                0.0,
+                0.35, -0.35,
+                0.7, -0.7,
+                1.05, -1.05,
+                math.pi / 2, -math.pi / 2,
+                math.pi,
+            )
+        best = None
+
+        for scale in (1.0, 0.75, 0.5):
+            candidate_step = step * scale
+            for offset in offsets:
+                candidate_angle = base_angle + offset
+                desired_x = current_x + math.cos(candidate_angle) * candidate_step
+                desired_y = current_y + math.sin(candidate_angle) * candidate_step
+                next_x, next_y = resolve_walkable_world(
+                    self.map_state,
+                    current_x,
+                    current_y,
+                    desired_x,
+                    desired_y,
+                    PLAYER_COLLISION_RADIUS,
+                )
+                move_dist = self._anticheat.distance_between(current_x, current_y, next_x, next_y)
+                if move_dist < 0.05:
+                    continue
+                remaining = self._anticheat.distance_between(next_x, next_y, target_x, target_y)
+                progress = dist - remaining
+                heading_delta = math.atan2(
+                    math.sin(candidate_angle - current_angle),
+                    math.cos(candidate_angle - current_angle),
+                )
+                score = (
+                    (progress * 10.0)
+                    + move_dist
+                    - (abs(offset) * 0.15)
+                    - (abs(heading_delta) * 0.2)
+                )
+                if steer_dir and offset * steer_dir < 0:
+                    score -= 2.0
+                if best is None or score > best[0]:
+                    best = (score, next_x, next_y, candidate_angle, offset)
+            if best is not None:
+                break
+
+        if best is None:
+            return current_x, current_y, ghost.get("angle", base_angle)
+        ghost["steer_dir"] = 0 if abs(best[4]) < 0.05 else (1 if best[4] > 0.0 else -1)
+        return best[1], best[2], best[3]
 
     # ── Bit collection ────────────────────────────────────────────────────────
     # Runner collects bits in CHASE_BITS mode; all-collected → match end

@@ -16,6 +16,7 @@
 import asyncio
 import json
 import os
+import queue
 import time
 
 import redis as redislib
@@ -36,15 +37,18 @@ class GameTick:
         self.write_queue     = write_queue
         self.interval        = 1.0 / tick_rate
         self.tick_count      = 0
+        self.control_queue   = queue.SimpleQueue()
 
         self.map_state = load_map(DEFAULT_MAP_PATH)  # mutable dict; hot-swappable via set_map
         self.state     = MatchState()                 # all mutable match fields
+        self.state.set_spawn_positions(self.map_state.get("spawn_positions", []))
 
         # Sub-modules share state by reference; callbacks keep them decoupled
         self.redis_io = RedisIO(self.state, self.map_state, broadcast_queue, write_queue)
         self.logic    = CoreLogic(self.state, write_queue,
                                   on_event=self._push_event,
-                                  on_force_end_consumed=lambda: None)
+                                  on_force_end_consumed=lambda: None,
+                                  map_state=self.map_state)
         self.packets  = PacketHandler(self.state, packet_queue, write_queue,
                                       udp_transport=udp_transport,
                                       map_state=self.map_state,
@@ -60,6 +64,7 @@ class GameTick:
         while True:
             tick_start = time.monotonic()
 
+            self._drain_control_commands()
             await self.packets.drain()
             await self.packets.evict_timed_out_nodes()
             await self.logic.tick()
@@ -90,23 +95,54 @@ class GameTick:
                     data = json.loads(msg["data"])
                 except Exception:
                     continue
-                cmd = data.get("cmd")
-                if cmd == "force_end":
-                    self.logic._force_end_flag = True
-                elif cmd == "set_ghost_count":
-                    count = int(data.get("count", 0))
-                    self.packets.set_ghost_count(count)
-                elif cmd == "set_map":
-                    name    = data.get("map", "level1")
-                    new_map = load_map(os.path.join(maps_dir, f"{name}.txt"))
-                    if new_map["width"] > 0:
-                        self.map_state.update(new_map)
-                        print(f"[T2] map swapped to '{name}' — takes effect on next registration")
+                self.control_queue.put(data)
 
         try:
             await asyncio.to_thread(_blocking_subscribe)
         except Exception as e:
             print(f"[T2] control listener error: {e}")
+
+    def _drain_control_commands(self):
+        while True:
+            try:
+                data = self.control_queue.get_nowait()
+            except queue.Empty:
+                break
+            self._apply_control_command(data)
+
+    def _apply_control_command(self, data: dict):
+        maps_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'maps')
+        cmd = data.get("cmd")
+        if cmd == "force_end":
+            self.logic._force_end_flag = True
+        elif cmd == "set_ghost_count":
+            count = int(data.get("count", 0))
+            self.packets.set_ghost_count(count)
+        elif cmd == "set_map":
+            name = data.get("map", "chase")
+            new_map = load_map(os.path.join(maps_dir, f"{name}.txt"))
+            if new_map["width"] > 0:
+                self._swap_map(new_map)
+
+    def _swap_map(self, new_map: dict):
+        current_players = list(self.state.players.values())
+        was_active = self.state.match_started and not self.state.match_ended
+        if was_active:
+            self.redis_io.push_event({
+                "event": "match_aborted",
+                "reason": "map_changed",
+                "game_mode": self.state.game_mode,
+                "bits_mask": self.state.bits_mask,
+                "map": self.map_state.get("name"),
+                "next_map": new_map.get("name"),
+            })
+        for player in current_players:
+            self.write_queue.put({"op": "del", "key": f"player:{player['player_id']}"})
+        self.map_state.clear()
+        self.map_state.update(new_map)
+        self.state.reset_all()
+        self.state.set_spawn_positions(self.map_state.get("spawn_positions", []))
+        print(f"[T2] map swapped to '{new_map.get('name')}' — state reset for new map")
 
     # ── Match event callbacks ─────────────────────────────────────────────────
 

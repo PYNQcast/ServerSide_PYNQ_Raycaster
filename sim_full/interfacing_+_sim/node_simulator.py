@@ -12,6 +12,7 @@ import threading
 import json
 import sys
 import select
+from pathlib import Path
 try:
     import redis as redislib
 except ImportError:
@@ -42,6 +43,182 @@ TICK_INTERVAL = 1.0 / TICK_HZ
 ARENA_RADIUS = 50.0
 MANUAL_TURN_STEP = 0.2
 MANUAL_MOVE_STEP = 4.0
+MAP_TILE_SCALE = 8
+PLAYER_COLLISION_RADIUS = 2.5
+SPAWN_CLEARANCE_RADIUS = 3.25
+DEFAULT_MAP_NAME = "chase"
+MAPS_DIR = Path(__file__).resolve().parents[2] / "pynq_full" / "ec2" / "maps"
+SPAWN_ANGLES = [0.0, math.pi, math.pi / 2, 3 * math.pi / 2, math.pi / 4]
+AUTHORITATIVE_STATE_TIMEOUT_S = 0.4
+
+
+def load_local_map(name: str):
+    path = MAPS_DIR / f"{name}.txt"
+    rows = []
+    try:
+        with open(path) as handle:
+            for line in handle:
+                line = line.rstrip("\r\n")
+                if line:
+                    rows.append(line)
+    except OSError as exc:
+        print(f"[node-map] failed to load {path}: {exc}")
+        return {"name": name, "width": 0, "height": 0, "tile_scale": MAP_TILE_SCALE, "tiles": bytearray()}
+
+    width = len(rows[0]) if rows else 0
+    height = len(rows)
+    tiles = bytearray()
+    for row in rows:
+        for cell in row:
+            tiles.append(1 if cell == "#" else 0)
+    spawn_positions = build_spawn_positions(width, height, tiles, MAP_TILE_SCALE)
+    return {
+        "name": name,
+        "width": width,
+        "height": height,
+        "tile_scale": MAP_TILE_SCALE,
+        "tiles": tiles,
+        "spawn_positions": spawn_positions,
+    }
+
+
+def cell_to_world(col: int, row: int, width: int, height: int, tile_scale: int):
+    return (
+        (col - width / 2.0 + 0.5) * tile_scale,
+        (row - height / 2.0 + 0.5) * tile_scale,
+    )
+
+
+def build_spawn_positions(width: int, height: int, tiles: bytearray, tile_scale: int):
+    if width <= 0 or height <= 0 or not tiles:
+        return []
+
+    low_col = min(width - 2, max(1, int(round((width - 1) * 0.25))))
+    high_col = min(width - 2, max(1, (width - 1) - low_col))
+    low_row = min(height - 2, max(1, int(round((height - 1) * 0.25))))
+    high_row = min(height - 2, max(1, (height - 1) - low_row))
+    anchors = [
+        (low_col, low_row),
+        (high_col, high_row),
+        (low_col, high_row),
+        (high_col, low_row),
+        (width // 2, height // 2),
+    ]
+    clearance_radius = max(PLAYER_COLLISION_RADIUS + 0.5, SPAWN_CLEARANCE_RADIUS)
+    used = set()
+    positions = []
+    fallback = [
+        (1, 1),
+        (width - 2, height - 2),
+        (1, height - 2),
+        (width - 2, 1),
+        (width // 2, height // 2),
+    ]
+    for anchor_col, anchor_row in anchors:
+        best = None
+        best_fallback = None
+        max_radius = max(width, height)
+        for radius in range(max_radius + 1):
+            row_min = max(0, anchor_row - radius)
+            row_max = min(height - 1, anchor_row + radius)
+            col_min = max(0, anchor_col - radius)
+            col_max = min(width - 1, anchor_col + radius)
+            for row in range(row_min, row_max + 1):
+                for col in range(col_min, col_max + 1):
+                    if abs(col - anchor_col) != radius and abs(row - anchor_row) != radius:
+                        continue
+                    if (col, row) in used:
+                        continue
+                    if tiles[row * width + col]:
+                        continue
+                    dist_sq = (col - anchor_col) ** 2 + (row - anchor_row) ** 2
+                    if best_fallback is None or dist_sq < best_fallback[0]:
+                        best_fallback = (dist_sq, col, row)
+                    world_x, world_y = cell_to_world(col, row, width, height, tile_scale)
+                    if not is_walkable(
+                        {
+                            "width": width,
+                            "height": height,
+                            "tile_scale": tile_scale,
+                            "tiles": tiles,
+                        },
+                        world_x,
+                        world_y,
+                        clearance_radius,
+                    ):
+                        continue
+                    if best is None or dist_sq < best[0]:
+                        best = (dist_sq, col, row)
+            if best is not None:
+                break
+        chosen = best or best_fallback
+        if chosen is None:
+            index = len(positions)
+            col, row = fallback[index] if index < len(fallback) else (width // 2, height // 2)
+            positions.append(cell_to_world(col, row, width, height, tile_scale))
+            continue
+        used.add((chosen[1], chosen[2]))
+        positions.append(cell_to_world(chosen[1], chosen[2], width, height, tile_scale))
+    return positions
+
+
+def is_walkable(map_state: dict, x: float, y: float, radius: float = PLAYER_COLLISION_RADIUS) -> bool:
+    width = map_state.get("width", 0)
+    height = map_state.get("height", 0)
+    tile_scale = map_state.get("tile_scale", MAP_TILE_SCALE)
+    tiles = map_state.get("tiles", bytearray())
+    if width <= 0 or height <= 0 or not tiles:
+        return True
+
+    offsets = [(0.0, 0.0)]
+    if radius > 0.0:
+        offsets.extend([
+            (radius, 0.0), (-radius, 0.0),
+            (0.0, radius), (0.0, -radius),
+            (radius, radius), (radius, -radius),
+            (-radius, radius), (-radius, -radius),
+        ])
+
+    for dx, dy in offsets:
+        col = int(math.floor(((x + dx) / tile_scale) + (width / 2.0)))
+        row = int(math.floor(((y + dy) / tile_scale) + (height / 2.0)))
+        if col < 0 or row < 0 or col >= width or row >= height:
+            return False
+        if tiles[row * width + col]:
+            return False
+    return True
+
+
+def resolve_move(map_state: dict, current_x: float, current_y: float, desired_x: float, desired_y: float):
+    if is_walkable(map_state, desired_x, desired_y):
+        return desired_x, desired_y
+    if is_walkable(map_state, desired_x, current_y):
+        return desired_x, current_y
+    if is_walkable(map_state, current_x, desired_y):
+        return current_x, desired_y
+    if not is_walkable(map_state, current_x, current_y):
+        return current_x, current_y
+
+    low_x, low_y = current_x, current_y
+    high_x, high_y = desired_x, desired_y
+    for _ in range(10):
+        mid_x = (low_x + high_x) / 2.0
+        mid_y = (low_y + high_y) / 2.0
+        if is_walkable(map_state, mid_x, mid_y):
+            low_x, low_y = mid_x, mid_y
+        else:
+            high_x, high_y = mid_x, mid_y
+    return low_x, low_y
+
+
+def spawn_pose(map_state: dict, node_index: int, radius: float):
+    positions = map_state.get("spawn_positions", [])
+    if node_index < len(positions):
+        angle = SPAWN_ANGLES[node_index] if node_index < len(SPAWN_ANGLES) else 0.0
+        x, y = positions[node_index]
+        return x, y, angle
+    angle = node_index * math.pi * 2 / 4
+    return radius * math.cos(angle), radius * math.sin(angle), angle
 
 
 class ManualController:
@@ -87,15 +264,7 @@ class ManualController:
         return actions
 
 
-def clamp_to_arena(x, y, radius=ARENA_RADIUS):
-    dist = math.hypot(x, y)
-    if dist <= radius or dist == 0.0:
-        return x, y
-    scale = radius / dist
-    return x * scale, y * scale
-
-
-def apply_manual_actions(x, y, angle, actions):
+def apply_manual_actions(x, y, angle, actions, map_state):
     shoot_now = False
     for action in actions:
         if action == "turn_left":
@@ -103,13 +272,13 @@ def apply_manual_actions(x, y, angle, actions):
         elif action == "turn_right":
             angle += MANUAL_TURN_STEP
         elif action == "forward":
-            x += MANUAL_MOVE_STEP * math.cos(angle)
-            y += MANUAL_MOVE_STEP * math.sin(angle)
-            x, y = clamp_to_arena(x, y)
+            desired_x = x + MANUAL_MOVE_STEP * math.cos(angle)
+            desired_y = y + MANUAL_MOVE_STEP * math.sin(angle)
+            x, y = resolve_move(map_state, x, y, desired_x, desired_y)
         elif action == "backward":
-            x -= MANUAL_MOVE_STEP * math.cos(angle)
-            y -= MANUAL_MOVE_STEP * math.sin(angle)
-            x, y = clamp_to_arena(x, y)
+            desired_x = x - MANUAL_MOVE_STEP * math.cos(angle)
+            desired_y = y - MANUAL_MOVE_STEP * math.sin(angle)
+            x, y = resolve_move(map_state, x, y, desired_x, desired_y)
         elif action == "shoot":
             shoot_now = True
     return x, y, angle, shoot_now
@@ -124,19 +293,21 @@ def apply_control_command(tag: str, command: dict, current_mode: str, node_index
     if target_index is not None:
         try:
             if int(target_index) != node_index:
-                return current_mode, False
+                return current_mode, False, None
         except (TypeError, ValueError):
-            return current_mode, False
+            return current_mode, False, None
 
     cmd = command.get("cmd")
     if cmd == "set_mode":
         requested = normalize_mode(str(command.get("mode", "")).lower())
         if requested in ("auto", "manual") and requested != current_mode:
             print(f"{tag} mode switch requested: {current_mode} -> {requested}")
-            return requested, False
+            return requested, False, None
     elif cmd == "restart":
-        return current_mode, True
-    return current_mode, False
+        return current_mode, True, None
+    elif cmd == "set_map":
+        return current_mode, False, str(command.get("map", DEFAULT_MAP_NAME))
+    return current_mode, False, None
 
 
 def run_node(server_ip, server_port, player_id, node_index,
@@ -146,9 +317,9 @@ def run_node(server_ip, server_port, player_id, node_index,
     radius         = ARENA_RADIUS
     rotation_speed = 0.05 + node_index * 0.06  # runner=0.05, tagger=0.11 rad/tick
     shoot_freq     = 20  + node_index * 10
-    angle          = node_index * math.pi * 2 / 4
-    x              = radius * math.cos(angle)
-    y              = radius * math.sin(angle)
+    current_map_name = DEFAULT_MAP_NAME
+    map_state = load_local_map(current_map_name)
+    x, y, angle = spawn_pose(map_state, node_index, radius)
 
     tag = f"[NODE {player_id}]"
 
@@ -167,6 +338,8 @@ def run_node(server_ip, server_port, player_id, node_index,
 
     sock    = None
     playing = False   # start in WAITING; first game needs explicit RESTART
+    have_authoritative_state = False
+    last_authoritative_state_at = 0.0
     seq               = 0
     tick              = 0
     normalized_mode = normalize_mode(mode)
@@ -212,8 +385,14 @@ def run_node(server_ip, server_port, player_id, node_index,
                             command = json.loads(msg["data"])
                         except Exception:
                             continue
-                        next_mode, should_restart = apply_control_command(tag, command, normalized_mode, node_index)
+                        next_mode, should_restart, next_map = apply_control_command(tag, command, normalized_mode, node_index)
                         switch_mode(next_mode)
+                        if next_map:
+                            current_map_name = next_map
+                            map_state = load_local_map(current_map_name)
+                            x, y, angle = spawn_pose(map_state, node_index, radius)
+                            have_authoritative_state = False
+                            last_authoritative_state_at = 0.0
                     print(f"{tag} ── GAME OVER — waiting for ▶ RESTART...")
                     while True:
                         msg = ps.get_message()
@@ -223,8 +402,15 @@ def run_node(server_ip, server_port, player_id, node_index,
                             except Exception:
                                 command = None
                             if command:
-                                next_mode, should_restart = apply_control_command(tag, command, normalized_mode, node_index)
+                                next_mode, should_restart, next_map = apply_control_command(tag, command, normalized_mode, node_index)
                                 switch_mode(next_mode)
+                                if next_map:
+                                    current_map_name = next_map
+                                    map_state = load_local_map(current_map_name)
+                                    x, y, angle = spawn_pose(map_state, node_index, radius)
+                                    have_authoritative_state = False
+                                    last_authoritative_state_at = 0.0
+                                    print(f"{tag} map switched to {current_map_name}")
                                 if should_restart:
                                     print(f"{tag} restart received — rejoining in {RESTART_DELAY_S}s...")
                                     time.sleep(RESTART_DELAY_S)
@@ -239,11 +425,7 @@ def run_node(server_ip, server_port, player_id, node_index,
                     sock.close()
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 sock.settimeout(0.05)
-                # Reset angle to spread starting position so nodes begin far apart,
-                # not both at (0,0) which would trigger an instant tag.
-                angle = node_index * math.pi * 2 / 4
-                x = radius * math.cos(angle)
-                y = radius * math.sin(angle)
+                x, y, angle = spawn_pose(map_state, node_index, radius)
                 pkt = pack_node_packet(
                     PKT_REGISTER, seq=0,
                     x=x, y=y, angle=angle, flags=0,
@@ -254,6 +436,8 @@ def run_node(server_ip, server_port, player_id, node_index,
                 seq     = 1
                 tick    = 0
                 playing = True
+                have_authoritative_state = False
+                last_authoritative_state_at = 0.0
 
             # ── PLAYING: one tick ─────────────────────────────────────────────
             tick_start = time.time()
@@ -269,10 +453,19 @@ def run_node(server_ip, server_port, player_id, node_index,
                         command = json.loads(msg["data"])
                     except Exception:
                         continue
-                    next_mode, should_restart = apply_control_command(tag, command, normalized_mode, node_index)
+                    next_mode, should_restart, next_map = apply_control_command(tag, command, normalized_mode, node_index)
                     switch_mode(next_mode)
+                    if next_map:
+                        current_map_name = next_map
+                        map_state = load_local_map(current_map_name)
+                        x, y, angle = spawn_pose(map_state, node_index, radius)
+                        have_authoritative_state = False
+                        last_authoritative_state_at = 0.0
+                        print(f"{tag} map switched to {current_map_name}")
                     if should_restart:
                         playing = False
+                        have_authoritative_state = False
+                        last_authoritative_state_at = 0.0
                         break
 
             # receive all queued broadcasts; stop playing if FLAG_TAGGED seen
@@ -285,14 +478,19 @@ def run_node(server_ip, server_port, player_id, node_index,
                             state_names = ",".join(
                                 decode_flag_names(p["flags"], direction="server_to_client")
                             ) or "none"
+                            if p["player_id"] == node_index + 1:
+                                x = p["x"]
+                                y = p["y"]
+                                angle = p["angle"]
+                                have_authoritative_state = True
+                                last_authoritative_state_at = time.monotonic()
                             if p["flags"] & FLAG_MATCH_END:
                                 print(f"{tag} P{p['player_id']} state={state_names} — stopping")
                                 playing = False
-                            elif p["flags"] & FLAG_TAGGED:
-                                print(f"{tag} P{p['player_id']} state={state_names} — resetting position")
-                                angle = node_index * math.pi * 2 / 4
-                                x = radius * math.cos(angle)
-                                y = radius * math.sin(angle)
+                                have_authoritative_state = False
+                                last_authoritative_state_at = 0.0
+                            elif p["player_id"] == node_index + 1 and p["flags"] & FLAG_TAGGED:
+                                print(f"{tag} P{p['player_id']} state={state_names}")
                 except socket.timeout:
                     break
                 except Exception as e:
@@ -304,15 +502,30 @@ def run_node(server_ip, server_port, player_id, node_index,
                 sock = None
                 continue   # → WAITING
 
+            if (
+                have_authoritative_state
+                and time.monotonic() - last_authoritative_state_at > AUTHORITATIVE_STATE_TIMEOUT_S
+            ):
+                have_authoritative_state = False
+
             # send position update
-            if normalized_mode == "manual":
+            if not have_authoritative_state:
+                input_flags = 0
+            elif normalized_mode == "manual":
                 actions = manual_controller.read_actions() if manual_controller else []
-                x, y, angle, shoot_now = apply_manual_actions(x, y, angle, actions)
+                x, y, angle, shoot_now = apply_manual_actions(x, y, angle, actions, map_state)
                 input_flags = client_input_flags(shooting=shoot_now)
             else:
-                angle += rotation_speed
-                x = radius * math.cos(angle)
-                y = radius * math.sin(angle)
+                move_speed = radius * rotation_speed
+                desired_x = x + move_speed * math.cos(angle)
+                desired_y = y + move_speed * math.sin(angle)
+                next_x, next_y = resolve_move(map_state, x, y, desired_x, desired_y)
+                if next_x == x and next_y == y:
+                    angle += rotation_speed * 2.5
+                    desired_x = x + move_speed * math.cos(angle)
+                    desired_y = y + move_speed * math.sin(angle)
+                    next_x, next_y = resolve_move(map_state, x, y, desired_x, desired_y)
+                x, y = next_x, next_y
                 input_flags = client_input_flags(shooting=(tick % shoot_freq == 0))
 
             pkt = pack_node_packet(

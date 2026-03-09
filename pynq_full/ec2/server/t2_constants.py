@@ -19,6 +19,8 @@ GHOST_SPEED      = 1.2    # world units per tick (~24 wu/s at 20 Hz — clearly 
 # Runner collects bits by proximity; all collected = runner wins.
 
 BIT_COLLECT_RADIUS = 10.0   # world units — smaller than TAG_RADIUS so collecting is precise
+PLAYER_COLLISION_RADIUS = 2.5
+SPAWN_CLEARANCE_RADIUS = 3.25
 
 # ── Timing (seconds) ──────────────────────────────────────────────────────────
 
