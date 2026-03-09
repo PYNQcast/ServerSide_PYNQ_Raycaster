@@ -279,7 +279,7 @@ def run_node(server_ip, server_port, player_id, node_index,
             while playing:
                 try:
                     data, _ = sock.recvfrom(1024)
-                    pkt_type, _, _, players = unpack_server_packet(data)
+                    pkt_type, _, _, _, players, _ = unpack_server_packet(data)
                     if pkt_type == PKT_GAME_STATE:
                         for p in players:
                             state_names = ",".join(
