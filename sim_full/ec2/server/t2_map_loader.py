@@ -1,20 +1,27 @@
-# t2_map_loader.py — Map file loading for the pynq_full server.
+# t2_map_loader.py — Map file loading for the sim_full server.
 #
-# Kept separate so GameTick stays a pure orchestrator with no file-I/O logic.
-# Map state is a plain mutable dict so the control listener can hot-swap it
-# without touching GameTick or PacketHandler internals.
+# Loads from the shared pynq_full/ec2/maps/ directory so sim and PYNQ
+# always use the same map files without duplication.
+# Map state is a plain mutable dict so the control listener can hot-swap it.
 
 import os
 from t2_constants import MAP_TILE_SCALE
 
-DEFAULT_MAP_PATH = os.path.join(os.path.dirname(__file__), '..', '..', 'maps', 'chase.txt')
+# Maps live in pynq_full/ec2/maps/ — two levels up from sim_full/ec2/server/
+_HERE     = os.path.dirname(__file__)
+_MAPS_DIR = os.path.normpath(os.path.join(_HERE, '..', '..', '..', 'pynq_full', 'ec2', 'maps'))
 
-# Parse a text map file.
-# Tile key: '#' = wall (1 in tiles), 'B' = bit spawn (0 in tiles, world pos recorded),
-#           anything else = empty (0).
-# Returns dict: {width, height, tile_scale, tiles, name, bits}
-#   bits: list of (world_x, world_y) — centres of 'B' cells, origin at map centre.
+DEFAULT_MAP_PATH = os.path.join(_MAPS_DIR, 'chase.txt')
+
+
 def load_map(path: str) -> dict:
+    """Parse a text map file.
+
+    Tile key: '#' = wall, 'B' = bit spawn (floor tile, world pos recorded),
+              anything else = empty.
+    Returns dict: {width, height, tile_scale, tiles, name, bits}
+      bits: list of (world_x, world_y) — centres of 'B' cells, origin at map centre.
+    """
     rows = []
     try:
         with open(path) as f:
@@ -33,7 +40,6 @@ def load_map(path: str) -> dict:
             for col_idx, c in enumerate(row):
                 tiles.append(1 if c == '#' else 0)
                 if c == 'B':
-                    # Centre of tile in world space (map origin at centre)
                     world_x = (col_idx - width  / 2.0 + 0.5) * ts
                     world_y = (row_idx - height / 2.0 + 0.5) * ts
                     bits.append((world_x, world_y))

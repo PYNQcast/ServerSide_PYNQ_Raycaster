@@ -5,8 +5,18 @@ import math
 
 TAG_RADIUS       = 20.0   # world-unit proximity that counts as a tag
 MATCH_PLAYERS    = 2      # players required to start a match
-MAX_PLAYERS      = 2      # hard cap — extra registrations are rejected
+MAX_PLAYERS      = 4      # raised to 2 humans + up to 3 ghosts (tagger slots)
 TAGS_TO_WIN      = 2      # runner must be tagged this many times to end the match
+
+# ── Ghost tagger (server-controlled AI) ──────────────────────────────────────
+# Spawned when both humans declare RUNNER — max 3 to keep the match fair.
+
+MAX_GHOSTS       = 3
+GHOST_SPEED      = 3.0    # world units per tick — slightly slower than player max
+
+# ── Bits (GAME_MODE_CHASE_BITS) ───────────────────────────────────────────────
+
+BIT_COLLECT_RADIUS = 10.0   # world units — smaller than TAG_RADIUS
 
 # ── Timing (seconds) ──────────────────────────────────────────────────────────
 
@@ -25,6 +35,10 @@ GRACE_TICKS      = 10     # 0.5 s at 20 Hz
 # Spawn angles mirror node_simulator.py (π/2 apart on a circle of radius 50).
 ORBIT_RADIUS     = 50.0
 SPAWN_ANGLES     = [0.0, math.pi / 2]   # player_id 1 → 0 rad, player_id 2 → π/2 rad
+
+# ── Map ───────────────────────────────────────────────────────────────────────
+
+MAP_TILE_SCALE   = 8      # world units per tile — must match monitor TILE_SCALE
 
 # ── Redis keys ────────────────────────────────────────────────────────────────
 

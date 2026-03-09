@@ -7,17 +7,19 @@
 # a clean orchestrator with no protocol-level logic.
 
 import asyncio
+import math
 import time
 
 from protocol import (
     # constants
     NODE_SIZE, PKT_REGISTER, CLIENT_INPUT_FLAGS, SERVER_STATE_FLAGS, MOVEMENT_MODE_INTENT_ONLY,
+    FLAG_GHOST,
     # functions
     decode_movement_mode, unpack_node_packet,
 )
 from game_logic.anticheat import validate_position, DEFAULT_MAX_SPEED_PER_TICK
 from game_logic.match_state import MatchState
-from t2_constants import MAX_PLAYERS, MATCH_PLAYERS, NODE_TIMEOUT_S
+from t2_constants import MAX_PLAYERS, MATCH_PLAYERS, NODE_TIMEOUT_S, MAX_GHOSTS
 
 
 # Drains the inbound packet queue and maintains the player registry
@@ -122,8 +124,9 @@ class PacketHandler:
     def _register_player(self, addr):
         if self.state.is_in_lockout():
             return  # nodes still winding down after match end — silently reject
-        if len(self.state.players) >= MAX_PLAYERS:
-            print(f"[T2] rejected {addr} — already at {MAX_PLAYERS} players")
+        human_count = sum(1 for a in self.state.players if not str(a).startswith("ghost:"))
+        if human_count >= MATCH_PLAYERS:
+            print(f"[T2] rejected {addr} — already at {MATCH_PLAYERS} human players")
             return
 
         self.state.clear_lockout()
@@ -140,18 +143,56 @@ class PacketHandler:
         print(f"[T2] registered player {player_id} from {addr} "
               f"(total: {len(self.state.players)})")
 
-        if len(self.state.players) == MATCH_PLAYERS and not self.state.match_started:
+        human_count = sum(1 for a in self.state.players if not str(a).startswith("ghost:"))
+        if human_count == MATCH_PLAYERS and not self.state.match_started:
             self.state.match_started = True
             self.state.match_tick    = 0
             self._on_match_start()
+
+    # ── Ghost management ──────────────────────────────────────────────────────
+    # Ghosts are server-driven players; their count can be adjusted at runtime
+
+    def _spawn_ghost(self):
+        ghost_count = sum(1 for a in self.state.players if str(a).startswith("ghost:"))
+        if ghost_count >= MAX_GHOSTS:
+            return
+        ghost_addr = f"ghost:{ghost_count + 1}"
+        ghost_id   = len(self.state.players) + 1
+        angle      = math.pi / 2
+        self.state.players[ghost_addr] = {
+            "player_id":        ghost_id,
+            "x":                0.0, "y": 0.0, "angle": angle,
+            "flags":            FLAG_GHOST,
+            "last_seen":        time.monotonic(),
+            "last_seq":         None,
+            "movement_mode":    0,
+            "protocol_version": 0,
+        }
+        print(f"[T2] spawned ghost tagger (player_id={ghost_id}) at {ghost_addr}")
+
+    def set_ghost_count(self, target: int):
+        """Spawn or remove ghosts to reach the target count."""
+        target = max(0, min(target, MAX_GHOSTS))
+        current = [a for a in self.state.players if str(a).startswith("ghost:")]
+        while len(current) < target:
+            self._spawn_ghost()
+            current = [a for a in self.state.players if str(a).startswith("ghost:")]
+        while len(current) > target:
+            addr = current.pop()
+            p = self.state.players.pop(addr, None)
+            if p:
+                self.write_queue.put({"op": "del", "key": f"player:{p['player_id']}"})
+                print(f"[T2] removed ghost {addr}")
 
     # ── Node eviction ─────────────────────────────────────────────────────────
     # Remove nodes that have gone silent, aborting any active match
 
     async def evict_timed_out_nodes(self):
         now     = time.monotonic()
+        # Ghosts are server-driven — never time out
         evicted = [addr for addr, p in self.state.players.items()
-                   if now - p["last_seen"] > NODE_TIMEOUT_S]
+                   if not str(addr).startswith("ghost:")
+                   and now - p["last_seen"] > NODE_TIMEOUT_S]
         for addr in evicted:
             p = self.state.players.pop(addr)
             print(f"[T2] evicted player {p['player_id']} from {addr} "

@@ -7,6 +7,7 @@
 #
 # This module is a thin orchestrator — game logic lives in:
 #   t2_constants           — tunable constants
+#   t2_map_loader          — map file parsing and hot-swap dict
 #   game_logic.match_state  — all mutable match fields + reset helpers
 #   t2_packet_handler      — inbound UDP processing, player registration, eviction
 #   game_logic.core_logic   — per-tick tag/match-end rules
@@ -14,16 +15,23 @@
 
 import asyncio
 import json
+import os
 import time
 import threading
 
 import redis as redislib
 
 from t2_constants import ORBIT_RADIUS, CONTROL_CHANNEL
+from t2_map_loader import load_map, DEFAULT_MAP_PATH
 from game_logic.match_state import MatchState
 from t2_packet_handler import PacketHandler
 from game_logic.core_logic import CoreLogic
 from t2_redis_io import RedisIO
+
+# Maps directory is two levels above this file's location in pynq_full
+_MAPS_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', '..', 'pynq_full', 'ec2', 'maps')
+)
 
 
 class GameTick:
@@ -34,8 +42,8 @@ class GameTick:
         self.interval        = 1.0 / tick_rate
         self.tick_count      = 0
 
-        # Shared match state — passed by reference into every sub-module
-        self.state = MatchState()
+        self.map_state = load_map(DEFAULT_MAP_PATH)  # mutable dict; hot-swappable
+        self.state     = MatchState()
 
         # Sub-modules wired up with callbacks so they stay decoupled
         self.redis_io = RedisIO(self.state, broadcast_queue, write_queue)
@@ -75,7 +83,7 @@ class GameTick:
     # ── Redis control channel ─────────────────────────────────────────────────
 
     def _start_control_subscriber(self):
-        # Background thread: subscribe to game:control for force_end commands
+        # Background thread: subscribe to game:control for force_end, set_map, set_ghost_count
         def _subscribe():
             rc  = redislib.Redis(host="127.0.0.1", port=6379, decode_responses=True)
             pub = rc.pubsub()
@@ -87,16 +95,29 @@ class GameTick:
                     data = json.loads(msg["data"])
                 except Exception:
                     continue
-                if data.get("cmd") == "force_end":
+                cmd = data.get("cmd")
+                if cmd == "force_end":
                     self.logic._force_end_flag = True
+                elif cmd == "set_ghost_count":
+                    count = int(data.get("count", 0))
+                    self.packets.set_ghost_count(count)
+                elif cmd == "set_map":
+                    name    = data.get("map", "chase")
+                    new_map = load_map(os.path.join(_MAPS_DIR, f"{name}.txt"))
+                    if new_map["width"] > 0:
+                        self.map_state.update(new_map)
+                        print(f"[T2] map swapped to '{name}' — takes effect on next registration")
         threading.Thread(target=_subscribe, daemon=True).start()
 
     # ── Match event callbacks ─────────────────────────────────────────────────
 
     def _on_match_start(self):
-        asyncio.ensure_future(self._push_event(
-            {"event": "match_start", "players": 2}
-        ))
+        bits = [[round(b[0], 2), round(b[1], 2)] for b in self.state.bits]
+        asyncio.ensure_future(self._push_event({
+            "event": "match_start", "players": 2,
+            "game_mode": self.state.game_mode,
+            "bits": bits,
+        }))
 
     def _on_match_abort(self):
         asyncio.ensure_future(self._push_event({"event": "match_aborted"}))

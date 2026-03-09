@@ -7,14 +7,16 @@
 
 
 import asyncio
+import math
 import time
 
-from protocol import FLAG_TAGGED, FLAG_MATCH_END
+from protocol import FLAG_TAGGED, FLAG_MATCH_END, GAME_MODE_CHASE_BITS
 from game_logic.anticheat import Anticheat
 from game_logic.match_state import MatchState
 from t2_constants import (
     TAG_RADIUS, TAGS_TO_WIN,
     TAG_FLASH_S, MATCH_END_HOLD_S, LOCKOUT_S,
+    BIT_COLLECT_RADIUS, GHOST_SPEED,
 )
 
 
@@ -34,11 +36,68 @@ class CoreLogic:
 
     async def tick(self):
         await self._check_match_end_hold()
+        self._move_ghosts()
         await self._check_proximity()
+        await self._check_bits()
         await self._check_match_end()
         self._clear_tag_flash()
         if self.state.match_started and not self.state.match_ended:
             self.state.match_tick += 1
+
+    # ── Ghost AI movement ─────────────────────────────────────────────────────
+    # Each tick move every ghost tagger straight toward the runner at GHOST_SPEED
+
+    def _move_ghosts(self):
+        if not self.state.match_started or self.state.match_ended:
+            return
+        runner = self.state.runner()
+        if runner is None:
+            return
+        rx, ry = runner["x"], runner["y"]
+        for addr, p in self.state.players.items():
+            if not str(addr).startswith("ghost:"):
+                continue
+            dx = rx - p["x"]
+            dy = ry - p["y"]
+            dist = math.hypot(dx, dy)
+            if dist < 0.01:
+                continue
+            step = min(GHOST_SPEED, dist)
+            p["x"] += (dx / dist) * step
+            p["y"] += (dy / dist) * step
+
+    # ── Bit collection ────────────────────────────────────────────────────────
+    # Runner collects bits in CHASE_BITS mode; all-collected → match end
+
+    async def _check_bits(self):
+        if self.state.game_mode != GAME_MODE_CHASE_BITS:
+            return
+        if not self.state.match_started or self.state.match_ended:
+            return
+        runner = self.state.runner()
+        if runner is None:
+            return
+        rx, ry = runner["x"], runner["y"]
+        for i, bit in enumerate(self.state.bits):
+            if not bit[2]:   # already collected
+                continue
+            dist = self._anticheat.distance_between(rx, ry, bit[0], bit[1])
+            if dist >= BIT_COLLECT_RADIUS:
+                continue
+            bit[2] = False
+            self.state.bits_mask &= ~(1 << i)
+            print(f"[T2] runner collected bit {i} (dist={dist:.2f}) "
+                  f"mask=0x{self.state.bits_mask:04X}")
+            await self._on_event({
+                "event":     "bit_collected",
+                "bit_id":    i,
+                "runner_id": runner["player_id"],
+                "bits_mask": self.state.bits_mask,
+            })
+            # All bits collected → trigger match end next cycle
+            if self.state.bits_mask == 0:
+                print("[T2] all bits collected — match ending")
+                self.state.tag_count = TAGS_TO_WIN   # satisfy _check_match_end threshold
 
     # ── Tag flash expiry ──────────────────────────────────────────────────────
     # Clear FLAG_TAGGED after TAG_FLASH_S so the next tag can be registered

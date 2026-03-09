@@ -1,11 +1,24 @@
+# t2_constants.py — Tunable game and server constants for T2 GameTick.
 import math
 
 # ── Tag / match rules ─────────────────────────────────────────────────────────
 
 TAG_RADIUS       = 20.0
 MATCH_PLAYERS    = 2
-MAX_PLAYERS      = 2
+MAX_PLAYERS      = 4      # raised to 2 humans + up to 3 ghosts (tagger slots)
 TAGS_TO_WIN      = 2
+
+# ── Ghost tagger (server-controlled AI) ──────────────────────────────────────
+# Spawned when both humans declare RUNNER — max 3 to keep the match fair.
+
+MAX_GHOSTS       = 3
+GHOST_SPEED      = 3.0    # world units per tick — slightly slower than player max
+
+# ── Bits (GAME_MODE_CHASE_BITS) ───────────────────────────────────────────────
+# Bit positions are defined in the map file ('B' tile type).
+# Runner collects bits by proximity; all collected = runner wins.
+
+BIT_COLLECT_RADIUS = 10.0   # world units — smaller than TAG_RADIUS so collecting is precise
 
 # ── Timing (seconds) ──────────────────────────────────────────────────────────
 

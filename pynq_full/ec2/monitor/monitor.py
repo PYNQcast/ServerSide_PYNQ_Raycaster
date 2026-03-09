@@ -54,7 +54,7 @@ _service_cache  = {}
 _service_last_fetch = 0.0
 _service_message = "controls run on EC2 only; node simulators still start locally"
 _replay_cache = {}
-_active_map = "level1"   # tracks which map the server is using
+_active_map = "chase"    # tracks which map the server is using
 
 def _as_int(value, default=0):
     try:
@@ -255,6 +255,10 @@ def handle_control_command(cmd: str):
             r.publish("game:control", payload)
             _active_map = map_name
             _service_message = f"map set to {map_name} (takes effect next match)"
+    elif cmd.startswith("set_ghosts_"):
+        count = int(cmd.split("_")[-1])
+        r.publish("game:control", json.dumps({"cmd": "set_ghost_count", "count": count}))
+        _service_message = f"ghost count → {count} sent"
     elif cmd == "restart_stack":
         _stop_service("sidecar")
         _stop_service("server")
@@ -353,6 +357,9 @@ def collect_state():
             "flags": int(raw.get("flags", 0)),
         })
 
+    game_raw  = r.hgetall("game:state")
+    bits_mask = int(game_raw.get("bits_mask", 0xFFFF)) if game_raw else 0xFFFF
+
     info    = r.info("stats")
     mem     = r.info("memory")
     clients = r.info("clients")
@@ -362,6 +369,13 @@ def collect_state():
     parsed     = [json.loads(e) for e in events_raw if e]
     match_events = current_match_events(parsed)
     matches = poll_dynamodb()
+
+    # Extract bit positions from the current match's match_start event
+    bits_positions = []
+    for ev in match_events:
+        if ev.get("event") == "match_start" and ev.get("bits"):
+            bits_positions = ev["bits"]
+            break
 
     n_clients = _as_int(clients.get("connected_clients", 0))
     blocked   = _as_int(clients.get("blocked_clients", 0))
@@ -397,8 +411,10 @@ def collect_state():
             "ops_per_sec":     info.get("instantaneous_ops_per_sec", 0),
             "ddb_matches":     len(matches),
         },
-        "events":  match_events[:20],   # newest-first, current match only
-        "matches": matches,
+        "events":     match_events[:20],   # newest-first, current match only
+        "matches":    matches,
+        "bits":       bits_positions,      # [[world_x, world_y], ...] from match_start
+        "bits_mask":  bits_mask,           # bitmask of active bits this tick
         "active_map": _active_map,
     }
 

@@ -10,6 +10,7 @@ import json
 import struct
 import time
 
+from protocol import GAME_STATE_EXT_FMT
 from t2_constants import REPLAY_KEY, EVENTS_KEY
 from game_logic.match_state import MatchState
 
@@ -27,21 +28,28 @@ class RedisIO:
     #
     # Wire format:
     #   header:     <HHI  — pkt_type=0x0002, tick_seq (16-bit), timestamp_ms (32-bit)
+    #   ext header: <BBH  — game_mode (B), player_count (B), bits_mask (H)
     #   per-player: <BfffB — player_id, x, y, angle, flags
+    #
+    # Broadcasts go to human nodes only (ghost addresses are server-internal).
 
     async def push_broadcast(self, tick_count: int):
         if not self.state.players:
             return
 
+        players     = list(self.state.players.values())
+        human_addrs = [a for a in self.state.players if not str(a).startswith("ghost:")]
         header  = struct.pack('<HHI', 0x0002, tick_count & 0xFFFF,
                               int(time.time() * 1000) & 0xFFFFFFFF)
+        ext     = struct.pack(GAME_STATE_EXT_FMT,
+                              self.state.game_mode, len(players), self.state.bits_mask & 0xFFFF)
         entries = b"".join(
             struct.pack('<BfffB', p["player_id"], p["x"], p["y"], p["angle"], p["flags"])
-            for p in self.state.players.values()
+            for p in players
         )
         await self.broadcast_queue.put({
-            "data":    header + entries,
-            "targets": list(self.state.players.keys()),
+            "data":    header + ext + entries,
+            "targets": human_addrs,
         })
 
     # ── Redis persistence ─────────────────────────────────────────────────────
@@ -58,6 +66,15 @@ class RedisIO:
                     "flags": p["flags"],
                 },
             })
+        # Write match-level state so monitor can read bits_mask per tick
+        self.write_queue.put({
+            "op": "hset", "key": "game:state",
+            "mapping": {
+                "game_mode":  self.state.game_mode,
+                "bits_mask":  self.state.bits_mask,
+                "match_tick": match_tick,
+            },
+        })
         if self.state.match_started and self.state.players:
             self.write_queue.put({
                 "op":    "lpush",
@@ -92,5 +109,7 @@ class RedisIO:
             "server_tick":  tick_count,
             "match_tick":   match_tick,
             "match_ended":  self.state.match_ended,
+            "game_mode":    self.state.game_mode,
+            "bits_mask":    self.state.bits_mask,
             "players":      players,
         }

@@ -93,6 +93,9 @@ class GameTick:
                 cmd = data.get("cmd")
                 if cmd == "force_end":
                     self.logic._force_end_flag = True
+                elif cmd == "set_ghost_count":
+                    count = int(data.get("count", 0))
+                    self.packets.set_ghost_count(count)
                 elif cmd == "set_map":
                     name    = data.get("map", "level1")
                     new_map = load_map(os.path.join(maps_dir, f"{name}.txt"))
@@ -108,7 +111,12 @@ class GameTick:
     # ── Match event callbacks ─────────────────────────────────────────────────
 
     def _on_match_start(self):
-        asyncio.ensure_future(self._push_event({"event": "match_start", "players": 2}))
+        bits = [[round(b[0], 2), round(b[1], 2)] for b in self.state.bits]
+        asyncio.ensure_future(self._push_event({
+            "event": "match_start", "players": 2,
+            "game_mode": self.state.game_mode,
+            "bits": bits,
+        }))
 
     def _on_match_abort(self):
         asyncio.ensure_future(self._push_event({"event": "match_aborted"}))

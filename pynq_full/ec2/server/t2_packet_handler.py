@@ -18,11 +18,13 @@ from protocol import (
     # constants
     NODE_SIZE, PKT_REGISTER, PKT_ACK, HEADER_FMT,
     CLIENT_INPUT_FLAGS, SERVER_STATE_FLAGS, MOVEMENT_MODE_INTENT_ONLY,
+    ROLE_ANY, ROLE_RUNNER, ROLE_TAGGER,
+    GAME_MODE_CHASE, GAME_MODE_CHASE_BITS, FLAG_GHOST,
     # functions
-    decode_movement_mode, unpack_node_packet, pack_map_packet,
+    decode_movement_mode, unpack_node_packet, pack_map_packet, pack_bits_init_packet,
 )
 from game_logic.anticheat import Anticheat, DEFAULT_MAX_SPEED_PER_TICK
-from t2_constants import MAX_PLAYERS, MATCH_PLAYERS, NODE_TIMEOUT_S
+from t2_constants import MAX_PLAYERS, MATCH_PLAYERS, NODE_TIMEOUT_S, MAX_GHOSTS
 from game_logic.match_state import MatchState
 
 
@@ -82,9 +84,10 @@ class PacketHandler:
         movement_mode    = pkt["movement_mode"]
         protocol_version = pkt["protocol_version"]
 
-        # Auto-register unknown address before any state reads so we don't drop P1
+        # Auto-register unknown address — pass preferred_role from the reserved byte
         if addr not in self.state.players:
-            self._register_player(addr, x, y, angle)
+            self._register_player(addr, x, y, angle,
+                                  preferred_role=pkt.get("reserved", ROLE_ANY))
 
         if addr not in self.state.players:
             return  # registration rejected (lockout / full) — discard packet
@@ -132,39 +135,135 @@ class PacketHandler:
         p["flags"] = (p["flags"] & SERVER_STATE_FLAGS) | client_input
 
     # ── Player registration ───────────────────────────────────────────────────
-    # Assign player_id, ACK the node, send the map, start match when room is full
+    # Record preferred role, then when both humans are registered assign roles
+    # and start the match (spawning a ghost if both chose runner).
 
-    def _register_player(self, addr, x=0.0, y=0.0, angle=0.0):
+    def _register_player(self, addr, x=0.0, y=0.0, angle=0.0, preferred_role=ROLE_ANY):
         if self.state.is_in_lockout():
-            return  # nodes still winding down after match end — silently reject
-        if len(self.state.players) >= MAX_PLAYERS:
-            print(f"[T2] rejected {addr} — already at {MAX_PLAYERS} players")
+            return
+        # Count only human players (not ghost sentinels) for the cap check
+        human_count = sum(1 for a in self.state.players if not str(a).startswith("ghost:"))
+        if human_count >= MATCH_PLAYERS:
+            print(f"[T2] rejected {addr} — already at {MATCH_PLAYERS} human players")
             return
 
         self.state.clear_lockout()
-        player_id = self.state.next_id
-        self.state.next_id += 1
+        self.state.pending_roles[addr] = preferred_role
+
+        # Placeholder player_id=0 until role assignment resolves both players
         self.state.players[addr] = {
-            "player_id":        player_id,
+            "player_id":        0,
             "x": x, "y": y, "angle": angle, "flags": 0,
             "last_seen":        time.monotonic(),
-            "last_seq":         None,   # set on first packet; used for sequence validation
+            "last_seq":         None,
             "movement_mode":    0,
             "protocol_version": 0,
         }
-        print(f"[T2] registered player {player_id} from {addr} "
-              f"(total: {len(self.state.players)})")
 
-        # ACK assigns the player_id — node must wait for this before sending
-        # STATE_UPDATEs and uses it to determine its role (RUNNER=1 / TAGGER=2).
-        self._send_ack(addr, player_id)
-        # MAP streams tile data into node DRAM for the FPGA raycaster
-        self._send_map(addr)
+        human_count = sum(1 for a in self.state.players if not str(a).startswith("ghost:"))
+        if human_count < MATCH_PLAYERS:
+            print(f"[T2] player queued from {addr} (waiting for {MATCH_PLAYERS - human_count} more)")
+            return
 
-        if len(self.state.players) == MATCH_PLAYERS and not self.state.match_started:
-            self.state.match_started = True
-            self.state.match_tick    = 0
-            self._on_match_start()
+        # Both humans registered — resolve roles now
+        self._assign_roles_and_start()
+
+    # Assign player_id 1 (runner) and 2 (tagger) based on declared preferences.
+    # If both want runner → assign runner + spawn ghost tagger instead of human tagger.
+    def _assign_roles_and_start(self):
+        addrs = [a for a in self.state.players if not str(a).startswith("ghost:")]
+        roles = {a: self.state.pending_roles.get(a, ROLE_ANY) for a in addrs}
+
+        # Determine who gets runner (player_id=1)
+        runners = [a for a, r in roles.items() if r == ROLE_RUNNER]
+        taggers = [a for a, r in roles.items() if r == ROLE_TAGGER]
+
+        if runners and taggers:
+            # Each got what they want
+            runner_addr = runners[0]
+            tagger_addr = taggers[0]
+        elif len(runners) == 2:
+            # Both want runner → first-come-first-served, second becomes runner too;
+            # we spawn a ghost tagger instead
+            runner_addr  = addrs[0]
+            tagger_addr  = None   # ghost will fill this slot
+        else:
+            # Both want tagger, or both ROLE_ANY → first-come is runner
+            runner_addr = addrs[0]
+            tagger_addr = addrs[1] if len(addrs) > 1 else None
+
+        self.state.players[runner_addr]["player_id"] = 1
+        self._send_ack(runner_addr, 1)
+        self._send_map(runner_addr)
+        print(f"[T2] assigned RUNNER(1) to {runner_addr}")
+
+        if tagger_addr:
+            self.state.players[tagger_addr]["player_id"] = 2
+            self._send_ack(tagger_addr, 2)
+            self._send_map(tagger_addr)
+            print(f"[T2] assigned TAGGER(2) to {tagger_addr}")
+        else:
+            # Remove placeholder for the second addr that was going to be tagger
+            second_addr = addrs[1] if len(addrs) > 1 else None
+            if second_addr:
+                self.state.players[second_addr]["player_id"] = 2
+                self._send_ack(second_addr, 2)
+                self._send_map(second_addr)
+            # Spawn one ghost tagger
+            self._spawn_ghost()
+
+        self.state.pending_roles = {}
+        self.state.next_id       = len(self.state.players) + 1
+
+        # Set game mode based on whether the map has bits
+        bits = self.map_state.get("bits", [])
+        if bits:
+            self.state.game_mode  = GAME_MODE_CHASE_BITS
+            self.state.bits       = [[x, y, True] for x, y in bits]
+            self.state.bits_mask  = (1 << len(bits)) - 1
+            # Send bit positions to all human nodes once
+            for addr in addrs:
+                self._send_bits_init(addr)
+        else:
+            self.state.game_mode = GAME_MODE_CHASE
+
+        self.state.match_started = True
+        self.state.match_tick    = 0
+        self._on_match_start()
+
+    # Adjust ghost count at runtime (e.g. from Monitor "set_ghost_count" control command)
+    def set_ghost_count(self, target: int):
+        target  = max(0, min(target, MAX_GHOSTS))
+        current = [a for a in self.state.players if str(a).startswith("ghost:")]
+        while len(current) < target:
+            self._spawn_ghost()
+            current = [a for a in self.state.players if str(a).startswith("ghost:")]
+        while len(current) > target:
+            addr = current.pop()
+            p = self.state.players.pop(addr, None)
+            if p:
+                self.write_queue.put({"op": "del", "key": f"player:{p['player_id']}"})
+                print(f"[T2] removed ghost {addr}")
+
+    # Create a ghost tagger entry in players — driven by CoreLogic, not UDP packets
+    def _spawn_ghost(self):
+        ghost_count = sum(1 for a in self.state.players if str(a).startswith("ghost:"))
+        if ghost_count >= MAX_GHOSTS:
+            return
+        import math
+        ghost_addr = f"ghost:{ghost_count + 1}"
+        ghost_id   = len(self.state.players) + 1
+        angle      = math.pi / 2   # tagger spawn angle
+        self.state.players[ghost_addr] = {
+            "player_id":        ghost_id,
+            "x":                0.0, "y":  0.0, "angle": angle,
+            "flags":            FLAG_GHOST,
+            "last_seen":        time.monotonic(),
+            "last_seq":         None,
+            "movement_mode":    0,
+            "protocol_version": 0,
+        }
+        print(f"[T2] spawned ghost tagger (player_id={ghost_id}) at {ghost_addr}")
 
     # ── Node-to-node messaging ────────────────────────────────────────────────
     # These are sent directly over the T1 socket, not via the broadcast queue
@@ -192,13 +291,29 @@ class PacketHandler:
         except Exception as e:
             print(f"[T2] failed to send PKT_MAP to {addr}: {e}")
 
+    # Send PKT_BITS_INIT so the node knows where bits are — sent once at match start
+    def _send_bits_init(self, addr):
+        if self.udp_transport is None:
+            return
+        bits = self.map_state.get("bits", [])
+        if not bits:
+            return
+        pkt = pack_bits_init_packet(0, bits)
+        try:
+            self.udp_transport.sendto(pkt, addr)
+            print(f"[T2] sent PKT_BITS_INIT ({len(bits)} bits) to {addr}")
+        except Exception as e:
+            print(f"[T2] failed to send PKT_BITS_INIT to {addr}: {e}")
+
     # ── Node eviction ─────────────────────────────────────────────────────────
     # Remove nodes that have gone silent, aborting any active match
 
     async def evict_timed_out_nodes(self):
         now     = time.monotonic()
+        # Ghosts are server-driven — never time out
         evicted = [addr for addr, p in self.state.players.items()
-                   if now - p["last_seen"] > NODE_TIMEOUT_S]
+                   if not str(addr).startswith("ghost:")
+                   and now - p["last_seen"] > NODE_TIMEOUT_S]
         for addr in evicted:
             p = self.state.players.pop(addr)
             print(f"[T2] evicted player {p['player_id']} from {addr} "

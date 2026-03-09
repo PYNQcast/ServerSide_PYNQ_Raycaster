@@ -1,10 +1,21 @@
 # Maps
 
-Text format: `#` = wall, `.` = empty. Row-major, all rows must be the same width.
+Text format: `#` = wall, `.` = empty, `B` = bit spawn point. Row-major; all rows must be exactly
+32 characters and there must be exactly 32 rows (FPGA BRAM constraint — see `ref_files/drivers/mapDriver.py`).
 Maps must have a solid border of `#` on all four edges — the raycaster does no bounds checking.
-Server loads `level1.txt` by default; the dashboard `set_map` command switches maps mid-session.
+Server loads `chase.txt` by default; the dashboard `set_map` command switches maps mid-session.
 
-Current maps: `level1` (20×16 open maze), `level2`, `level3`.
+## Maps and game modes
+
+| File | Game mode | Player setup | Bits |
+|------|-----------|--------------|------|
+| `chase.txt` | GAME_MODE_CHASE | runner vs tagger | none |
+| `ghost_chase.txt` | GAME_MODE_CHASE | runner vs tagger + ghosts | none |
+| `chase_bits.txt` | GAME_MODE_CHASE_BITS | runner vs tagger + bits | 9 |
+| `ghost_bits.txt` | GAME_MODE_CHASE_BITS | runner vs tagger + ghosts + bits | 9 |
+
+Ghost count is set at runtime via the Monitor (simulates PYNQ player-menu selection).
+The map determines whether bits are present; ghosts are always added on top independently.
 
 ---
 

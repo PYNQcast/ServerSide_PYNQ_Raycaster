@@ -25,6 +25,7 @@ SERVICE_POLL_INTERVAL_S = 1.0
 DYNAMO_TABLE = "pynq-raycaster-seda-matches"
 AWS_REGION   = "eu-west-2"
 REPO_ROOT    = Path(__file__).resolve().parents[3]
+MAPS_DIR     = REPO_ROOT / "pynq_full" / "ec2" / "maps"   # shared map files
 
 SERVICE_SPECS = {
     "server": {
@@ -53,6 +54,7 @@ _service_cache  = {}
 _service_last_fetch = 0.0
 _service_message = "controls run on EC2 only; node simulators still start locally"
 _replay_cache = {}
+_active_map = "chase"    # tracks which map the server is using
 
 def _as_int(value, default=0):
     try:
@@ -250,6 +252,17 @@ def handle_control_command(cmd: str):
         time.sleep(0.2)
         _start_service("sidecar")
         _service_message = "stack restarted"
+    elif cmd.startswith("set_ghosts_"):
+        count = int(cmd.split("_")[-1])
+        r.publish("game:control", json.dumps({"cmd": "set_ghost_count", "count": count}))
+        _service_message = f"ghost count → {count} sent"
+    elif cmd.startswith("set_map:"):
+        global _active_map
+        map_name = cmd[len("set_map:"):]
+        payload  = json.dumps({"cmd": "set_map", "map": map_name})
+        r.publish("game:control", payload)
+        _active_map = map_name
+        _service_message = f"map → {map_name} sent"
     else:
         _service_message = f"unknown command: {cmd}"
 
@@ -340,6 +353,9 @@ def collect_state():
             "flags": int(raw.get("flags", 0)),
         })
 
+    game_raw  = r.hgetall("game:state")
+    bits_mask = int(game_raw.get("bits_mask", 0xFFFF)) if game_raw else 0xFFFF
+
     info    = r.info("stats")
     mem     = r.info("memory")
     clients = r.info("clients")
@@ -351,6 +367,13 @@ def collect_state():
     parsed     = [json.loads(e) for e in events_raw if e]
     match_events = current_match_events(parsed)
     matches = poll_dynamodb()
+
+    # Extract bit positions from the current match's match_start event
+    bits_positions = []
+    for ev in match_events:
+        if ev.get("event") == "match_start" and ev.get("bits"):
+            bits_positions = ev["bits"]
+            break
 
     n_clients = _as_int(clients.get("connected_clients", 0))
     blocked   = _as_int(clients.get("blocked_clients", 0))
@@ -388,8 +411,11 @@ def collect_state():
             "ops_per_sec":     info.get("instantaneous_ops_per_sec", 0),
             "ddb_matches":     len(matches),
         },
-        "events":  match_events[:20],   # newest-first, current match only
-        "matches": matches,
+        "events":     match_events[:20],   # newest-first, current match only
+        "matches":    matches,
+        "bits":       bits_positions,      # [[world_x, world_y], ...] from match_start
+        "bits_mask":  bits_mask,           # bitmask of active bits this tick
+        "active_map": _active_map,         # name of the currently loaded map
     }
 
 
@@ -484,11 +510,48 @@ async def replay_handler(request):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+async def maps_list_handler(request):
+    """GET /api/maps — list all available map names."""
+    names = sorted(p.stem for p in MAPS_DIR.glob("*.txt"))
+    return web.json_response({"maps": names})
+
+
+async def map_handler(request):
+    """
+    GET /api/map/chase  → loads maps/chase.txt
+    Returns {width, height, tile_scale, tiles: [[0|1,...],...]}
+    """
+    name = request.match_info["name"]
+    # Reject path traversal
+    if "/" in name or "\\" in name or ".." in name:
+        raise web.HTTPBadRequest(text="invalid map name")
+    path = MAPS_DIR / f"{name}.txt"
+    if not path.exists():
+        raise web.HTTPNotFound(text=f"map not found: {name}")
+    rows = []
+    with open(path) as f:
+        for line in f:
+            line = line.rstrip('\r\n')
+            if line:
+                rows.append([1 if c == '#' else 0 for c in line])
+    width  = len(rows[0]) if rows else 0
+    height = len(rows)
+    return web.json_response({
+        "name":       name,
+        "width":      width,
+        "height":     height,
+        "tile_scale": 8,
+        "tiles":      rows,
+    })
+
+
 async def main():
     app = web.Application()
     app.router.add_get("/",   index_handler)
     app.router.add_get("/ws", ws_handler)
     app.router.add_get("/api/replay/{match_id}", replay_handler)
+    app.router.add_get("/api/maps",         maps_list_handler)
+    app.router.add_get("/api/map/{name}",   map_handler)
 
     runner = web.AppRunner(app)
     await runner.setup()

@@ -424,6 +424,17 @@
         <button class="control-btn start" onclick="sendControl('node2_auto', 'node 2 auto mode')">P2 Auto</button>
         <button class="control-btn restart" onclick="sendControl('node2_manual', 'node 2 manual mode')">P2 Manual</button>
       </div>
+      <div class="metric-note" style="margin-top:8px">Ghost Taggers (simulates PYNQ menu)</div>
+      <div class="control-stack">
+        <button class="control-btn" onclick="sendControl('set_ghosts_0', 'ghost count → 0')">0 Ghosts</button>
+        <button class="control-btn" onclick="sendControl('set_ghosts_1', 'ghost count → 1')">1 Ghost</button>
+        <button class="control-btn" onclick="sendControl('set_ghosts_2', 'ghost count → 2')">2 Ghosts</button>
+        <button class="control-btn" onclick="sendControl('set_ghosts_3', 'ghost count → 3')">3 Ghosts</button>
+      </div>
+      <div class="metric-note" style="margin-top:8px">Map (hot-swap mid-session)</div>
+      <div class="control-stack" id="map-btn-list">
+        <span style="color:#333">loading maps...</span>
+      </div>
       <div class="metric-note">EC2 services are controlled here. Node simulators still run locally via `dev.sh`, but their mode can be switched over Redis.</div>
       <div class="metric-note">For manual mode, focus the relevant tmux pane before using arrow keys.</div>
       <div class="metric-note" id="svc-note">controls run on EC2 only; node simulators still start locally</div>
@@ -432,7 +443,7 @@
   </div>
 
   <div class="canvas-panel">
-    <span class="canvas-label">fixed world · orbit 50u · tag radius 20u</span>
+    <span class="canvas-label" id="canvas-label">fixed world · orbit 50u · tag radius 20u</span>
     <canvas id="arena" width="480" height="480"></canvas>
   </div>
 
@@ -495,7 +506,80 @@ const W = canvas.width, H = canvas.height;
 const TAG_RADIUS     = 20.0;   // must match t2_game_tick.py TAG_RADIUS
 const ORBIT_RADIUS   = 50.0;   // must match t2_game_tick.py ORBIT_RADIUS
 const WORLD_LIMIT    = ORBIT_RADIUS + TAG_RADIUS + 10.0;  // 80u total safe view
+const TILE_SCALE     = 8;      // world units per tile — must match MAP_TILE_SCALE
 const PLAYER_COLOURS = ['#00ff88', '#00d4ff', '#ffaa00', '#ff6688'];
+const FLAG_GHOST     = 0x08;
+
+// ── Map state ──────────────────────────────────────────────────────────────
+let mapData = null;   // { width, height, tile_scale, tiles: [[0|1, ...], ...] }
+let _availableMaps = [];
+let _activeMapName = 'chase';
+let _showMap = true;  // toggle between tile map view and legacy orbit view
+
+async function loadMap(name = 'chase') {
+  try {
+    const resp = await fetch(`/api/map/${encodeURIComponent(name)}`);
+    if (!resp.ok) return;
+    mapData = await resp.json();
+    updateCanvasLabel();
+  } catch (e) {
+    console.warn('[monitor] map load failed:', e);
+  }
+}
+
+async function loadMapList() {
+  try {
+    const resp = await fetch('/api/maps');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    _availableMaps = data.maps || [];
+    renderMapButtons();
+  } catch (e) {
+    console.warn('[monitor] map list load failed:', e);
+  }
+}
+
+function renderMapButtons() {
+  const el = document.getElementById('map-btn-list');
+  if (!_availableMaps.length) { el.innerHTML = '<span style="color:#333">no maps found</span>'; return; }
+  el.innerHTML = _availableMaps.map(name => `
+    <button id="mapbtn-${name}"
+      class="control-btn${name === _activeMapName ? ' start' : ''}"
+      onclick="selectMap('${name}')">${name}</button>
+  `).join('') + `
+    <button class="control-btn restart" onclick="toggleMapView()"
+      id="map-toggle-btn">${_showMap ? 'Orbit view' : 'Map view'}</button>
+  `;
+}
+
+function toggleMapView() {
+  _showMap = !_showMap;
+  renderMapButtons();
+  updateCanvasLabel();
+}
+
+function updateCanvasLabel() {
+  const el = document.getElementById('canvas-label');
+  if (_showMap && mapData) {
+    el.textContent = `map: ${_activeMapName}  ${mapData.width}×${mapData.height} tiles · tag radius 20u`;
+  } else {
+    el.textContent = 'fixed world · orbit 50u · tag radius 20u';
+  }
+}
+
+function updateMapSelector(activeMap) {
+  if (!activeMap || activeMap === _activeMapName) return;
+  _activeMapName = activeMap;
+  renderMapButtons();
+  if (_showMap) loadMap(activeMap);
+}
+
+function selectMap(name) {
+  sendControl(`set_map:${name}`, `map → ${name}`);
+  _activeMapName = name;
+  renderMapButtons();
+  loadMap(name);
+}
 
 // ── State ──────────────────────────────────────────────────────────────────
 let latestState    = null;
@@ -540,7 +624,7 @@ function worldToCanvas(wx, wy) {
   return [(pad + (wx - minX) * sc), (pad + (wy - minY) * sc), sc];
 }
 
-function drawArena(players) {
+function drawArena(players, bits, bitsMask) {
   ctx.clearRect(0, 0, W, H);
 
   // Grid
@@ -560,11 +644,48 @@ function drawArena(players) {
   const [,,sc] = worldToCanvas(0,0);
   const tagPx  = TAG_RADIUS * sc;
 
-  // Fixed orbit guide matching the actual node radius used by the game.
-  ctx.beginPath(); ctx.arc(ox, oy, ORBIT_RADIUS * sc, 0, Math.PI*2);
-  ctx.strokeStyle = 'rgba(0,212,255,0.12)';
-  ctx.lineWidth = 1;
-  ctx.stroke();
+  // Tile map (when map data available and map view is on)
+  if (_showMap && mapData && mapData.tiles && mapData.tiles.length) {
+    const mw = mapData.width, mh = mapData.height;
+    const ts = (mapData.tile_scale || TILE_SCALE) * sc;   // tile size in canvas px
+    // Map origin: top-left tile's world centre is (-(mw/2)+0.5, -(mh/2)+0.5) * tile_scale
+    mapData.tiles.forEach((row, ri) => {
+      row.forEach((cell, ci) => {
+        if (!cell) return;
+        const wx = (ci - mw / 2) * (mapData.tile_scale || TILE_SCALE);
+        const wy = (ri - mh / 2) * (mapData.tile_scale || TILE_SCALE);
+        const [px, py] = worldToCanvas(wx, wy);
+        ctx.fillStyle = '#1a1730';
+        ctx.fillRect(px, py, ts, ts);
+        ctx.strokeStyle = '#2a2448';
+        ctx.lineWidth = 0.5;
+        ctx.strokeRect(px, py, ts, ts);
+      });
+    });
+  } else {
+    // Legacy orbit guide when no map / in orbit view
+    ctx.beginPath(); ctx.arc(ox, oy, ORBIT_RADIUS * sc, 0, Math.PI*2);
+    ctx.strokeStyle = 'rgba(0,212,255,0.12)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  // Bit collectibles — yellow dot if active, grey if collected
+  if (bits && bits.length) {
+    bits.forEach((b, i) => {
+      const active = (bitsMask & (1 << i)) !== 0;
+      const [bx, by] = worldToCanvas(b[0], b[1]);
+      ctx.beginPath(); ctx.arc(bx, by, 5, 0, Math.PI * 2);
+      ctx.fillStyle = active ? '#ffdd00' : '#333344';
+      ctx.fill();
+      if (active) {
+        ctx.beginPath(); ctx.arc(bx, by, 8, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255,220,0,0.3)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+    });
+  }
 
   const now = performance.now();
   // Expire finished animations even if a player key disappears briefly.
@@ -624,7 +745,8 @@ function drawArena(players) {
   }
 
   players.forEach((p, i) => {
-    const colour  = PLAYER_COLOURS[i % PLAYER_COLOURS.length];
+    const isGhost = (p.flags & FLAG_GHOST) !== 0;
+    const colour  = isGhost ? '#555566' : PLAYER_COLOURS[i % PLAYER_COLOURS.length];
     const tagged  = (p.flags & 0x06) !== 0;   // FLAG_TAGGED=0x02 | FLAG_MATCH_END=0x04
 
     prevFlags[p.id] = tagged;
@@ -665,8 +787,9 @@ function drawArena(players) {
     ctx.fill();
 
     // Label
-    const role = (p.id === 1) ? 'runner' : 'tagger';
-    ctx.fillStyle = '#fff'; ctx.font = 'bold 11px Courier New';
+    const isGhost = (p.flags & FLAG_GHOST) !== 0;
+    const role = isGhost ? 'ghost' : (p.id === 1) ? 'runner' : 'tagger';
+    ctx.fillStyle = isGhost ? '#888' : '#fff'; ctx.font = 'bold 11px Courier New';
     ctx.fillText(`P${p.id} ${role}`, cx+10, cy-6);
 
     // Cache the latest live server pose for edge-triggered freeze latching.
@@ -678,9 +801,9 @@ function drawArena(players) {
 function renderLoop() {
   if (replayState.active && replayState.frames.length) {
     const frame = replayState.frames[Math.min(replayState.frameIndex, replayState.frames.length - 1)];
-    drawArena(normalisePlayers(frame.players));
+    drawArena(normalisePlayers(frame.players), frame.bits || [], frame.bits_mask ?? 0xFFFF);
   } else if (latestState) {
-    drawArena(normalisePlayers(latestState.players));
+    drawArena(normalisePlayers(latestState.players), latestState.bits || [], latestState.bits_mask ?? 0xFFFF);
   }
   renderCount++;
   const now = performance.now();
@@ -704,11 +827,12 @@ function updatePlayers(players) {
     dist = Math.sqrt(dx*dx + dy*dy).toFixed(1) + 'u';
   }
   players.forEach((p, i) => {
-    const tagged = (p.flags & 0x06) !== 0;   // FLAG_TAGGED=0x02 | FLAG_MATCH_END=0x04
-    const colour = PLAYER_COLOURS[i % PLAYER_COLOURS.length];
+    const tagged  = (p.flags & 0x06) !== 0;   // FLAG_TAGGED=0x02 | FLAG_MATCH_END=0x04
+    const isGhost = (p.flags & FLAG_GHOST) !== 0;
+    const colour  = isGhost ? '#555566' : PLAYER_COLOURS[i % PLAYER_COLOURS.length];
     const tr = document.createElement('tr');
-    const role = (p.id === 1) ? 'runner' : 'tagger';
-    const roleColour = (p.id === 1) ? '#888' : '#ffaa00';
+    const role      = isGhost ? 'ghost' : (p.id === 1) ? 'runner' : 'tagger';
+    const roleColour = isGhost ? '#666' : (p.id === 1) ? '#888' : '#ffaa00';
     tr.innerHTML = `
       <td class="pid" style="color:${colour}">P${p.id}</td>
       <td style="color:${roleColour};font-size:10px">${role}</td>
@@ -939,6 +1063,8 @@ function connect() {
   ws.onopen = () => {
     statusEl.textContent = '● LIVE';
     statusEl.className   = 'connected';
+    if (!mapData) loadMap('chase');
+    loadMapList();
   };
   ws.onmessage = (evt) => {
     const state = JSON.parse(evt.data);
@@ -953,6 +1079,7 @@ function connect() {
     updatePipeline(state.pipeline);
     updateMatches(state.matches);
     updateEvents(state.events);
+    if (state.active_map) updateMapSelector(state.active_map);
     wsUpdateCount++;
     const now = performance.now();
     if (now - wsLastTime >= 1000) {

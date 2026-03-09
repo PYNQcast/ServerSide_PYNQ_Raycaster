@@ -424,6 +424,13 @@
         <button class="control-btn start" onclick="sendControl('node2_auto', 'node 2 auto mode')">P2 Auto</button>
         <button class="control-btn restart" onclick="sendControl('node2_manual', 'node 2 manual mode')">P2 Manual</button>
       </div>
+      <div class="metric-note" style="margin-top:8px">Ghost Taggers (simulates PYNQ menu)</div>
+      <div class="control-stack">
+        <button class="control-btn" onclick="sendControl('set_ghosts_0', 'ghost count → 0')">0 Ghosts</button>
+        <button class="control-btn" onclick="sendControl('set_ghosts_1', 'ghost count → 1')">1 Ghost</button>
+        <button class="control-btn" onclick="sendControl('set_ghosts_2', 'ghost count → 2')">2 Ghosts</button>
+        <button class="control-btn" onclick="sendControl('set_ghosts_3', 'ghost count → 3')">3 Ghosts</button>
+      </div>
       <div class="metric-note">EC2 services are controlled here. Node simulators still run locally via `dev.sh`, but their mode can be switched over Redis.</div>
       <div class="metric-note">For manual mode, focus the relevant tmux pane before using arrow keys.</div>
       <div class="metric-note" id="svc-note">controls run on EC2 only; node simulators still start locally</div>
@@ -504,6 +511,7 @@ const W = canvas.width, H = canvas.height;
 const TAG_RADIUS     = 20.0;   // must match t2_game_tick.py TAG_RADIUS
 const WORLD_LIMIT    = 80.0;   // half-width of canvas view in world units
 const PLAYER_COLOURS = ['#00ff88', '#00d4ff', '#ffaa00', '#ff6688'];
+const FLAG_GHOST     = 0x08;
 
 // ── State ──────────────────────────────────────────────────────────────────
 let latestState    = null;
@@ -530,7 +538,7 @@ let replayState = {
 };
 let mapData = null;   // { width, height, tiles: [[0|1, ...], ...] }
 
-async function loadMap(name = 'level1') {
+async function loadMap(name = 'chase') {
   try {
     const resp = await fetch(`/api/map/${encodeURIComponent(name)}`);
     if (!resp.ok) return;
@@ -541,7 +549,7 @@ async function loadMap(name = 'level1') {
 }
 
 let _availableMaps = [];
-let _activeMapName = 'level1';
+let _activeMapName = 'chase';
 
 async function loadMapList() {
   try {
@@ -619,7 +627,7 @@ function drawMap() {
   }
 }
 
-function drawArena(players) {
+function drawArena(players, bits, bitsMask) {
   ctx.clearRect(0, 0, W, H);
 
   // Map walls (background layer)
@@ -641,6 +649,23 @@ function drawArena(players) {
 
   const [,,sc] = worldToCanvas(0,0);
   const tagPx  = TAG_RADIUS * sc;
+
+  // Bit collectibles — yellow dot if active, grey if collected
+  if (bits && bits.length) {
+    bits.forEach((b, i) => {
+      const active = (bitsMask & (1 << i)) !== 0;
+      const [bx, by] = worldToCanvas(b[0], b[1]);
+      ctx.beginPath(); ctx.arc(bx, by, 5, 0, Math.PI * 2);
+      ctx.fillStyle = active ? '#ffdd00' : '#333344';
+      ctx.fill();
+      if (active) {
+        ctx.beginPath(); ctx.arc(bx, by, 8, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255,220,0,0.3)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+    });
+  }
 
   const now = performance.now();
   // Expire finished animations even if a player key disappears briefly.
@@ -700,7 +725,8 @@ function drawArena(players) {
   }
 
   players.forEach((p, i) => {
-    const colour  = PLAYER_COLOURS[i % PLAYER_COLOURS.length];
+    const isGhost = (p.flags & FLAG_GHOST) !== 0;
+    const colour  = isGhost ? '#555566' : PLAYER_COLOURS[i % PLAYER_COLOURS.length];
     const tagged  = (p.flags & 0x06) !== 0;   // FLAG_TAGGED=0x02 | FLAG_MATCH_END=0x04
 
     prevFlags[p.id] = tagged;
@@ -741,8 +767,8 @@ function drawArena(players) {
     ctx.fill();
 
     // Label
-    const role = (p.id === 1) ? 'runner' : 'tagger';
-    ctx.fillStyle = '#fff'; ctx.font = 'bold 11px Courier New';
+    const role = isGhost ? 'ghost' : (p.id === 1) ? 'runner' : 'tagger';
+    ctx.fillStyle = isGhost ? '#888' : '#fff'; ctx.font = 'bold 11px Courier New';
     ctx.fillText(`P${p.id} ${role}`, cx+10, cy-6);
 
     // Cache the latest live server pose for edge-triggered freeze latching.
@@ -754,9 +780,9 @@ function drawArena(players) {
 function renderLoop() {
   if (replayState.active && replayState.frames.length) {
     const frame = replayState.frames[Math.min(replayState.frameIndex, replayState.frames.length - 1)];
-    drawArena(normalisePlayers(frame.players));
+    drawArena(normalisePlayers(frame.players), frame.bits || [], frame.bits_mask ?? 0xFFFF);
   } else if (latestState) {
-    drawArena(normalisePlayers(latestState.players));
+    drawArena(normalisePlayers(latestState.players), latestState.bits || [], latestState.bits_mask ?? 0xFFFF);
   }
   renderCount++;
   const now = performance.now();
@@ -780,11 +806,12 @@ function updatePlayers(players) {
     dist = Math.sqrt(dx*dx + dy*dy).toFixed(1) + 'u';
   }
   players.forEach((p, i) => {
-    const tagged = (p.flags & 0x06) !== 0;   // FLAG_TAGGED=0x02 | FLAG_MATCH_END=0x04
-    const colour = PLAYER_COLOURS[i % PLAYER_COLOURS.length];
+    const tagged  = (p.flags & 0x06) !== 0;   // FLAG_TAGGED=0x02 | FLAG_MATCH_END=0x04
+    const isGhost = (p.flags & FLAG_GHOST) !== 0;
+    const colour  = isGhost ? '#555566' : PLAYER_COLOURS[i % PLAYER_COLOURS.length];
     const tr = document.createElement('tr');
-    const role = (p.id === 1) ? 'runner' : 'tagger';
-    const roleColour = (p.id === 1) ? '#888' : '#ffaa00';
+    const role      = isGhost ? 'ghost' : (p.id === 1) ? 'runner' : 'tagger';
+    const roleColour = isGhost ? '#666' : (p.id === 1) ? '#888' : '#ffaa00';
     tr.innerHTML = `
       <td class="pid" style="color:${colour}">P${p.id}</td>
       <td style="color:${roleColour};font-size:10px">${role}</td>
@@ -1015,7 +1042,7 @@ function connect() {
   ws.onopen = () => {
     statusEl.textContent = '● LIVE';
     statusEl.className   = 'connected';
-    if (!mapData) loadMap('level1');
+    if (!mapData) loadMap('chase');
     loadMapList();
   };
   ws.onmessage = (evt) => {

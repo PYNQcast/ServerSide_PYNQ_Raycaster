@@ -17,6 +17,9 @@ PKT_ACK          = 0x0030   # server → node:  confirms registration
 PKT_MAP          = 0x0040   # server → node:  map tile data, sent once after PKT_ACK
                              #   header (8 bytes) + MapHeader (4 bytes) + tiles (width*height bytes)
                              #   node stores tiles in DRAM; FPGA raycaster reads them each frame.
+PKT_BITS_INIT    = 0x0050   # server → node:  bit positions, sent once at match start
+                             #   header (8 bytes) + count (1 byte) + N × BitEntry (6 bytes each)
+                             #   node stores positions; server sends bitmask each tick to flag collection.
 
 # ── Flags bitmask (uint8 flags field) ─────────────────────────────────────────
 #
@@ -27,12 +30,26 @@ PKT_MAP          = 0x0040   # server → node:  map tile data, sent once after P
 FLAG_INPUT_SHOOT = 0x01   # client intent: fired this tick
 FLAG_TAGGED      = 0x02   # server state: player tagged this tick
 FLAG_MATCH_END   = 0x04   # server state: match is over
+FLAG_GHOST       = 0x08   # server state: this player is a server-controlled ghost
 
 CLIENT_INPUT_FLAGS = FLAG_INPUT_SHOOT
-SERVER_STATE_FLAGS = FLAG_TAGGED | FLAG_MATCH_END
+SERVER_STATE_FLAGS = FLAG_TAGGED | FLAG_MATCH_END | FLAG_GHOST
 
 # Backward-compatible alias used by older call sites.
 FLAG_SHOOTING = FLAG_INPUT_SHOOT
+
+# ── Role selection (sent in PKT_REGISTER reserved byte) ───────────────────────
+# Node declares preferred role on first contact; server assigns final role in ACK.
+
+ROLE_ANY    = 0x00   # no preference — server assigns by join order
+ROLE_RUNNER = 0x01   # player wants to be the runner
+ROLE_TAGGER = 0x02   # player wants to be the tagger
+
+# ── Game modes ────────────────────────────────────────────────────────────────
+# Packed into PKT_GAME_STATE header extension so nodes know which mode is active.
+
+GAME_MODE_CHASE      = 0x00   # runner vs tagger, win by tag count
+GAME_MODE_CHASE_BITS = 0x01   # runner collects bits, tagger tries to tag before all bits gone
 
 # ── Node movement modes ───────────────────────────────────────────────────────
 
@@ -103,7 +120,58 @@ MAP_HEADER_FMT  = '<BBBx'
 MAP_HEADER_SIZE = struct.calcsize(MAP_HEADER_FMT)
 assert MAP_HEADER_SIZE == 4, f"MapHeader must be 4 bytes, got {MAP_HEADER_SIZE}"
 
+# PKT_GAME_STATE extension (follows player entries): 3 bytes
+#
+#   Offset  Size  Fmt  Field
+#     0       1    B   game_mode    GAME_MODE_CHASE or GAME_MODE_CHASE_BITS
+#     1       1    B   player_count N players that follow in player entries
+#     2       2    H   bits_mask    bitmask of active bits (bit N=1 → bit N still on map)
+#                                   only meaningful in GAME_MODE_CHASE_BITS
+#
+# Full PKT_GAME_STATE layout:
+#   header (8) + game_mode (1) + player_count (1) + players (14*N) + bits_mask (2)
+
+GAME_STATE_EXT_FMT  = '<BBH'   # game_mode, player_count, bits_mask
+GAME_STATE_EXT_SIZE = struct.calcsize(GAME_STATE_EXT_FMT)
+assert GAME_STATE_EXT_SIZE == 4, f"GameStateExt must be 4 bytes, got {GAME_STATE_EXT_SIZE}"
+
+# BitEntry (in PKT_BITS_INIT): 6 bytes
+#
+#   Offset  Size  Fmt  Field
+#     0       1    B   bit_id   0-based index (matches bitmask position)
+#     1       4    f   x        world-space X
+#     5       1    f   y        world-space Y  ← actually offset 5, size 4 → total 9? No:
+#
+# Corrected: bit_id (B=1) + x (f=4) + y (f=4) = 9 bytes — use explicit fmt
+
+BIT_ENTRY_FMT  = '<Bff'
+BIT_ENTRY_SIZE = struct.calcsize(BIT_ENTRY_FMT)
+assert BIT_ENTRY_SIZE == 9, f"BitEntry must be 9 bytes, got {BIT_ENTRY_SIZE}"
+
 # ── Pack helpers (build outgoing packets) ─────────────────────────────────────
+
+# Build PKT_BITS_INIT: header + count byte + N × BitEntry (9 bytes each)
+# Sent once at match start so nodes know where bits are; only bitmask is sent per-tick after.
+def pack_bits_init_packet(seq, bits):
+    timestamp = int(time.time() * 1000) & 0xFFFFFFFF
+    header    = struct.pack(HEADER_FMT, PKT_BITS_INIT, seq & 0xFFFF, timestamp)
+    payload   = struct.pack('<B', len(bits) & 0xFF)
+    for i, (x, y) in enumerate(bits):
+        payload += struct.pack(BIT_ENTRY_FMT, i, float(x), float(y))
+    return header + payload
+
+# Unpack PKT_BITS_INIT — returns list of (bit_id, x, y) tuples
+def unpack_bits_init_packet(data):
+    if len(data) < HEADER_SIZE + 1:
+        raise ValueError(f"PKT_BITS_INIT too short: {len(data)} bytes")
+    count = struct.unpack_from('<B', data, HEADER_SIZE)[0]
+    bits  = []
+    offset = HEADER_SIZE + 1
+    for _ in range(count):
+        bit_id, x, y = struct.unpack_from(BIT_ENTRY_FMT, data, offset)
+        bits.append((bit_id, x, y))
+        offset += BIT_ENTRY_SIZE
+    return bits
 
 # Build PKT_MAP: 8-byte header + 4-byte MapHeader + tiles (0=empty, 1=wall)
 def pack_map_packet(seq, width, height, tile_scale, tiles):
@@ -207,8 +275,16 @@ def unpack_map_packet(data):
     tiles = bytearray(data[tile_start : tile_start + width * height])
     return width, height, tile_scale, tiles
 
-# Unpack a full server→node packet — returns (pkt_type, seq, timestamp, players)
+# Unpack extended PKT_GAME_STATE — returns (pkt_type, seq, timestamp, game_mode, players, bits_mask)
+# Falls back gracefully to legacy format (no extension bytes) for older servers.
 def unpack_server_packet(data):
     pkt_type, seq, timestamp = unpack_header(data)
-    players = unpack_player_entries(data[HEADER_SIZE:])
-    return pkt_type, seq, timestamp, players
+    payload = data[HEADER_SIZE:]
+    # New format: game_mode (1) + player_count (1) + players + bits_mask (2)
+    if pkt_type == PKT_GAME_STATE and len(payload) >= GAME_STATE_EXT_SIZE:
+        game_mode, player_count, bits_mask = struct.unpack_from(GAME_STATE_EXT_FMT, payload, 0)
+        players = unpack_player_entries(payload[GAME_STATE_EXT_SIZE : GAME_STATE_EXT_SIZE + player_count * PLAYER_SIZE])
+        return pkt_type, seq, timestamp, game_mode, players, bits_mask
+    # Legacy / non-game-state packets — no extension
+    players = unpack_player_entries(payload)
+    return pkt_type, seq, timestamp, GAME_MODE_CHASE, players, 0xFFFF

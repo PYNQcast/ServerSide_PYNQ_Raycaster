@@ -8,6 +8,7 @@ import time
 from t2_constants import (
     ORBIT_RADIUS, SPAWN_ANGLES, LOCKOUT_S, GRACE_TICKS,
 )
+from protocol import GAME_MODE_CHASE
 
 
 # All mutable state that belongs to one match lifecycle — passed by reference to sub-modules
@@ -20,7 +21,7 @@ class MatchState:
     # Clears every field — called on startup and after each match ends cleanly
 
     def reset_all(self):
-        self.players       = {}   # addr → player dict
+        self.players       = {}   # addr → player dict (ghost addrs use sentinel "ghost:<id>")
         self.next_id       = 1
         self.match_started = False
         self.match_ended   = False
@@ -29,6 +30,10 @@ class MatchState:
         self.tag_count     = 0
         self.tag_flash_at  = None   # monotonic time when FLAG_TAGGED should clear
         self.match_tick    = 0      # ticks elapsed since match started (grace period)
+        self.game_mode     = GAME_MODE_CHASE
+        self.bits          = []     # list of [x, y, active]
+        self.bits_mask     = 0xFFFF
+        self.pending_roles = {}     # addr → preferred_role from PKT_REGISTER
 
     # ── Player position helpers ───────────────────────────────────────────────
     # Teleporting to spawn after a tag prevents immediate re-tag after flash clears
@@ -54,7 +59,18 @@ class MatchState:
         self.tag_count     = 0
         self.tag_flash_at  = None
         self.match_tick    = 0
+        self.game_mode     = GAME_MODE_CHASE
+        self.bits          = []
+        self.bits_mask     = 0xFFFF
+        self.pending_roles = {}
         self.lockout_until = time.monotonic() + LOCKOUT_S
+
+    # Return the player dict for the runner (player_id=1), or None if not yet registered
+    def runner(self):
+        for p in self.players.values():
+            if p["player_id"] == 1:
+                return p
+        return None
 
     # True while we're still within the post-match lockout window
     def is_in_lockout(self) -> bool:
