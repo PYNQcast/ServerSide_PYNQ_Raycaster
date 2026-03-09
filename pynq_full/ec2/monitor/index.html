@@ -601,8 +601,12 @@ function normalisePlayers(players) {
 // ── Canvas ─────────────────────────────────────────────────────────────────
 function worldToCanvas(wx, wy) {
   const pad = 36;
-  const minX = -WORLD_LIMIT, maxX = WORLD_LIMIT;
-  const minY = -WORLD_LIMIT, maxY = WORLD_LIMIT;
+  // Use actual map extent when map data is loaded; fall back to orbit view extent
+  const limit = (mapData && mapData.width > 0)
+    ? (mapData.width / 2) * TILE_SCALE
+    : WORLD_LIMIT;
+  const minX = -limit, maxX = limit;
+  const minY = -limit, maxY = limit;
   const rx  = maxX - minX;
   const ry  = maxY - minY;
   const sc  = Math.min((W - pad*2) / rx, (H - pad*2) / ry);
