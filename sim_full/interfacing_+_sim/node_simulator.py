@@ -5,6 +5,7 @@
 # Usage: python3 node_simulator.py <server_ip> [port] --nodes N --node-index I
 
 import socket
+import struct
 import time
 import math
 import argparse
@@ -26,12 +27,12 @@ except ImportError:
 
 from protocol import (
     # constants
-    PKT_GAME_STATE, PKT_REGISTER,
+    HEADER_SIZE, PKT_ACK, PKT_GAME_STATE, PKT_REGISTER,
     MOVEMENT_MODE_INTENT_WITH_PREDICTION,
     FLAG_SHOOTING, FLAG_TAGGED, FLAG_MATCH_END,
     # functions
     client_input_flags, decode_flag_names, decode_movement_mode,
-    pack_node_packet, unpack_server_packet,
+    pack_node_packet, unpack_header, unpack_server_packet,
 )
 
 # How long to wait after restart signal before re-registering.
@@ -361,6 +362,7 @@ def run_node(server_ip, server_port, player_id, node_index,
     sock    = None
     playing = False   # start in WAITING; first game needs explicit RESTART
     rejoin_at = None
+    assigned_player_id = None
     have_authoritative_state = False
     last_authoritative_state_at = 0.0
     seq               = 0
@@ -465,6 +467,7 @@ def run_node(server_ip, server_port, player_id, node_index,
                 tick    = 0
                 playing = True
                 rejoin_at = None
+                assigned_player_id = None
                 have_authoritative_state = False
                 last_authoritative_state_at = 0.0
 
@@ -502,13 +505,19 @@ def run_node(server_ip, server_port, player_id, node_index,
             while playing:
                 try:
                     data, _ = sock.recvfrom(1024)
-                    pkt_type, _, _, _, players, _ = unpack_server_packet(data)
+                    pkt_type, _, _ = unpack_header(data)
+                    if pkt_type == PKT_ACK and len(data) >= HEADER_SIZE + 1:
+                        assigned_player_id = struct.unpack_from('<B', data, HEADER_SIZE)[0]
+                        print(f"{tag} assigned server player_id={assigned_player_id}")
+                        continue
                     if pkt_type == PKT_GAME_STATE:
+                        _, _, _, _, players, _ = unpack_server_packet(data)
+                        active_player_id = assigned_player_id or (node_index + 1)
                         for p in players:
                             state_names = ",".join(
                                 decode_flag_names(p["flags"], direction="server_to_client")
                             ) or "none"
-                            if p["player_id"] == node_index + 1:
+                            if p["player_id"] == active_player_id:
                                 x = p["x"]
                                 y = p["y"]
                                 angle = p["angle"]
@@ -519,7 +528,7 @@ def run_node(server_ip, server_port, player_id, node_index,
                                 playing = False
                                 have_authoritative_state = False
                                 last_authoritative_state_at = 0.0
-                            elif p["player_id"] == node_index + 1 and p["flags"] & FLAG_TAGGED:
+                            elif p["player_id"] == active_player_id and p["flags"] & FLAG_TAGGED:
                                 print(f"{tag} P{p['player_id']} state={state_names}")
                 except socket.timeout:
                     break

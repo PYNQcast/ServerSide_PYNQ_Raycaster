@@ -8,14 +8,17 @@
 
 import asyncio
 import math
+import struct
 import time
 
 from protocol import (
     CLIENT_INPUT_FLAGS,
     GAME_MODE_CHASE,
     GAME_MODE_CHASE_BITS,
+    HEADER_FMT,
     MOVEMENT_MODE_INTENT_ONLY,
     NODE_SIZE,
+    PKT_ACK,
     PKT_REGISTER,
     ROLE_ANY,
     ROLE_RUNNER,
@@ -35,11 +38,13 @@ from t2_map_loader import resolve_walkable_world
 class PacketHandler:
 
     def __init__(self, state: MatchState, packet_queue: asyncio.Queue,
-                 write_queue, map_state, on_match_start, on_match_abort, on_event):
+                 write_queue, map_state, on_match_start, on_match_abort, on_event,
+                 udp_transport=None):
         self.state         = state
         self.packet_queue  = packet_queue
         self.write_queue   = write_queue
         self.map_state     = map_state
+        self.udp_transport = udp_transport
         self._on_match_start = on_match_start
         self._on_match_abort = on_match_abort
         self._on_event       = on_event
@@ -183,15 +188,18 @@ class PacketHandler:
             tagger_addr = addrs[1] if len(addrs) > 1 else None
 
         self.state.players[runner_addr]["player_id"] = 1
+        self._send_ack(runner_addr, 1)
         print(f"[T2] assigned RUNNER(1) to {runner_addr}")
 
         if tagger_addr:
             self.state.players[tagger_addr]["player_id"] = 2
+            self._send_ack(tagger_addr, 2)
             print(f"[T2] assigned TAGGER(2) to {tagger_addr}")
         else:
             second_addr = addrs[1] if len(addrs) > 1 else None
             if second_addr:
                 self.state.players[second_addr]["player_id"] = 2
+                self._send_ack(second_addr, 2)
                 print(f"[T2] assigned TAGGER(2) to {second_addr}")
             self._spawn_ghost()
 
@@ -213,6 +221,18 @@ class PacketHandler:
         self.state.match_tick = 0
         self.state.reset_positions()
         self._on_match_start()
+
+    def _send_ack(self, addr, player_id: int):
+        if self.udp_transport is None:
+            return
+        packet = (
+            struct.pack(HEADER_FMT, PKT_ACK, 0, int(time.time() * 1000) & 0xFFFFFFFF)
+            + struct.pack("<B", player_id & 0xFF)
+        )
+        try:
+            self.udp_transport.sendto(packet, addr)
+        except Exception as exc:
+            print(f"[T2] failed sending ACK to {addr}: {exc}")
 
     # ── Ghost management ──────────────────────────────────────────────────────
 

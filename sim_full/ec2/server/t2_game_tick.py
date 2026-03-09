@@ -36,7 +36,7 @@ _MAPS_DIR = os.path.normpath(
 
 
 class GameTick:
-    def __init__(self, packet_queue, broadcast_queue, write_queue, tick_rate=20):
+    def __init__(self, packet_queue, broadcast_queue, write_queue, tick_rate=20, udp_transport=None):
         self.packet_queue    = packet_queue
         self.broadcast_queue = broadcast_queue
         self.write_queue     = write_queue
@@ -62,6 +62,7 @@ class GameTick:
             on_match_start=self._on_match_start,
             on_match_abort=self._on_match_abort,
             on_event=self._push_event,
+            udp_transport=udp_transport,
         )
 
     # ── Main loop ─────────────────────────────────────────────────────────────

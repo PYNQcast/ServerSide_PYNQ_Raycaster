@@ -43,7 +43,6 @@ async def main():
     write_queue     = queue.SimpleQueue() # T2 → T4 : Redis writes (thread-safe)
 
     receiver = UDPReceiver(packet_queue)
-    ticker   = GameTick(packet_queue, broadcast_queue, write_queue, TICK_RATE)
     writer   = RedisWriter(write_queue)
 
     # T4 starts as a thread — runs independently of the event loop
@@ -57,6 +56,13 @@ async def main():
     # the NAT entry the node's outbound sendto(EC2:9000) created.
     await receiver.bind(UDP_PORT)
 
+    ticker = GameTick(
+        packet_queue,
+        broadcast_queue,
+        write_queue,
+        TICK_RATE,
+        udp_transport=receiver.transport,
+    )
     broadcaster = Broadcaster(broadcast_queue, shared_transport=receiver.transport)
 
     # T1, T2, T3 run as asyncio coroutines

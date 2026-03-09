@@ -398,6 +398,60 @@ def test_sim_register_does_not_override_authoritative_spawn_on_match_start():
         assert state.players[("tagger", 2)]["y"] == 24.0
 
 
+def test_sim_match_start_sends_ack_packets_with_assigned_ids():
+    with sim_import_context():
+        protocol = importlib.import_module("protocol")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+        packet_handler_mod = importlib.import_module("t2_packet_handler")
+
+        class DummyTransport:
+            def __init__(self):
+                self.sent = []
+
+            def sendto(self, data, addr):
+                self.sent.append((data, addr))
+
+        transport = DummyTransport()
+        state = match_state_mod.MatchState()
+        handler = packet_handler_mod.PacketHandler(
+            state,
+            asyncio.Queue(),
+            queue.SimpleQueue(),
+            {
+                "width": 0,
+                "height": 0,
+                "tile_scale": 8,
+                "tiles": bytearray(),
+                "bits": [],
+                "spawn_positions": [(-24.0, -24.0), (24.0, 24.0)],
+            },
+            on_match_start=lambda: None,
+            on_match_abort=lambda event=None: None,
+            on_event=lambda event: None,
+            udp_transport=transport,
+        )
+
+        handler._process_packet({
+            "data": protocol.pack_node_packet(protocol.PKT_REGISTER, 0, 0.0, 0.0, 0.0),
+            "addr": ("runner", 1),
+        })
+        handler._process_packet({
+            "data": protocol.pack_node_packet(protocol.PKT_REGISTER, 0, 0.0, 0.0, 0.0),
+            "addr": ("tagger", 2),
+        })
+
+        assert len(transport.sent) == 2
+        ack_ids = []
+        for packet, addr in transport.sent:
+            pkt_type, _, _ = protocol.unpack_header(packet)
+            assert pkt_type == protocol.PKT_ACK
+            ack_ids.append((addr, packet[protocol.HEADER_SIZE]))
+        assert ack_ids == [
+            (("runner", 1), 1),
+            (("tagger", 2), 2),
+        ]
+
+
 def test_sim_restart_command_clears_players_and_backlog():
     with sim_import_context():
         protocol = importlib.import_module("protocol")
