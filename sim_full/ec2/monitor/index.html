@@ -588,12 +588,14 @@ let _activeMapName = 'chase';
 let _showMap = true;  // map play is the default; orbit view is a sim-only test tool
 let _viewMode = 'map';
 const requestedNodeModes = { 1: 'manual', 2: 'manual' };
+let _mapManualSyncPending = true;
 
 async function loadMap(name = 'chase') {
   try {
     const resp = await fetch(`/api/map/${encodeURIComponent(name)}`);
     if (!resp.ok) return;
     mapData = await resp.json();
+    mapData.name = name;
     updateCanvasLabel();
   } catch (e) {
     console.warn('[monitor] map load failed:', e);
@@ -631,14 +633,19 @@ function renderViewModeButtons() {
 }
 
 function syncViewMode(mode) {
-  _viewMode = (mode === 'orbit') ? 'orbit' : 'map';
+  const nextMode = (mode === 'orbit') ? 'orbit' : 'map';
+  const changed = nextMode !== _viewMode;
+  _viewMode = nextMode;
   _showMap = _viewMode === 'map';
+  if (_showMap && changed) {
+    _mapManualSyncPending = true;
+  }
   if (!_showMap) {
     mapData = null;
   }
   renderViewModeButtons();
   updateOrbitModeControls();
-  if (_showMap) {
+  if (_showMap && (changed || !mapData || mapData.name !== _activeMapName)) {
     loadMap(_activeMapName);
   } else {
     updateCanvasLabel();
@@ -648,12 +655,10 @@ function syncViewMode(mode) {
 function setViewMode(mode) {
   const target = (mode === 'orbit') ? 'orbit' : 'map';
   if (target === _viewMode) return;
-  syncViewMode(target);
   sendControl(`set_sim_view:${target}`, `sim view ${target}`);
   if (target === 'map') {
+    _mapManualSyncPending = true;
     enforceMapManualModes();
-  } else {
-    enforceOrbitAutoModes();
   }
 }
 
@@ -672,9 +677,11 @@ function enforceMapManualModes() {
   requestNodeMode(2, 'manual', true);
 }
 
-function enforceOrbitAutoModes() {
-  requestNodeMode(1, 'auto', true);
-  requestNodeMode(2, 'auto', true);
+function maybeEnforceMapManual(players) {
+  if (_viewMode !== 'map' || !_mapManualSyncPending) return;
+  if (!players || players.length === 0) return;
+  _mapManualSyncPending = false;
+  enforceMapManualModes();
 }
 
 function updateOrbitModeControls() {
@@ -682,7 +689,7 @@ function updateOrbitModeControls() {
   const note = document.getElementById('view-mode-note');
   orbitControls.hidden = _viewMode !== 'orbit';
   note.textContent = _viewMode === 'orbit'
-    ? 'Orbit test is a simulator smoke test. Nodes default to auto orbit, but you can override them below.'
+    ? 'Orbit test only changes the sim view/runtime map. Use the controls below if you want auto orbit motion.'
     : 'Map play is the default and forces both simulator nodes back to manual control.';
 }
 
@@ -697,7 +704,7 @@ function updateCanvasLabel() {
     el.textContent = `map play · ${_activeMapName} · loading map…`;
   } else {
     const selectedMap = latestState?.selected_map || _activeMapName;
-    el.textContent = `orbit test · selected map ${selectedMap} parked · nodes default auto · 50u radius`;
+    el.textContent = `orbit test · selected map ${selectedMap} parked · auto/manual optional · 50u radius`;
   }
 }
 
@@ -1324,6 +1331,7 @@ function connect() {
     }
     latestState = state;
     syncViewMode(state.sim_view_mode || 'map');
+    maybeEnforceMapManual(state.players || []);
     if (!replayState.active) updatePlayers(state.players);
     updateNodeLinks(state.players);
     updateBitsPanel(state);
