@@ -9,8 +9,10 @@ __pycache__/
 venv/
 
 # Node
+node_modules/
 dashboard/node_modules/
 dashboard/dist/
+monitor_ui/src/templates.generated.js
 
 # Secrets
 .env

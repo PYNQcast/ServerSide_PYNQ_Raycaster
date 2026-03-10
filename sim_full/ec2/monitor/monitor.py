@@ -30,12 +30,15 @@ MAPS_DIR     = REPO_ROOT / "pynq_full" / "ec2" / "maps"   # shared map files
 MONITOR_DIR  = Path(__file__).resolve().parent
 LOGO_ASSET_NAME = "pynqcast-logo.svg"
 LOGO_ASSET_PATH = REPO_ROOT / "PYNQCAST_PIXEL_LOGO.svg"
+MONITOR_UI_ASSET_NAME = "monitor-ui.js"
+MONITOR_UI_ASSET_PATH = REPO_ROOT / "monitor_ui" / "dist" / MONITOR_UI_ASSET_NAME
 MONITOR_ASSETS = {
     "monitor.css",
     "monitor-state.js",
     "monitor-render.js",
     "monitor-app.js",
     LOGO_ASSET_NAME,
+    MONITOR_UI_ASSET_NAME,
 }
 
 SERVICE_SPECS = {
@@ -655,6 +658,8 @@ async def asset_handler(request):
         raise web.HTTPNotFound(text=f"unknown asset: {name}")
     if name == LOGO_ASSET_NAME:
         return web.FileResponse(LOGO_ASSET_PATH)
+    if name == MONITOR_UI_ASSET_NAME:
+        return web.FileResponse(MONITOR_UI_ASSET_PATH)
     return web.FileResponse(MONITOR_DIR / name)
 
 
@@ -713,6 +718,7 @@ async def main():
     app.router.add_get("/monitor-state.js", asset_handler)
     app.router.add_get("/monitor-render.js", asset_handler)
     app.router.add_get("/monitor-app.js", asset_handler)
+    app.router.add_get(f"/{MONITOR_UI_ASSET_NAME}", asset_handler)
     app.router.add_get(f"/{LOGO_ASSET_NAME}", asset_handler)
     app.router.add_get("/ws", ws_handler)
     app.router.add_get("/api/replay/{match_id}", replay_handler)
