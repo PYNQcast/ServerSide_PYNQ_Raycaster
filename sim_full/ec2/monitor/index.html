@@ -2,13 +2,47 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="color-scheme" content="dark">
 <title>PYNQ Raycaster — Live Monitor</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/monitor.css">
 <style>
+  html,
+  body {
+    margin: 0;
+    min-height: 100%;
+    background: #1a1a2e;
+    color: #e8e8e8;
+  }
+
+  body {
+    overflow: hidden;
+  }
+
   #root,
   .react-monitor-root {
     display: contents;
+  }
+
+  #root {
+    min-height: 100vh;
+  }
+
+  .monitor-boot {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+    background:
+      radial-gradient(circle at top left, rgba(240, 82, 82, 0.16), transparent 28%),
+      radial-gradient(circle at top right, rgba(0, 212, 255, 0.12), transparent 32%),
+      linear-gradient(180deg, #11192d 0%, #1a1a2e 55%, #120f24 100%);
+    color: #00d4ff;
+    font: 700 16px/1.4 monospace;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    text-align: center;
   }
 </style>
 <script>
@@ -17,6 +51,8 @@
 <script defer src="/monitor-ui.js"></script>
 </head>
 <body>
-  <div id="root"></div>
+  <div id="root">
+    <div class="monitor-boot">Booting PYNQ CAST monitor...</div>
+  </div>
 </body>
 </html>
