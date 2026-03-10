@@ -655,6 +655,7 @@ function syncViewMode(mode) {
 function setViewMode(mode) {
   const target = (mode === 'orbit') ? 'orbit' : 'map';
   if (target === _viewMode) return;
+  syncViewMode(target);
   sendControl(`set_sim_view:${target}`, `sim view ${target}`);
   if (target === 'map') {
     _mapManualSyncPending = true;
