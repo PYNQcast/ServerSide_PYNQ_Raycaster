@@ -242,6 +242,21 @@ open_monitor_browser() {
   (cd /mnt/c && cmd.exe /c start "http://${wsl_ip}:8080")
 }
 
+wait_for_local_monitor() {
+  local attempts=0
+  local max_attempts=150
+
+  while [ "$attempts" -lt "$max_attempts" ]; do
+    if printf 'GET / HTTP/1.0\r\nHost: localhost\r\n\r\n' | nc -w 1 127.0.0.1 8080 2>/dev/null | grep -q '200 OK'; then
+      return 0
+    fi
+    sleep 0.2
+    attempts=$((attempts + 1))
+  done
+
+  return 1
+}
+
 banner
 
 section "Preflight"
@@ -268,6 +283,9 @@ section "Service Wiring"
 run_step "Starting server/sidecar/monitor panes" wire_service_panes || die "Failed wiring service panes"
 run_step "Opening Redis tunnel (localhost:6380 -> EC2:6379)" create_redis_tunnel || die "Failed opening Redis tunnel"
 run_step "Preparing node simulator panes" prepare_node_sim_panes || die "Failed preparing simulator panes"
+if ! run_step "Waiting for local monitor HTTP endpoint" wait_for_local_monitor; then
+  log_warn "Local monitor endpoint did not report ready before browser launch."
+fi
 if ! run_step "Opening monitor URL in browser" open_monitor_browser; then
   log_warn "Could not auto-open browser. Open http://<WSL-IP>:8080 manually."
 fi

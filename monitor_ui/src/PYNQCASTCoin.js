@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
-const ABOUT_LOGO_PATH = '/PNG_LOGO.png';
+const ABOUT_LOGO_PATH = '/BNW_LOGO.png';
 
 export function mountPYNQCASTCoin(rootEl) {
   const wrap = rootEl?.querySelector('.about-sprite-wrap');
@@ -165,7 +165,7 @@ export function mountPYNQCASTCoin(rootEl) {
     side: THREE.FrontSide,
   });
   const fillMaterial = new THREE.MeshStandardMaterial({
-    color: 0x120406,
+    color: 0x0a0305,
     metalness: 0.3,
     roughness: 0.6,
     transparent: false,

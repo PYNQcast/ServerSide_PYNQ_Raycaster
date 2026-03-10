@@ -217,6 +217,21 @@ open_monitor_browser() {
   (cd /mnt/c && cmd.exe /c start "http://${wsl_ip}:8080")
 }
 
+wait_for_local_monitor() {
+  local attempts=0
+  local max_attempts=150
+
+  while [ "$attempts" -lt "$max_attempts" ]; do
+    if printf 'GET / HTTP/1.0\r\nHost: localhost\r\n\r\n' | nc -w 1 127.0.0.1 8080 2>/dev/null | grep -q '200 OK'; then
+      return 0
+    fi
+    sleep 0.2
+    attempts=$((attempts + 1))
+  done
+
+  return 1
+}
+
 banner
 
 section "Preflight"
@@ -241,6 +256,9 @@ run_step "Building pane layout" build_layout || die "Failed building tmux layout
 
 section "Service Wiring"
 run_step "Starting server/sidecar/monitor/redis panes" wire_service_panes || die "Failed wiring service panes"
+if ! run_step "Waiting for local monitor HTTP endpoint" wait_for_local_monitor; then
+  log_warn "Local monitor endpoint did not report ready before browser launch."
+fi
 if ! run_step "Opening monitor URL in browser" open_monitor_browser; then
   log_warn "Could not auto-open browser. Open http://<WSL-IP>:8080 manually."
 fi
