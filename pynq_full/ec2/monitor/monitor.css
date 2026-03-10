@@ -1412,58 +1412,69 @@
     grid-column: span 3;
   }
 
-  .about-layout {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 12px;
+  .about-page {
+    gap: 18px;
   }
 
-  .about-panel {
+  .about-hero {
+    position: relative;
+    flex: 1;
     min-height: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    padding: 18px;
-  }
-
-  .about-head {
-    margin-bottom: 0;
-  }
-
-  .about-body {
     display: grid;
-    grid-template-columns: minmax(320px, 0.95fr) minmax(280px, 0.85fr);
-    gap: 16px;
-    align-items: stretch;
-  }
-
-  .about-item-stage,
-  .about-copy-panel {
-    min-height: 0;
-  }
-
-  .about-item-stage {
+    grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.8fr);
+    gap: 24px;
+    padding: 20px 10px 24px;
     overflow: hidden;
-    min-height: 420px;
+    background:
+      radial-gradient(circle at 24% 20%, rgba(0, 212, 255, 0.08), transparent 20%),
+      radial-gradient(circle at 78% 24%, rgba(240, 82, 82, 0.08), transparent 22%),
+      linear-gradient(180deg, rgba(9, 17, 31, 0.48), rgba(9, 17, 31, 0.08));
+  }
+
+  .about-stage {
+    position: relative;
+    overflow: hidden;
+    min-height: clamp(520px, 70vh, 860px);
     display: flex;
     align-items: flex-end;
     justify-content: center;
-    padding: 24px;
+    padding: 36px 32px 84px;
     isolation: isolate;
     background:
-      radial-gradient(circle at 50% 18%, rgba(0, 212, 255, 0.08), transparent 24%),
-      linear-gradient(180deg, rgba(14, 28, 56, 0.9) 0%, rgba(7, 11, 22, 0.96) 100%);
+      radial-gradient(circle at 50% 22%, rgba(0, 212, 255, 0.1), transparent 20%),
+      linear-gradient(180deg, rgba(14, 28, 56, 0.1) 0%, rgba(7, 11, 22, 0.05) 100%);
+  }
+
+  .about-stage::before {
+    content: '';
+    position: absolute;
+    inset: auto 5% 36px;
+    height: 3px;
+    background: linear-gradient(90deg, transparent, rgba(90, 159, 212, 0.32), transparent);
+    box-shadow: 0 0 22px rgba(0, 212, 255, 0.1);
+    z-index: 0;
+  }
+
+  .about-stage-grid {
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px),
+      linear-gradient(180deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+    background-size: 32px 32px;
+    opacity: 0.18;
+    z-index: 0;
   }
 
   .about-light-cone {
     position: absolute;
     left: 50%;
-    bottom: 78px;
-    width: min(220px, 48%);
-    height: 300px;
+    bottom: 102px;
+    width: min(420px, 58%);
+    height: 460px;
     transform: translateX(-50%);
-    background: radial-gradient(ellipse at bottom, rgba(240, 90, 80, 0.18) 0%, rgba(240, 90, 80, 0.1) 28%, rgba(240, 90, 80, 0.03) 56%, transparent 76%);
-    filter: blur(2px);
+    background: radial-gradient(ellipse at bottom, rgba(240, 90, 80, 0.18) 0%, rgba(240, 90, 80, 0.11) 30%, rgba(240, 90, 80, 0.04) 56%, transparent 78%);
+    filter: blur(4px);
     opacity: 0.95;
     z-index: 0;
   }
@@ -1471,9 +1482,9 @@
   .about-ground-shadow {
     position: absolute;
     left: 50%;
-    bottom: 56px;
-    width: min(210px, 54%);
-    height: 38px;
+    bottom: 68px;
+    width: min(340px, 64%);
+    height: 58px;
     transform: translateX(-50%);
     background: radial-gradient(ellipse at center, rgba(240, 90, 80, 0.38) 0%, rgba(240, 90, 80, 0.18) 40%, transparent 72%);
     opacity: 0.42;
@@ -1492,20 +1503,20 @@
   }
 
   .about-logo-sprite {
-    width: clamp(160px, 20vw, 236px);
+    width: clamp(320px, 40vw, 620px);
     max-width: 100%;
     image-rendering: pixelated;
     image-rendering: crisp-edges;
     transform-origin: center center;
-    filter: drop-shadow(0 10px 12px rgba(0, 0, 0, 0.45));
+    filter: drop-shadow(0 18px 18px rgba(0, 0, 0, 0.42));
     animation: about-logo-spin 3s infinite ease-in-out;
     user-select: none;
   }
 
   .about-stage-label {
     position: absolute;
-    left: 24px;
-    bottom: 18px;
+    left: 16px;
+    bottom: 8px;
     z-index: 3;
     font-family: 'Silkscreen', cursive;
     font-size: 12px;
@@ -1515,27 +1526,41 @@
     text-transform: uppercase;
   }
 
-  .about-copy-stack {
+  .about-copy-column {
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    justify-content: center;
+    gap: 18px;
+    padding: 24px 18px 24px 0;
   }
 
-  .about-copy-panel {
+  .about-title-row {
     display: flex;
     align-items: center;
-    min-height: 100%;
-    padding: 20px;
-    background:
-      linear-gradient(180deg, rgba(11, 19, 37, 0.95), rgba(7, 10, 20, 0.98));
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .about-title {
+    font-family: 'Press Start 2P', cursive;
+    font-size: clamp(18px, 1.6vw, 24px);
+    line-height: 1.8;
+    color: var(--cyan);
+    text-transform: uppercase;
+    text-shadow: 0 0 12px rgba(0, 212, 255, 0.16);
+  }
+
+  .about-copy-column .micro-chip {
+    margin-top: 2px;
   }
 
   .about-copy {
+    display: flex;
     white-space: pre-line;
     font-family: 'Share Tech Mono', monospace;
-    font-size: clamp(20px, 1.8vw, 28px);
-    line-height: 1.45;
-    letter-spacing: 1.6px;
+    font-size: clamp(24px, 2vw, 32px);
+    line-height: 1.6;
+    letter-spacing: 1.9px;
     text-transform: uppercase;
     color: #dbe8ff;
     text-shadow: 0 0 12px rgba(0, 212, 255, 0.12);
@@ -1663,8 +1688,9 @@
       grid-column: span 12;
     }
 
-    .about-body {
+    .about-hero {
       grid-template-columns: 1fr;
+      gap: 12px;
     }
 
     .archive-drawer {
@@ -1728,13 +1754,21 @@
       justify-content: flex-start;
     }
 
-    .about-item-stage {
-      min-height: 340px;
-      padding: 20px;
+    .about-stage {
+      min-height: 420px;
+      padding: 28px 20px 80px;
+    }
+
+    .about-copy-column {
+      padding: 0 8px 12px;
+    }
+
+    .about-logo-sprite {
+      width: clamp(240px, 66vw, 420px);
     }
 
     .about-copy {
-      font-size: 20px;
+      font-size: 22px;
       letter-spacing: 1.2px;
     }
 

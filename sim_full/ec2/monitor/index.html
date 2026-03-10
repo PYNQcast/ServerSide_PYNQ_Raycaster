@@ -475,49 +475,44 @@
       </div>
     </section>
 
-    <section id="page-about" class="page" hidden>
+    <section id="page-about" class="page about-page" hidden>
       <div class="section-label">About PYNQCAST</div>
 
-      <div class="about-layout">
-        <article class="panel-raised about-panel">
-          <div class="panel-head about-head">
-            <h2>&#9638; About PYNQCAST</h2>
+      <section class="about-hero">
+        <div class="about-stage">
+          <div class="about-stage-grid" aria-hidden="true"></div>
+          <div class="about-light-cone" aria-hidden="true"></div>
+          <div class="about-ground-shadow" aria-hidden="true"></div>
+          <div class="about-sprite-wrap">
+            <img
+              class="about-logo-sprite"
+              src="/pynqcast-logo.svg"
+              alt="PYNQCAST logo"
+              draggable="false"
+            >
+          </div>
+          <div class="about-stage-label">dropped relic · live node cluster</div>
+        </div>
+
+        <div class="about-copy-column">
+          <div class="about-title-row">
+            <h2 class="about-title">&#9638; About PYNQCAST</h2>
             <span class="micro-chip">v1.0</span>
           </div>
 
-          <div class="about-body">
-            <div class="panel-inset about-item-stage">
-              <div class="about-light-cone" aria-hidden="true"></div>
-              <div class="about-ground-shadow" aria-hidden="true"></div>
-              <div class="about-sprite-wrap">
-                <img
-                  class="about-logo-sprite"
-                  src="/pynqcast-logo.svg"
-                  alt="PYNQCAST logo"
-                  draggable="false"
-                >
-              </div>
-              <div class="about-stage-label">dropped relic · live node cluster</div>
-            </div>
-
-            <div class="about-copy-stack">
-              <div class="panel-inset about-copy-panel">
-                <div class="about-copy">
+          <div class="about-copy">
 DISTRIBUTED FPGA RAY CASTER
 4x PYNQ-Z2 · REDIS · KAFKA · AWS
 BUILT @ IMPERIAL COLLEGE LONDON
-                </div>
-              </div>
-
-              <div class="about-credit-strip">
-                <span class="about-credit-chip">retro ops HUD</span>
-                <span class="about-credit-chip">ec2 + fpga transport</span>
-                <span class="about-credit-chip">sidecar archive path</span>
-              </div>
-            </div>
           </div>
-        </article>
-      </div>
+
+          <div class="about-credit-strip">
+            <span class="about-credit-chip">retro ops HUD</span>
+            <span class="about-credit-chip">ec2 + fpga transport</span>
+            <span class="about-credit-chip">sidecar archive path</span>
+          </div>
+        </div>
+      </section>
     </section>
   </main>
 </div>
