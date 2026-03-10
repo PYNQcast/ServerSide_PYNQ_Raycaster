@@ -668,6 +668,18 @@
       inset calc(var(--px) * -1) calc(var(--px) * -1) 0 0 #2f5f8d;
   }
 
+  .server-frame-panel {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .server-frame-panel #frame-chart {
+    width: 100%;
+    max-width: none;
+  }
+
   .metric-row {
     display: flex;
     justify-content: space-between;
@@ -1213,6 +1225,31 @@
 
   .profiler-note {
     margin-top: 0;
+  }
+
+  .sidebar-profiler-panel .frame-chart-container {
+    padding: 14px 10px 8px;
+  }
+
+  .sidebar-profiler-panel .target-lines,
+  .sidebar-profiler-panel .stacked-bars {
+    height: 128px;
+  }
+
+  .sidebar-profiler-panel .target-label {
+    font-size: 9px;
+  }
+
+  .sidebar-profiler-panel .legend {
+    gap: 12px;
+  }
+
+  .sidebar-profiler-panel .legend-item {
+    font-size: 11px;
+  }
+
+  .sidebar-profiler-panel .profiler-note {
+    font-size: 18px;
   }
 
   .control-stack {
