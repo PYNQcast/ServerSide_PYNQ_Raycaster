@@ -43,7 +43,9 @@ MAP_CHANGE_REJOIN_DELAY_S = 0.25
 TICK_HZ      = 20
 TICK_INTERVAL = 1.0 / TICK_HZ
 ARENA_RADIUS = 50.0
-ORBIT_ROTATION_SPEED = 0.07
+ORBIT_RUNNER_ROTATION_SPEED = 0.06
+ORBIT_TAGGER_ROTATION_SPEED = 0.10
+ORBIT_FALLBACK_ROTATION_SPEED = 0.08
 MAP_ROTATION_SPEED_BASE = 0.05
 MAP_ROTATION_SPEED_STEP = 0.06
 MANUAL_TURN_STEP = 0.2
@@ -92,6 +94,28 @@ def load_local_map(name: str):
         "tiles": tiles,
         "spawn_positions": spawn_positions,
     }
+
+
+def desired_runtime_from_game_state(game_state: dict, current_selected_map: str):
+    desired_view = "orbit" if str(game_state.get("sim_view_mode", "map")).lower() == "orbit" else "map"
+    selected_map = str(game_state.get("selected_map") or "").strip()
+    if not selected_map:
+        fallback_map = str(game_state.get("map") or "").strip()
+        if fallback_map and fallback_map != ORBIT_TEST_MAP_NAME:
+            selected_map = fallback_map
+    return desired_view, (selected_map or current_selected_map)
+
+
+def orbit_rotation_speed_for_player(player_id: int | None, node_index: int) -> float:
+    if player_id == 1:
+        return ORBIT_RUNNER_ROTATION_SPEED
+    if player_id == 2:
+        return ORBIT_TAGGER_ROTATION_SPEED
+    if node_index == 0:
+        return ORBIT_RUNNER_ROTATION_SPEED
+    if node_index == 1:
+        return ORBIT_TAGGER_ROTATION_SPEED
+    return ORBIT_FALLBACK_ROTATION_SPEED
 
 
 def build_orbit_test_map():
@@ -378,6 +402,7 @@ def run_node(server_ip, server_port, player_id, node_index,
     tag = f"[NODE {player_id}]"
 
     ps = None  # Redis pub/sub (optional)
+    rc = None
     if redislib:
         try:
             rc = redislib.Redis(host=redis_host, port=redis_port,
@@ -452,10 +477,31 @@ def run_node(server_ip, server_port, player_id, node_index,
         print(f"{tag} sim view switched to {sim_view_mode}")
         return True
 
+    def sync_runtime_from_redis():
+        nonlocal selected_map_name
+        if rc is None:
+            return False
+        try:
+            game_state = rc.hgetall("game:state")
+        except Exception:
+            return False
+        if not game_state:
+            return False
+
+        desired_view, desired_map = desired_runtime_from_game_state(game_state, selected_map_name)
+        changed = False
+        if desired_map != selected_map_name:
+            load_selected_map(desired_map)
+            changed = True
+        if desired_view != sim_view_mode:
+            changed = switch_sim_view(desired_view) or changed
+        return changed
+
     try:
         if manual_controller:
             print(f"{tag} manual mode: arrows move/turn, space shoots")
         while True:
+            sync_runtime_from_redis()
             # ── WAITING: block until dashboard sends restart ──────────────────
             if not playing:
                 if ps:
@@ -561,6 +607,11 @@ def run_node(server_ip, server_port, player_id, node_index,
                         print(f"{tag} restart received — rejoining in {RESTART_DELAY_S}s...")
                         break
 
+            if playing and sync_runtime_from_redis():
+                rejoin_at = time.monotonic() + MAP_CHANGE_REJOIN_DELAY_S
+                playing = False
+                print(f"{tag} runtime state changed via Redis snapshot — rejoining")
+
             # receive all queued broadcasts; stop playing if FLAG_TAGGED seen
             while playing:
                 try:
@@ -617,7 +668,8 @@ def run_node(server_ip, server_port, player_id, node_index,
                 x, y, angle, shoot_now = apply_manual_actions(x, y, angle, actions, map_state)
                 input_flags = client_input_flags(shooting=shoot_now)
             elif sim_view_mode == "orbit":
-                orbit_phase = (orbit_phase + ORBIT_ROTATION_SPEED) % (math.pi * 2.0)
+                orbit_rotation_speed = orbit_rotation_speed_for_player(assigned_player_id, node_index)
+                orbit_phase = (orbit_phase + orbit_rotation_speed) % (math.pi * 2.0)
                 x = radius * math.cos(orbit_phase)
                 y = radius * math.sin(orbit_phase)
                 angle = orbit_phase + (math.pi / 2.0)

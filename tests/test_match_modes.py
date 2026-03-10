@@ -518,6 +518,35 @@ def test_sim_view_switch_uses_orbit_runtime_map_but_keeps_selected_map():
         assert game_tick.state.selected_map_name == "ghost_bits"
 
 
+def test_sim_node_runtime_prefers_selected_map_over_orbit_runtime_map():
+    with sim_import_context():
+        node_sim = importlib.import_module("node_simulator")
+
+        desired_view, selected_map = node_sim.desired_runtime_from_game_state(
+            {
+                "sim_view_mode": "orbit",
+                "selected_map": "ghost_bits",
+                "map": "orbit_test",
+            },
+            "chase",
+        )
+
+        assert desired_view == "orbit"
+        assert selected_map == "ghost_bits"
+
+
+def test_sim_orbit_tagger_speed_exceeds_runner_speed():
+    with sim_import_context():
+        node_sim = importlib.import_module("node_simulator")
+
+        runner_speed = node_sim.orbit_rotation_speed_for_player(1, 0)
+        tagger_speed = node_sim.orbit_rotation_speed_for_player(2, 1)
+        fallback_speed = node_sim.orbit_rotation_speed_for_player(None, 2)
+
+        assert tagger_speed > runner_speed
+        assert fallback_speed >= runner_speed
+
+
 def test_sim_orbit_view_match_start_uses_orbit_spawns():
     with sim_import_context():
         protocol = importlib.import_module("protocol")

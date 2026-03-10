@@ -480,19 +480,21 @@
           <button class="control-btn restart" onclick="requestNodeMode(2, 'manual')">P2 Manual</button>
         </div>
       </div>
-      <div class="metric-note" style="margin-top:8px">Ghost Taggers (simulates PYNQ menu)</div>
-      <div class="control-stack">
-        <button class="control-btn" onclick="sendControl('set_ghosts_0', 'ghost count → 0')">0 Ghosts</button>
-        <button class="control-btn" onclick="sendControl('set_ghosts_1', 'ghost count → 1')">1 Ghost</button>
-        <button class="control-btn" onclick="sendControl('set_ghosts_2', 'ghost count → 2')">2 Ghosts</button>
-        <button class="control-btn" onclick="sendControl('set_ghosts_3', 'ghost count → 3')">3 Ghosts</button>
-      </div>
-      <div class="metric-note" style="margin-top:8px">Map (hot-swap mid-session)</div>
-      <div class="control-stack" id="map-btn-list">
-        <span style="color:#333">loading maps...</span>
+      <div id="map-play-controls">
+        <div class="metric-note" style="margin-top:8px">Ghost Taggers (simulates PYNQ menu)</div>
+        <div class="control-stack">
+          <button class="control-btn" onclick="sendControl('set_ghosts_0', 'ghost count → 0')">0 Ghosts</button>
+          <button class="control-btn" onclick="sendControl('set_ghosts_1', 'ghost count → 1')">1 Ghost</button>
+          <button class="control-btn" onclick="sendControl('set_ghosts_2', 'ghost count → 2')">2 Ghosts</button>
+          <button class="control-btn" onclick="sendControl('set_ghosts_3', 'ghost count → 3')">3 Ghosts</button>
+        </div>
+        <div class="metric-note" style="margin-top:8px">Map (hot-swap mid-session)</div>
+        <div class="control-stack" id="map-btn-list">
+          <span style="color:#333">loading maps...</span>
+        </div>
+        <div class="metric-note">Map play is manual-only. Focus the relevant tmux pane before using arrow keys.</div>
       </div>
       <div class="metric-note">EC2 services are controlled here. Node simulators still run locally via `dev.sh`, but their mode can be switched over Redis.</div>
-      <div class="metric-note">Map play is manual-only. Focus the relevant tmux pane before using arrow keys.</div>
       <div class="metric-note" id="svc-note">controls run on EC2 only; node simulators still start locally</div>
     </div>
 
@@ -698,10 +700,12 @@ function maybeEnforceMapManual(players) {
 
 function updateOrbitModeControls() {
   const orbitControls = document.getElementById('orbit-mode-controls');
+  const mapPlayControls = document.getElementById('map-play-controls');
   const note = document.getElementById('view-mode-note');
   orbitControls.hidden = _viewMode !== 'orbit';
+  mapPlayControls.hidden = _viewMode === 'orbit';
   note.textContent = _viewMode === 'orbit'
-    ? 'Orbit test only changes the sim view/runtime map. Use the controls below if you want auto orbit motion.'
+    ? 'Orbit test is a two-player interaction smoke test. Map and ghost controls stay hidden here.'
     : 'Map play is the default and forces both simulator nodes back to manual control.';
 }
 
