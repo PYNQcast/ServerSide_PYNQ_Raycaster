@@ -358,12 +358,16 @@
 
   .hud-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns:
+      repeat(4, minmax(170px, 0.78fr))
+      minmax(340px, 1.7fr);
     gap: 12px;
+    align-items: stretch;
   }
 
   .hud-card {
-    min-height: 128px;
+    min-height: 108px;
+    padding: 14px;
   }
 
   .hud-label {
@@ -371,7 +375,7 @@
     font-size: 12px;
     color: var(--yellow);
     text-transform: uppercase;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
   }
 
   .fps-stack {
@@ -382,7 +386,7 @@
 
   #fps {
     font-family: 'Press Start 2P', cursive;
-    font-size: 30px;
+    font-size: 28px;
     line-height: 1.2;
     color: var(--green);
     text-shadow: 0 0 10px rgba(0, 255, 65, 0.4);
@@ -390,23 +394,99 @@
 
   .fps-unit {
     font-family: 'Press Start 2P', cursive;
-    font-size: 12px;
+    font-size: 11px;
     color: var(--green);
     margin-bottom: 4px;
   }
 
   .hud-value {
     font-family: 'Press Start 2P', cursive;
-    font-size: 14px;
+    font-size: 12px;
     line-height: 1.8;
     color: var(--white);
   }
 
   .hud-sub {
     font-family: 'VT323', monospace;
-    font-size: 22px;
+    font-size: 20px;
     color: #d4e9ff;
-    margin-top: 10px;
+    margin-top: 8px;
+  }
+
+  .hud-events-card {
+    min-width: 0;
+    min-height: 108px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px;
+  }
+
+  .hud-events-head {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .hud-events-head .hud-label {
+    margin-bottom: 0;
+  }
+
+  .hud-events-list {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-height: 0;
+  }
+
+  .hud-feed-empty {
+    font-family: 'VT323', monospace;
+    font-size: 20px;
+    color: #92bf9f;
+  }
+
+  .game-event-row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 6px 8px;
+    background: rgba(0, 0, 0, 0.28);
+    border-left: 4px solid var(--green);
+    font-family: 'VT323', monospace;
+    font-size: 20px;
+    color: var(--green);
+  }
+
+  .game-event-text {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .game-event-row .event-time {
+    color: #7dd99a;
+  }
+
+  .game-event-row.player_tagged { border-left-color: var(--coral); color: #ffd2d2; }
+  .game-event-row.match_start { border-left-color: var(--green); color: #bdf9cd; }
+  .game-event-row.match_end { border-left-color: var(--yellow); color: #ffe59a; }
+  .game-event-row.match_aborted { border-left-color: var(--coral-light); color: #ffd8dd; }
+  .game-event-row.match_paused { border-left-color: var(--yellow); color: #ffe8a8; }
+  .game-event-row.match_resumed { border-left-color: var(--cyan); color: #c9f6ff; }
+  .game-event-row.bit_collected { border-left-color: var(--cyan); color: #c9f6ff; }
+  .game-event-row.unknown { border-left-color: #8ca7c8; color: #d5e4f7; }
+  .game-event-row.state_snapshot { display: none; }
+
+  #hud-event-count {
+    min-width: auto;
+    text-align: left;
   }
 
   .game-layout {
@@ -1056,6 +1136,10 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
+    .hud-events-card {
+      grid-column: 1 / -1;
+    }
+
     .game-layout {
       grid-template-columns: 1fr;
     }
@@ -1208,6 +1292,16 @@
           <div class="hud-label">Socket Feed</div>
           <div id="hud-ws-rate" class="hud-value">0 / s</div>
           <div class="hud-sub">browser update stream</div>
+        </div>
+
+        <div class="panel-terminal hud-events-card">
+          <div class="hud-events-head">
+            <div class="hud-label">Live Event Feed</div>
+            <span id="hud-event-count" class="micro-chip">idle</span>
+          </div>
+          <div id="game-event-list" class="hud-events-list">
+            <div class="hud-feed-empty">waiting for first match event...</div>
+          </div>
         </div>
       </div>
 
@@ -2394,6 +2488,48 @@ function updateMatches(matches) {
 // ── Event log ──────────────────────────────────────────────────────────────
 // monitor.py now sends the current match's event sequence only (newest first).
 // We re-render the small list each update so a new match clears old history.
+function describeEventText(ev) {
+  const type = ev.event || 'unknown';
+  if (type === 'player_tagged') return `P${ev.player_id} tagged  (dist ${ev.dist != null ? (+ev.dist).toFixed(1) : '?'}u)`;
+  if (type === 'bit_collected') {
+    const totalBits = latestState?.bits?.length || 0;
+    const remaining = totalBits ? countActiveBits(ev.bits_mask ?? 0, totalBits) : '?';
+    return `bit ${ev.bit_id ?? '?'} collected  (${remaining} left)`;
+  }
+  if (type === 'match_start') {
+    const humans = ev.human_players ?? ev.players ?? '?';
+    const ghosts = ev.ghost_count ?? 0;
+    return ghosts ? `match started  (${humans} human, ${ghosts} ghost)` : `match started  (${humans} players)`;
+  }
+  if (type === 'match_end') return `match ended  (winner: ${ev.winner ?? '?'})`;
+  if (type === 'match_aborted') return `match aborted  (${ev.reason ?? 'unknown_reason'})`;
+  if (type === 'match_paused') {
+    const who = describePausedPlayers(ev.timed_out_player_ids);
+    const tail = ev.pause_abort_s != null ? `, abort in ${Math.round(+ev.pause_abort_s)}s` : '';
+    return `match paused  (${who}${tail})`;
+  }
+  if (type === 'match_resumed') return 'match resumed  (all players back)';
+  return type;
+}
+
+function renderGameEvents(events) {
+  const list = document.getElementById('game-event-list');
+  const count = document.getElementById('hud-event-count');
+
+  if (!events || events.length === 0) {
+    list.innerHTML = '<div class="hud-feed-empty">waiting for first match event...</div>';
+    count.textContent = 'idle';
+    return;
+  }
+
+  const latest = events.slice(0, 4);
+  list.innerHTML = latest.map((ev) => {
+    const type = ev.event || 'unknown';
+    return `<div class="game-event-row ${type}"><span class="game-event-text">${describeEventText(ev)}</span><span class="event-time">${ev.display_time || ''}</span></div>`;
+  }).join('');
+  count.textContent = `${events.length} this match`;
+}
+
 function updateEvents(events) {
   const list = document.getElementById('event-list');
   const count = document.getElementById('event-count');
@@ -2401,34 +2537,16 @@ function updateEvents(events) {
   if (!events || events.length === 0) {
     list.innerHTML = '';
     count.textContent = '';
+    renderGameEvents([]);
     return;
   }
 
   const ordered = [...events].reverse();
+  renderGameEvents(events);
   list.innerHTML = ordered.map((ev) => {
     const type = ev.event || 'unknown';
-    let text = type;
-    if (type === 'player_tagged') text = `P${ev.player_id} tagged  (dist ${ev.dist != null ? (+ev.dist).toFixed(1) : '?'}u)`;
-    else if (type === 'bit_collected') {
-      const totalBits = latestState?.bits?.length || 0;
-      const remaining = totalBits ? countActiveBits(ev.bits_mask ?? 0, totalBits) : '?';
-      text = `bit ${ev.bit_id ?? '?'} collected  (${remaining} left)`;
-    }
-    else if (type === 'match_start') {
-      const humans = ev.human_players ?? ev.players ?? '?';
-      const ghosts = ev.ghost_count ?? 0;
-      text = ghosts ? `match started  (${humans} human, ${ghosts} ghost)` : `match started  (${humans} players)`;
-    }
-    else if (type === 'match_end')   text = `match ended  (winner: ${ev.winner ?? '?'})`;
-    else if (type === 'match_aborted') text = `match aborted  (${ev.reason ?? 'unknown_reason'})`;
-    else if (type === 'match_paused') {
-      const who = describePausedPlayers(ev.timed_out_player_ids);
-      const tail = ev.pause_abort_s != null ? `, abort in ${Math.round(+ev.pause_abort_s)}s` : '';
-      text = `match paused  (${who}${tail})`;
-    }
-    else if (type === 'match_resumed') text = `match resumed  (all players back)`;
     const when = ev.display_time || '';
-    return `<div class="event-item ${type}"><span class="event-text">${text}</span><span class="event-time">${when}</span></div>`;
+    return `<div class="event-item ${type}"><span class="event-text">${describeEventText(ev)}</span><span class="event-time">${when}</span></div>`;
   }).join('');
 
   count.textContent = `${events.length} this match`;
