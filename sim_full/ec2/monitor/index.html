@@ -907,6 +907,14 @@
       inset 3px 3px 0 0 #556f9b;
   }
 
+  .pipe-jump-source {
+    background: #211a08;
+    border-color: #8d631b;
+    box-shadow:
+      inset -3px -3px 0 0 #120d05,
+      inset 3px 3px 0 0 #c99a33;
+  }
+
   .pipe-jump-arrow {
     font-family: 'Press Start 2P', cursive;
     font-size: 10px;
@@ -1547,10 +1555,10 @@
             <span class="micro-chip">actual runtime</span>
           </div>
           <div class="pipeline-board">
-            <div class="pipeline-summary">T1, T2, and T3 stay on one asyncio loop. T4 and the sidecar keep Redis and AWS persistence off the gameplay tick.</div>
+            <div class="pipeline-summary">Flow is `nodes -> T1 -> T2`, then `T2 -> T3 -> nodes` for broadcast and `T2 -> T4 -> Redis -> sidecar -> AWS` for persistence.</div>
 
             <div class="pipeline-lane">
-              <div class="pipeline-lane-tag">Hot Loop</div>
+              <div class="pipeline-lane-tag">Ingress</div>
               <div class="pipe-card stage-net">
                 <div class="pipe-card-label">clients</div>
                 <div class="pipe-card-title">PYNQ + Node Sims</div>
@@ -1584,9 +1592,14 @@
             </div>
 
             <div class="pipeline-lane">
-              <div class="pipeline-lane-tag">Off Tick</div>
+              <div class="pipeline-lane-tag">Broadcast</div>
+              <div class="pipe-jump pipe-jump-source">
+                <div class="pipe-jump-arrow">→</div>
+                <div class="pipe-jump-label">from T2</div>
+              </div>
+
               <div class="pipe-jump">
-                <div class="pipe-jump-arrow">↓</div>
+                <div class="pipe-jump-arrow">→</div>
                 <div class="pipe-jump-label">broadcast_queue</div>
               </div>
 
@@ -1598,7 +1611,27 @@
               </div>
 
               <div class="pipe-jump">
-                <div class="pipe-jump-arrow">↓</div>
+                <div class="pipe-jump-arrow">→</div>
+                <div class="pipe-jump-label">shared EC2:9000</div>
+              </div>
+
+              <div class="pipe-card stage-net">
+                <div class="pipe-card-label">outbound</div>
+                <div class="pipe-card-title">Active Nodes</div>
+                <div class="pipe-card-desc">frame slices and state updates return to the players</div>
+                <div class="pipe-card-val">same clients, reverse path</div>
+              </div>
+            </div>
+
+            <div class="pipeline-lane">
+              <div class="pipeline-lane-tag">Persistence</div>
+              <div class="pipe-jump pipe-jump-source">
+                <div class="pipe-jump-arrow">→</div>
+                <div class="pipe-jump-label">from T2</div>
+              </div>
+
+              <div class="pipe-jump">
+                <div class="pipe-jump-arrow">→</div>
                 <div class="pipe-jump-label">write_queue</div>
               </div>
 
@@ -1620,10 +1653,12 @@
                 <div class="pipe-card-desc">state hashes plus event and replay lists</div>
                 <div class="pipe-card-val">cache + queues</div>
               </div>
-            </div>
 
-            <div class="pipeline-lane">
-              <div class="pipeline-lane-tag">Persistence</div>
+              <div class="pipe-jump">
+                <div class="pipe-jump-arrow">→</div>
+                <div class="pipe-jump-label">BRPOP events + replay</div>
+              </div>
+
               <div class="pipe-card stage-store">
                 <div class="pipe-card-label">process</div>
                 <div class="pipe-card-title">Sidecar</div>
@@ -1636,7 +1671,7 @@
 
               <div class="pipe-jump">
                 <div class="pipe-jump-arrow">→</div>
-                <div class="pipe-jump-label">fan-out</div>
+                <div class="pipe-jump-label">AWS fan-out</div>
               </div>
 
               <div class="pipe-card stage-ext">
