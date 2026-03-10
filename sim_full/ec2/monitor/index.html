@@ -412,6 +412,10 @@
     gap: 12px;
   }
 
+  .game-layout > * {
+    min-width: 0;
+  }
+
   .viewport-card {
     min-height: 0;
     display: flex;
@@ -449,6 +453,7 @@
 
   .game-sidebar {
     min-height: 0;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 12px;
@@ -543,6 +548,39 @@
   td.tagged {
     color: var(--coral-light);
     text-shadow: 0 0 8px rgba(240, 82, 82, 0.4);
+  }
+
+  .player-panel {
+    min-width: 0;
+  }
+
+  .player-table-wrap {
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 4px;
+  }
+
+  .player-table {
+    min-width: 620px;
+  }
+
+  .player-table th,
+  .player-table td {
+    white-space: nowrap;
+  }
+
+  .player-table th {
+    font-size: 10px;
+  }
+
+  .player-table td {
+    font-size: 18px;
+    padding: 6px;
+  }
+
+  .player-table td.pid {
+    font-size: 9px;
   }
 
   .server-grid,
@@ -1021,15 +1059,17 @@
             <div class="metric-note">Recent monitor render times. Taller bars mean slower browser-side drawing.</div>
           </div>
 
-          <div class="panel-raised">
+          <div class="panel-raised player-panel">
             <div class="panel-head">
               <h2>Player Stats</h2>
               <span class="micro-chip">live</span>
             </div>
-            <table>
-              <thead><tr><th>ID</th><th>role</th><th>X</th><th>Y</th><th>angle</th><th>dist</th><th>status</th></tr></thead>
-              <tbody id="player-tbody"></tbody>
-            </table>
+            <div class="player-table-wrap">
+              <table class="player-table">
+                <thead><tr><th>ID</th><th>role</th><th>X</th><th>Y</th><th>angle</th><th>dist</th><th>status</th></tr></thead>
+                <tbody id="player-tbody"></tbody>
+              </table>
+            </div>
           </div>
 
           <div class="panel-raised">
