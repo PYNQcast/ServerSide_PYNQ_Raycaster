@@ -16,12 +16,16 @@ export function mountPYNQCASTCoin(rootEl) {
   wrap.classList.add('three-ready');
   stage?.classList.add('three-ready');
 
+  const coinStage = document.createElement('div');
+  coinStage.className = 'about-coin-stage';
+  wrap.appendChild(coinStage);
+
   const host = document.createElement('div');
   host.className = 'about-3d-host';
-  wrap.appendChild(host);
+  coinStage.appendChild(host);
   const groundShadow = document.createElement('div');
   groundShadow.id = 'ground-shadow';
-  wrap.appendChild(groundShadow);
+  coinStage.appendChild(groundShadow);
 
   let destroyed = false;
   let rafId = 0;
@@ -31,11 +35,15 @@ export function mountPYNQCASTCoin(rootEl) {
   let camera = null;
   let coinGroup = null;
   let edge = null;
+  let frontFill = null;
+  let backFill = null;
   let front = null;
   let back = null;
   let frontTexture = null;
   let backTexture = null;
   let edgeGeo = null;
+  let frontFillGeo = null;
+  let backFillGeo = null;
   let frontGeo = null;
   let backGeo = null;
   let materials = [];
@@ -71,6 +79,7 @@ export function mountPYNQCASTCoin(rootEl) {
     wrap.dataset.threeMounted = '0';
     wrap.classList.remove('three-ready');
     stage?.classList.remove('three-ready');
+    coinStage.remove();
     host.remove();
     groundShadow.remove();
     return () => {};
@@ -104,6 +113,8 @@ export function mountPYNQCASTCoin(rootEl) {
   scene.add(rimLight);
 
   edgeGeo = new THREE.CylinderGeometry(1.14, 1.14, 0.14, 48, 1, true);
+  frontFillGeo = new THREE.CircleGeometry(1.13, 48);
+  backFillGeo = new THREE.CircleGeometry(1.13, 48);
   frontGeo = new THREE.CircleGeometry(1.14, 48);
   backGeo = new THREE.CircleGeometry(1.14, 48);
 
@@ -138,7 +149,14 @@ export function mountPYNQCASTCoin(rootEl) {
     depthWrite: true,
     side: THREE.FrontSide,
   });
-  materials = [edgeMaterial, faceMaterial, backFaceMaterial];
+  const fillMaterial = new THREE.MeshStandardMaterial({
+    color: 0x120406,
+    metalness: 0.3,
+    roughness: 0.6,
+    transparent: false,
+    depthWrite: true,
+  });
+  materials = [edgeMaterial, faceMaterial, backFaceMaterial, fillMaterial];
 
   coinGroup = new THREE.Group();
   coinGroup.rotation.z = 0.05;
@@ -147,6 +165,15 @@ export function mountPYNQCASTCoin(rootEl) {
   edge = new THREE.Mesh(edgeGeo, edgeMaterial);
   edge.rotation.x = Math.PI / 2;
   coinGroup.add(edge);
+
+  frontFill = new THREE.Mesh(frontFillGeo, fillMaterial);
+  frontFill.position.z = 0.065;
+  coinGroup.add(frontFill);
+
+  backFill = new THREE.Mesh(backFillGeo, fillMaterial);
+  backFill.position.z = -0.065;
+  backFill.rotation.y = Math.PI;
+  coinGroup.add(backFill);
 
   front = new THREE.Mesh(frontGeo, faceMaterial);
   front.position.z = 0.07;
@@ -244,18 +271,21 @@ export function mountPYNQCASTCoin(rootEl) {
       window.removeEventListener('resize', resize);
     }
     edge?.removeFromParent();
+    frontFill?.removeFromParent();
+    backFill?.removeFromParent();
     front?.removeFromParent();
     back?.removeFromParent();
     coinGroup?.removeFromParent();
     edgeGeo?.dispose();
+    frontFillGeo?.dispose();
+    backFillGeo?.dispose();
     frontGeo?.dispose();
     backGeo?.dispose();
     frontTexture?.dispose();
     backTexture?.dispose();
     materials.forEach((material) => material.dispose());
     renderer?.dispose();
-    host.remove();
-    groundShadow.remove();
+    coinStage.remove();
     wrap.classList.remove('three-ready');
     stage?.classList.remove('three-ready');
     if (lightCone) {
