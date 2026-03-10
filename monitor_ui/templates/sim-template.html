@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PYNQ Raycaster — Live Monitor</title>
+<link rel="stylesheet" href="/monitor.css">
+<script defer src="/monitor-state.js"></script>
+<script defer src="/monitor-render.js"></script>
+<script defer src="/monitor-app.js"></script>
+
+</head>
+<body>
+<div class="app-shell">
+  <header class="topbar">
+    <div class="brand-lockup">
+      <div class="brand-title">PYNQ CAST</div>
+      <div class="brand-sub">distributed FPGA raycaster monitor</div>
+    </div>
+    <nav class="top-nav">
+      <button id="tab-game" class="nav-tab active" type="button" onclick="setActiveTab('game')">Game View</button>
+      <button id="tab-server" class="nav-tab" type="button" onclick="setActiveTab('server')">Server Monitoring</button>
+      <button id="tab-controls" class="nav-tab" type="button" onclick="setActiveTab('controls')">Controls &amp; Config</button>
+      <button id="tab-about" class="nav-tab" type="button" onclick="setActiveTab('about')">About</button>
+    </nav>
+    <div class="top-status">
+      <span id="status" class="disconnected">● DISCONNECTED</span>
+      <span id="game-chip">no game</span>
+    </div>
+  </header>
+
+  <div id="pause-banner" class="pause-banner" hidden></div>
+
+  <main class="page-shell">
+    <section id="page-game" class="page">
+      <div class="section-label">Game View</div>
+
+      <div class="hud-grid">
+        <div class="panel-raised hud-card">
+          <div class="hud-label">Render Rate</div>
+          <div class="fps-stack">
+            <span id="fps">0</span>
+            <span class="fps-unit">FPS</span>
+          </div>
+          <div id="hud-frame-ms" class="hud-sub">0.0 ms/frame</div>
+        </div>
+
+        <div class="panel-raised hud-card">
+          <div class="hud-label">View Mode</div>
+          <div id="hud-view-mode" class="hud-value">Map Play</div>
+          <div id="hud-map-name" class="hud-sub">chase</div>
+        </div>
+
+        <div class="panel-raised hud-card">
+          <div class="hud-label">Match State</div>
+          <div id="hud-match-state" class="hud-value">Idle</div>
+          <div id="hud-player-count" class="hud-sub">0 entities online</div>
+        </div>
+
+        <div class="panel-raised hud-card">
+          <div class="hud-label">Socket Feed</div>
+          <div id="hud-ws-rate" class="hud-value">0 / s</div>
+          <div class="hud-sub">browser update stream</div>
+        </div>
+
+        <div class="panel-terminal hud-events-card">
+          <div class="hud-events-head">
+            <div class="hud-label">Live Event Feed</div>
+            <span id="hud-event-count" class="micro-chip">idle</span>
+          </div>
+          <div id="game-event-list" class="hud-events-list">
+            <div class="hud-feed-empty">waiting for first match event...</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="game-layout">
+        <div class="panel-raised viewport-card">
+          <div class="panel-head viewport-head">
+            <h2>Raycast Arena</h2>
+            <div class="viewport-head-meta">
+              <span id="canvas-label" class="panel-head-note">map play · loading map…</span>
+              <div class="viewport-action-row">
+                <button class="viewport-control-btn start" type="button" onclick="sendControl('restart', 'start match')">Start</button>
+                <button class="viewport-control-btn stop" type="button" onclick="sendControl('force_end', 'force end match')">End</button>
+                <button
+                  id="archive-toggle"
+                  class="archive-toggle-btn"
+                  type="button"
+                  aria-controls="archive-drawer"
+                  aria-expanded="false"
+                  onclick="toggleArchiveDrawer()"
+                >Archive</button>
+              </div>
+            </div>
+          </div>
+          <div class="viewport-wrap">
+            <canvas id="arena" width="480" height="480"></canvas>
+          </div>
+          <aside id="archive-drawer" class="panel-raised archive-drawer" hidden>
+            <div class="archive-drawer-head">
+              <h2>DynamoDB + Replay</h2>
+              <button class="archive-close-btn" type="button" onclick="toggleArchiveDrawer(false)">Close</button>
+            </div>
+            <div class="archive-drawer-body">
+              <div>
+                <div class="panel-head">
+                  <h2>Archive</h2>
+                  <span class="micro-chip">warm tier</span>
+                </div>
+                <div id="match-list"><span style="color:#90a3c4">loading...</span></div>
+                <div class="ddb-note">warm tier only · recent META rows kept in DynamoDB · older match rows archived to S3</div>
+              </div>
+
+              <div>
+                <div class="panel-head">
+                  <h2>Replay</h2>
+                  <span class="micro-chip">S3</span>
+                </div>
+                <div class="metric-note" id="replay-status">no replay loaded</div>
+                <div class="replay-list" id="replay-list">
+                  <button class="replay-btn empty" disabled>waiting for replayable matches...</button>
+                </div>
+                <div class="control-stack">
+                  <button class="control-btn stop" type="button" onclick="stopReplay()">Stop Replay</button>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
+
+        <div class="game-sidebar">
+          <div class="panel-raised frame-panel sidebar-profiler-panel">
+            <div class="panel-head">
+              <h2>Pipeline Frame Timing</h2>
+              <span class="micro-chip">stacked profiler</span>
+            </div>
+            <div class="frame-chart-container">
+              <div class="target-lines">
+                <div class="target-line target-60fps">
+                  <span class="target-label">16.7MS (60FPS)</span>
+                </div>
+                <div class="target-line target-30fps">
+                  <span class="target-label">33.3MS (30FPS)</span>
+                </div>
+              </div>
+
+              <div class="stacked-bars" id="stacked-frame-chart"></div>
+
+              <div class="bar-time-axis">
+                <span>oldest</span>
+                <span>newest</span>
+              </div>
+            </div>
+
+            <div class="legend">
+              <div class="legend-item"><span class="legend-swatch" style="background:var(--stage-dispatch)"></span>Dispatch</div>
+              <div class="legend-item"><span class="legend-swatch" style="background:var(--stage-compute)"></span>FPGA Compute</div>
+              <div class="legend-item"><span class="legend-swatch" style="background:var(--stage-network)"></span>Network</div>
+              <div class="legend-item"><span class="legend-swatch" style="background:var(--stage-composite)"></span>Composite</div>
+            </div>
+
+            <div class="metric-note profiler-note">Development timing shim for now. Replace this buffer with real per-stage frame telemetry once the websocket exposes it.</div>
+          </div>
+
+          <div class="panel-raised player-panel">
+            <div class="panel-head">
+              <h2>Player Stats</h2>
+              <span class="micro-chip">live</span>
+            </div>
+            <div class="player-table-wrap">
+              <table class="player-table">
+                <thead><tr><th>ID</th><th>role</th><th>X</th><th>Y</th><th>angle</th><th>dist</th><th>status</th></tr></thead>
+                <tbody id="player-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="panel-raised objective-panel">
+            <div class="panel-head">
+              <h2>Objective State</h2>
+              <span class="micro-chip">bits</span>
+            </div>
+            <div class="metric-row"><span>mode</span><span id="bits-mode">—</span></div>
+            <div class="metric-row"><span>remaining</span><span id="bits-remaining">—</span></div>
+            <div class="metric-row"><span>collected</span><span id="bits-collected">—</span></div>
+            <div class="metric-row"><span>progress</span><span id="bits-progress">—</span></div>
+            <div class="bits-track"><div class="bits-fill" id="bits-fill"></div></div>
+            <div class="metric-note" id="bits-note">runner wins by clearing every bit in chase_bits mode.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="page-server" class="page" hidden>
+      <div class="section-label">Server Monitoring</div>
+
+      <div class="server-grid">
+        <div class="panel-raised server-health">
+          <div class="panel-head">
+            <h2>Node Health</h2>
+            <span class="micro-chip">live</span>
+          </div>
+          <div class="status-grid">
+            <div class="panel-inset status-card">
+              <span class="status-name">Server</span>
+              <span id="svc-server" class="status-slot">—</span>
+            </div>
+            <div class="panel-inset status-card">
+              <span class="status-name">Sidecar</span>
+              <span id="svc-sidecar" class="status-slot">—</span>
+            </div>
+            <div class="panel-inset status-card">
+              <span class="status-name">Monitor</span>
+              <span id="svc-monitor" class="status-slot">—</span>
+            </div>
+            <div class="panel-inset status-card">
+              <span class="status-name">P1 Node</span>
+              <span id="node1-link" class="status-slot">offline · manual</span>
+            </div>
+            <div class="panel-inset status-card">
+              <span class="status-name">P2 Node</span>
+              <span id="node2-link" class="status-slot">offline · manual</span>
+            </div>
+            <div class="panel-inset status-card">
+              <span class="status-name">Live View</span>
+              <span id="server-view-card" class="status-slot">game telemetry</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel-raised pipeline-panel">
+          <div class="panel-head">
+            <h2>SEDA Pipeline</h2>
+            <span class="micro-chip">actual runtime</span>
+          </div>
+          <div class="pipeline-board">
+            <div class="pipeline-summary">Flow is `nodes -> T1 -> T2`, then `T2 -> T3 -> nodes` for broadcast and `T2 -> T4 -> Redis -> sidecar -> AWS` for persistence.</div>
+
+            <div class="pipeline-lane">
+              <div class="pipeline-lane-tag">Input Path</div>
+              <div class="pipe-card stage-net">
+                <div class="pipe-card-label">clients</div>
+                <div class="pipe-card-title">PYNQ + Node Sims</div>
+                <div class="pipe-card-desc">register, heartbeat, and movement packets</div>
+                <div class="pipe-card-val">UDP gameplay traffic</div>
+              </div>
+
+              <div class="pipe-jump">
+                <div class="pipe-jump-arrow">→</div>
+                <div class="pipe-jump-label">UDP 9000</div>
+              </div>
+
+              <div class="pipe-card stage-net">
+                <div class="pipe-card-label">asyncio</div>
+                <div class="pipe-card-title">T1 UDPReceiver</div>
+                <div class="pipe-card-desc">shared EC2:9000 socket ingress</div>
+                <div class="pipe-card-val">raw datagrams in</div>
+              </div>
+
+              <div class="pipe-jump">
+                <div class="pipe-jump-arrow">→</div>
+                <div class="pipe-jump-label">packet_queue</div>
+              </div>
+
+              <div class="pipe-card stage-logic">
+                <div class="pipe-card-label">asyncio · 20 Hz</div>
+                <div class="pipe-card-title">T2 GameTick</div>
+                <div class="pipe-card-desc">authoritative state, tags, bits, and broadcast build</div>
+                <div class="pipe-card-val"><span id="pp-players">0</span> live players</div>
+              </div>
+            </div>
+
+            <div class="pipeline-lane">
+              <div class="pipeline-lane-tag">Broadcast</div>
+              <div class="pipe-jump pipe-jump-source">
+                <div class="pipe-jump-arrow">→</div>
+                <div class="pipe-jump-label">from T2</div>
+              </div>
+
+              <div class="pipe-jump">
+                <div class="pipe-jump-arrow">→</div>
+                <div class="pipe-jump-label">broadcast_queue</div>
+              </div>
+
+              <div class="pipe-card stage-net">
+                <div class="pipe-card-label">asyncio</div>
+                <div class="pipe-card-title">T3 Broadcaster</div>
+                <div class="pipe-card-desc">same EC2:9000 socket back out to nodes</div>
+                <div class="pipe-card-val">UDP fan-out</div>
+              </div>
+
+              <div class="pipe-jump">
+                <div class="pipe-jump-arrow">→</div>
+                <div class="pipe-jump-label">shared EC2:9000</div>
+              </div>
+
+              <div class="pipe-card stage-net">
+                <div class="pipe-card-label">outbound</div>
+                <div class="pipe-card-title">Active Nodes</div>
+                <div class="pipe-card-desc">frame slices and state updates return to the players</div>
+                <div class="pipe-card-val">same clients, reverse path</div>
+              </div>
+            </div>
+
+            <div class="pipeline-lane">
+              <div class="pipeline-lane-tag">Persistence</div>
+              <div class="pipe-jump pipe-jump-source">
+                <div class="pipe-jump-arrow">→</div>
+                <div class="pipe-jump-label">from T2</div>
+              </div>
+
+              <div class="pipe-jump">
+                <div class="pipe-jump-arrow">→</div>
+                <div class="pipe-jump-label">write_queue</div>
+              </div>
+
+              <div class="pipe-card stage-io">
+                <div class="pipe-card-label">OS thread</div>
+                <div class="pipe-card-title">T4 RedisWriter</div>
+                <div class="pipe-card-desc">batches HSET and LPUSH, mirrors monitor events</div>
+                <div class="pipe-card-val"><span id="pp-ops">—</span> Redis ops/s</div>
+              </div>
+
+              <div class="pipe-jump">
+                <div class="pipe-jump-arrow">→</div>
+                <div class="pipe-jump-label">local Redis</div>
+              </div>
+
+              <div class="pipe-card stage-store">
+                <div class="pipe-card-label">hot tier</div>
+                <div class="pipe-card-title">Redis</div>
+                <div class="pipe-card-desc">state hashes plus event and replay lists</div>
+                <div class="pipe-card-val">cache + queues</div>
+              </div>
+
+              <div class="pipe-jump">
+                <div class="pipe-jump-arrow">→</div>
+                <div class="pipe-jump-label">BRPOP events + replay</div>
+              </div>
+
+              <div class="pipe-card stage-store">
+                <div class="pipe-card-label">process</div>
+                <div class="pipe-card-title">Sidecar</div>
+                <div class="pipe-card-desc">blocks on events and replay, manages retention</div>
+                <div class="pipe-card-metrics">
+                  <div class="pipe-card-metric"><span id="pp-blocked">—</span> blocked</div>
+                  <div class="pipe-card-metric"><span id="pp-events">—</span> events</div>
+                </div>
+              </div>
+
+              <div class="pipe-jump">
+                <div class="pipe-jump-arrow">→</div>
+                <div class="pipe-jump-label">AWS fan-out</div>
+              </div>
+
+              <div class="pipe-card stage-ext">
+                <div class="pipe-card-label">AWS warm tier</div>
+                <div class="pipe-card-title">DynamoDB</div>
+                <div class="pipe-card-desc">recent META plus tag and bit rows</div>
+                <div class="pipe-card-val"><span id="pp-ddb">—</span> warm matches</div>
+              </div>
+
+              <div class="pipe-card stage-ext">
+                <div class="pipe-card-label">AWS cold tier</div>
+                <div class="pipe-card-title">S3</div>
+                <div class="pipe-card-desc">compressed replays and DynamoDB archives</div>
+                <div class="pipe-card-val">cold storage</div>
+              </div>
+
+              <div class="pipe-card stage-ext">
+                <div class="pipe-card-label">AWS async trigger</div>
+                <div class="pipe-card-title">SNS / Lambda</div>
+                <div class="pipe-card-desc">post-match summary path on `match_end`</div>
+                <div class="pipe-card-val">summary hook</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel-raised storage-panel">
+          <div class="panel-head">
+            <h2>Redis Hot Cache</h2>
+            <span class="micro-chip">telemetry</span>
+          </div>
+          <div class="metric-row"><span>ops / sec</span><span id="r-ops">—</span></div>
+          <div class="metric-row"><span>memory</span><span id="r-mem">—</span></div>
+          <div class="metric-row"><span>clients</span><span id="r-clients">—</span></div>
+          <div class="metric-row"><span>blocked</span><span id="r-blocked">—</span></div>
+          <div class="metric-row"><span>pub/sub</span><span id="r-pubsub">—</span></div>
+          <div class="metric-row"><span>monitor load</span><span id="r-poll">—</span></div>
+          <div class="metric-note" id="redis-note">measuring live Redis load...</div>
+        </div>
+
+        <div class="panel-raised profiler-panel server-frame-panel">
+          <div class="panel-head">
+            <h2>Frame Timing</h2>
+            <span class="micro-chip">sparkline</span>
+          </div>
+          <canvas id="frame-chart" width="560" height="88"></canvas>
+          <div class="metric-note">Recent monitor render times. Taller bars mean slower browser-side drawing.</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="page-controls" class="page" hidden>
+      <div class="section-label">Controls &amp; Config</div>
+
+      <div class="controls-grid">
+        <div class="panel-raised controls-actions">
+          <div class="panel-head">
+            <h2>EC2 Service Controls</h2>
+            <span class="micro-chip">services</span>
+          </div>
+          <div class="control-stack">
+            <button class="control-btn start" type="button" onclick="sendControl('start_server', 'start server')">Start Server</button>
+            <button class="control-btn stop" type="button" onclick="sendControl('stop_server', 'stop server')">Stop Server</button>
+            <button class="control-btn start" type="button" onclick="sendControl('start_sidecar', 'start sidecar')">Start Sidecar</button>
+            <button class="control-btn stop" type="button" onclick="sendControl('stop_sidecar', 'stop sidecar')">Stop Sidecar</button>
+            <button class="control-btn restart" type="button" onclick="sendControl('restart_stack', 'restart stack')">Restart Stack</button>
+          </div>
+          <div class="metric-note" id="svc-note">controls run on EC2 only; node simulators still start locally</div>
+        </div>
+
+        <div class="panel-raised controls-sim">
+          <div class="panel-head">
+            <h2>Simulation Mode</h2>
+            <span class="micro-chip">manual / auto</span>
+          </div>
+          <div class="metric-note">View Mode</div>
+          <div class="control-pair" id="view-mode-btns"></div>
+          <div class="metric-note" id="view-mode-note">map play is the default and forces both simulator nodes back to manual control.</div>
+
+          <div id="orbit-mode-controls" hidden>
+            <div class="metric-note" style="margin-top:12px;">Orbit Test Controls</div>
+            <div class="metric-note">Orbit view is only for smoke-testing server movement. Auto/manual switching stays here.</div>
+            <div class="metric-note" style="margin-top:12px;">Node 1</div>
+            <div class="control-pair">
+              <button class="control-btn start" type="button" onclick="requestNodeMode(1, 'auto')">P1 Auto</button>
+              <button class="control-btn restart" type="button" onclick="requestNodeMode(1, 'manual')">P1 Manual</button>
+            </div>
+            <div class="metric-note" style="margin-top:12px;">Node 2</div>
+            <div class="control-pair">
+              <button class="control-btn start" type="button" onclick="requestNodeMode(2, 'auto')">P2 Auto</button>
+              <button class="control-btn restart" type="button" onclick="requestNodeMode(2, 'manual')">P2 Manual</button>
+            </div>
+          </div>
+
+          <div id="map-play-controls">
+            <div class="metric-note" style="margin-top:12px;">Ghost Taggers (simulates PYNQ menu)</div>
+            <div class="control-stack">
+              <button class="control-btn" type="button" onclick="sendControl('set_ghosts_0', 'ghost count → 0')">0 Ghosts</button>
+              <button class="control-btn" type="button" onclick="sendControl('set_ghosts_1', 'ghost count → 1')">1 Ghost</button>
+              <button class="control-btn" type="button" onclick="sendControl('set_ghosts_2', 'ghost count → 2')">2 Ghosts</button>
+              <button class="control-btn" type="button" onclick="sendControl('set_ghosts_3', 'ghost count → 3')">3 Ghosts</button>
+            </div>
+            <div class="metric-note" style="margin-top:12px;">Map (hot-swap mid-session)</div>
+            <div class="control-stack" id="map-btn-list">
+              <span style="color:#90a3c4">loading maps...</span>
+            </div>
+            <div class="metric-note">Map play is manual-only. Focus the relevant tmux pane before using arrow keys.</div>
+          </div>
+        </div>
+
+        <div class="panel-raised controls-notes">
+          <div class="panel-head">
+            <h2>Operator Notes</h2>
+            <span class="micro-chip">quick guide</span>
+          </div>
+          <div class="note-list">
+            <div class="metric-note">Game View is the showpiece: viewport, player state, bit progress, and frame timing stay together there.</div>
+            <div class="metric-note">Server Monitoring is the ops deck: health, pipeline throughput, storage tiers, replay archive, and the stacked frame profiler.</div>
+            <div class="metric-note">Controls &amp; Config keeps the active knobs isolated so runtime actions stop fighting with the visual telemetry pages.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="page-about" class="page about-page" hidden>
+      <div class="section-label">About PYNQCAST</div>
+
+      <section class="about-hero">
+        <div class="about-stage">
+          <div class="about-stage-grid" aria-hidden="true"></div>
+          <div class="about-light-cone" aria-hidden="true"></div>
+          <div class="about-ground-shadow" aria-hidden="true"></div>
+          <div class="about-sprite-wrap">
+            <img
+              class="about-logo-sprite"
+              src="/pynqcast-logo.svg"
+              alt="PYNQCAST logo"
+              draggable="false"
+            >
+          </div>
+          <div class="about-stage-label">dropped relic · live node cluster</div>
+        </div>
+
+        <div class="about-copy-column">
+          <div class="about-title-row">
+            <h2 class="about-title">&#9638; About PYNQCAST</h2>
+            <span class="micro-chip">v1.0</span>
+          </div>
+
+          <div class="about-copy">
+DISTRIBUTED FPGA RAY CASTER
+4x PYNQ-Z2 · REDIS · KAFKA · AWS
+BUILT @ IMPERIAL COLLEGE LONDON
+          </div>
+
+          <div class="about-credit-strip">
+            <span class="about-credit-chip">retro ops HUD</span>
+            <span class="about-credit-chip">ec2 + fpga transport</span>
+            <span class="about-credit-chip">sidecar archive path</span>
+          </div>
+        </div>
+      </section>
+    </section>
+  </main>
+</div>
+
+
+</html>
