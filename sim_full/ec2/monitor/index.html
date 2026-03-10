@@ -18,8 +18,13 @@
     --green-dark: #00cc33;
     --cyan: #00d4ff;
     --yellow: #ffd700;
+    --purple: #a855f7;
     --white: #e8e8e8;
     --gray: #555580;
+    --stage-dispatch: #a855f7;
+    --stage-compute: #00d4ff;
+    --stage-network: #ffd700;
+    --stage-composite: #00ff41;
     --px: 4px;
   }
 
@@ -803,25 +808,19 @@
   }
 
   .storage-panel,
-  .events-terminal {
+  .profiler-panel {
     grid-column: span 4;
   }
 
-  .events-terminal {
+  .profiler-panel {
     grid-column: span 8;
   }
 
-  .events-terminal {
+  .profiler-panel {
     min-height: 0;
     display: flex;
     flex-direction: column;
-  }
-
-  .events-terminal .panel-head,
-  .events-terminal #event-list,
-  .events-terminal .metric-note {
-    position: relative;
-    z-index: 1;
+    gap: 12px;
   }
 
   .status-grid {
@@ -1074,46 +1073,153 @@
     margin-top: 10px;
   }
 
-  #event-list {
-    flex: 1;
-    min-height: 220px;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+  .frame-chart-container {
+    position: relative;
+    background: #0a0a1a;
+    border: 4px solid #333355;
+    box-shadow:
+      inset 4px 4px 0 0 #000,
+      inset -4px -4px 0 0 #444466;
+    padding: 16px 12px 8px;
   }
 
-  .event-item {
+  .target-lines {
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    top: 16px;
+    height: 160px;
+    pointer-events: none;
+  }
+
+  .target-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    border-top: 1px dashed;
+    pointer-events: none;
+  }
+
+  .target-60fps {
+    bottom: calc((16.67 / 50) * 100%);
+    border-color: rgba(0, 255, 65, 0.3);
+  }
+
+  .target-30fps {
+    bottom: calc((33.33 / 50) * 100%);
+    border-color: rgba(255, 215, 0, 0.3);
+  }
+
+  .target-label {
+    position: absolute;
+    right: 0;
+    top: -10px;
+    padding-left: 8px;
+    background: rgba(10, 10, 26, 0.9);
+    font-family: 'Silkscreen', cursive;
+    font-size: 10px;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+  }
+
+  .target-60fps .target-label {
+    color: rgba(0, 255, 65, 0.8);
+  }
+
+  .target-30fps .target-label {
+    color: rgba(255, 215, 0, 0.85);
+  }
+
+  .stacked-bars {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 160px;
+  }
+
+  .stacked-bars-empty {
+    width: 100%;
+    align-self: center;
+    padding-top: 58px;
+    font-family: 'VT323', monospace;
+    font-size: 26px;
+    text-align: center;
+    color: #7aa3d1;
+  }
+
+  .stacked-col {
+    position: relative;
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column-reverse;
+    min-width: 3px;
+    max-width: 8px;
+    cursor: crosshair;
+  }
+
+  .stacked-col:hover::after {
+    content: attr(data-total) 'ms';
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: 'VT323', monospace;
+    font-size: 14px;
+    color: var(--white);
+    background: #000;
+    border: 2px solid #333355;
+    padding: 2px 6px;
+    white-space: nowrap;
+    z-index: 10;
+  }
+
+  .seg {
+    image-rendering: pixelated;
+  }
+
+  .seg-dispatch  { background: var(--stage-dispatch); }
+  .seg-compute   { background: var(--stage-compute); }
+  .seg-network   { background: var(--stage-network); }
+  .seg-composite { background: var(--stage-composite); }
+
+  .bar-time-axis {
     display: flex;
     justify-content: space-between;
-    align-items: baseline;
-    gap: 10px;
-    padding: 8px 10px;
-    background: rgba(0, 0, 0, 0.35);
-    border-left: 4px solid var(--green);
-    font-family: 'VT323', monospace;
-    font-size: 24px;
-    color: var(--green);
-  }
-
-  .event-text {
-    flex: 1;
-  }
-
-  .event-time {
-    flex-shrink: 0;
+    gap: 12px;
+    margin-top: 8px;
     font-family: 'Silkscreen', cursive;
     font-size: 11px;
-    color: #7dd99a;
+    text-transform: uppercase;
+    color: #7f8dad;
   }
 
-  .event-item.player_tagged { border-left-color: var(--coral); color: #ffd2d2; }
-  .event-item.match_start { border-left-color: var(--green); color: #bdf9cd; }
-  .event-item.match_end { border-left-color: var(--yellow); color: #ffe59a; }
-  .event-item.match_aborted { border-left-color: var(--coral-light); color: #ffd8dd; }
-  .event-item.match_paused { border-left-color: var(--yellow); color: #ffe8a8; }
-  .event-item.match_resumed { border-left-color: var(--cyan); color: #c9f6ff; }
-  .event-item.bit_collected { border-left-color: var(--cyan); color: #c9f6ff; }
+  .legend {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: 'Silkscreen', cursive;
+    font-size: 12px;
+    color: #8e99ba;
+    text-transform: uppercase;
+  }
+
+  .legend-swatch {
+    width: 14px;
+    height: 14px;
+    display: inline-block;
+  }
+
+  .profiler-note {
+    margin-top: 0;
+  }
 
   .control-stack {
     display: flex;
@@ -1274,7 +1380,7 @@
     .server-health,
     .pipeline-panel,
     .storage-panel,
-    .events-terminal,
+    .profiler-panel,
     .controls-actions,
     .controls-sim,
     .controls-notes {
@@ -1712,12 +1818,37 @@
           <div class="metric-note" id="redis-note">measuring live Redis load...</div>
         </div>
 
-        <div class="panel-terminal events-terminal">
+        <div class="panel-raised profiler-panel">
           <div class="panel-head">
-            <h2>Live Event Feed</h2>
-            <span id="event-count" class="micro-chip"></span>
+            <h2>Pipeline Frame Timing</h2>
+            <span class="micro-chip">stacked profiler</span>
           </div>
-          <div id="event-list"></div>
+          <div class="frame-chart-container">
+            <div class="target-lines">
+              <div class="target-line target-60fps">
+                <span class="target-label">16.7MS (60FPS)</span>
+              </div>
+              <div class="target-line target-30fps">
+                <span class="target-label">33.3MS (30FPS)</span>
+              </div>
+            </div>
+
+            <div class="stacked-bars" id="stacked-frame-chart"></div>
+
+            <div class="bar-time-axis">
+              <span>oldest</span>
+              <span>newest</span>
+            </div>
+          </div>
+
+          <div class="legend">
+            <div class="legend-item"><span class="legend-swatch" style="background:var(--stage-dispatch)"></span>Dispatch</div>
+            <div class="legend-item"><span class="legend-swatch" style="background:var(--stage-compute)"></span>FPGA Compute</div>
+            <div class="legend-item"><span class="legend-swatch" style="background:var(--stage-network)"></span>Network</div>
+            <div class="legend-item"><span class="legend-swatch" style="background:var(--stage-composite)"></span>Composite</div>
+          </div>
+
+          <div class="metric-note profiler-note">Development timing shim for now. Replace this buffer with real per-stage frame telemetry once the websocket exposes it.</div>
         </div>
       </div>
     </section>
@@ -1790,7 +1921,7 @@
           </div>
           <div class="note-list">
             <div class="metric-note">Game View is the showpiece: viewport, player state, bit progress, and frame timing stay together there.</div>
-            <div class="metric-note">Server Monitoring is the ops deck: health, pipeline throughput, storage tiers, replay archive, and the live event terminal.</div>
+            <div class="metric-note">Server Monitoring is the ops deck: health, pipeline throughput, storage tiers, replay archive, and the stacked frame profiler.</div>
             <div class="metric-note">Controls &amp; Config keeps the active knobs isolated so runtime actions stop fighting with the visual telemetry pages.</div>
           </div>
         </div>
@@ -1804,6 +1935,7 @@ const canvas = document.getElementById('arena');
 const ctx    = canvas.getContext('2d');
 const frameChartCanvas = document.getElementById('frame-chart');
 const frameChartCtx = frameChartCanvas.getContext('2d');
+const stackedFrameChart = document.getElementById('stacked-frame-chart');
 const W = canvas.width, H = canvas.height;
 const TAG_RADIUS     = 20.0;   // must match t2_game_tick.py TAG_RADIUS
 const ORBIT_RADIUS   = 50.0;   // must match t2_game_tick.py ORBIT_RADIUS
@@ -1828,6 +1960,11 @@ let _mapManualSyncPending = true;
 let _activePage = 'game';
 let _archiveDrawerOpen = false;
 const frameTimeHistory = [];
+const STACKED_BUFFER_SIZE = 120;
+const STACKED_MAX_MS = 50;
+const STACKED_CHART_HEIGHT = 160;
+const stackedFrameBuffer = [];
+let stackedFrameId = 0;
 let lastRenderSampleAt = performance.now();
 
 async function loadMap(name = 'chase') {
@@ -2046,6 +2183,85 @@ function drawFrameChart() {
     frameChartCtx.fillStyle = value > 20 ? '#f05252' : value > 14 ? '#ffd700' : '#00d4ff';
     frameChartCtx.fillRect(x, y, Math.max(1, barWidth - 1), barHeight);
   });
+}
+
+function renderStackedFrameChart() {
+  if (!stackedFrameChart) return;
+
+  stackedFrameChart.innerHTML = '';
+  if (!stackedFrameBuffer.length) {
+    stackedFrameChart.innerHTML = '<div class="stacked-bars-empty">collecting frame timings...</div>';
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  stackedFrameBuffer.forEach((frame) => {
+    const col = document.createElement('div');
+    col.className = 'stacked-col';
+    col.setAttribute('data-total', frame.total_ms.toFixed(1));
+
+    let remainingMs = STACKED_MAX_MS;
+    const segments = [
+      { ms: frame.stages.dispatch_ms, cls: 'seg-dispatch' },
+      { ms: frame.stages.compute_ms, cls: 'seg-compute' },
+      { ms: frame.stages.network_ms, cls: 'seg-network' },
+      { ms: frame.stages.composite_ms, cls: 'seg-composite' },
+    ];
+
+    segments.forEach((segment) => {
+      const visibleMs = Math.max(0, Math.min(segment.ms, remainingMs));
+      remainingMs -= visibleMs;
+      if (visibleMs <= 0) return;
+
+      const seg = document.createElement('div');
+      seg.className = `seg ${segment.cls}`;
+      seg.style.height = `${(visibleMs / STACKED_MAX_MS) * STACKED_CHART_HEIGHT}px`;
+      col.appendChild(seg);
+    });
+
+    fragment.appendChild(col);
+  });
+
+  stackedFrameChart.appendChild(fragment);
+}
+
+function pushStackedFrame(frame) {
+  if (!frame || !frame.stages) return;
+  stackedFrameBuffer.push(frame);
+  if (stackedFrameBuffer.length > STACKED_BUFFER_SIZE) {
+    stackedFrameBuffer.shift();
+  }
+  renderStackedFrameChart();
+}
+
+function generateDummyPipelineFrame() {
+  stackedFrameId += 1;
+  const wave = (Math.sin(stackedFrameId / 8) + 1) * 0.5;
+  const burst = stackedFrameId % 37 === 0 ? 5 + Math.random() * 5 : 0;
+  const dispatch = 0.8 + Math.random() * 0.8;
+  const compute = 6.2 + wave * 4.8 + Math.random() * 2.4 + burst;
+  const network = 1.4 + Math.random() * 1.6 + (stackedFrameId % 19 === 0 ? 1.2 : 0);
+  const composite = 1.0 + Math.random() * 1.2;
+  const total = dispatch + compute + network + composite;
+
+  return {
+    frame_id: stackedFrameId,
+    total_ms: total,
+    stages: {
+      dispatch_ms: dispatch,
+      compute_ms: compute,
+      network_ms: network,
+      composite_ms: composite,
+    },
+  };
+}
+
+function seedStackedFrameChart() {
+  if (!stackedFrameChart) return;
+  while (stackedFrameBuffer.length < STACKED_BUFFER_SIZE) {
+    stackedFrameBuffer.push(generateDummyPipelineFrame());
+  }
+  renderStackedFrameChart();
 }
 
 function deriveMatchStateLabel(state) {
@@ -2668,25 +2884,7 @@ function renderGameEvents(events) {
 }
 
 function updateEvents(events) {
-  const list = document.getElementById('event-list');
-  const count = document.getElementById('event-count');
-
-  if (!events || events.length === 0) {
-    list.innerHTML = '';
-    count.textContent = '';
-    renderGameEvents([]);
-    return;
-  }
-
-  const ordered = [...events].reverse();
   renderGameEvents(events);
-  list.innerHTML = ordered.map((ev) => {
-    const type = ev.event || 'unknown';
-    const when = ev.display_time || '';
-    return `<div class="event-item ${type}"><span class="event-text">${describeEventText(ev)}</span><span class="event-time">${when}</span></div>`;
-  }).join('');
-
-  count.textContent = `${events.length} this match`;
 }
 
 // ── WebSocket ──────────────────────────────────────────────────────────────
@@ -2759,6 +2957,10 @@ renderViewModeButtons();
 updateOrbitModeControls();
 updateGameHud(null);
 drawFrameChart();
+if (stackedFrameChart) {
+  seedStackedFrameChart();
+  setInterval(() => pushStackedFrame(generateDummyPipelineFrame()), 100);
+}
 setActiveTab(window.location.hash.replace('#', ''));
 connect();
 </script>
