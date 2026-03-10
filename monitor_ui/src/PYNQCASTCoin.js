@@ -97,10 +97,10 @@ export function mountPYNQCASTCoin(rootEl) {
   camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
   camera.position.set(0, 0.06, 4.9);
 
-  const ambient = new THREE.AmbientLight(0xffeedd, 0.4);
+  const ambient = new THREE.AmbientLight(0xffeedd, 1.2);
   scene.add(ambient);
 
-  const keyLight = new THREE.PointLight(0xF05A50, 3.5, 14);
+  const keyLight = new THREE.PointLight(0xF05A50, 5.0, 14);
   keyLight.position.set(2.5, 3, 3);
   scene.add(keyLight);
 
@@ -129,10 +129,10 @@ export function mountPYNQCASTCoin(rootEl) {
   });
   const faceMaterial = new THREE.MeshStandardMaterial({
     map: null,
-    metalness: 0.28,
-    roughness: 0.38,
-    emissive: new THREE.Color('#1e090a'),
-    emissiveIntensity: 0.18,
+    metalness: 0.0,
+    roughness: 0.8,
+    emissive: new THREE.Color('#F05A50'),
+    emissiveIntensity: 0.15,
     transparent: true,
     alphaTest: 0.1,
     depthWrite: true,
@@ -140,10 +140,10 @@ export function mountPYNQCASTCoin(rootEl) {
   });
   const backFaceMaterial = new THREE.MeshStandardMaterial({
     map: null,
-    metalness: 0.26,
-    roughness: 0.42,
-    emissive: new THREE.Color('#160506'),
-    emissiveIntensity: 0.12,
+    metalness: 0.0,
+    roughness: 0.8,
+    emissive: new THREE.Color('#F05A50'),
+    emissiveIntensity: 0.15,
     transparent: true,
     alphaTest: 0.1,
     depthWrite: true,
