@@ -1469,28 +1469,26 @@
   .about-light-cone {
     position: absolute;
     left: 50%;
-    bottom: 86px;
-    width: min(360px, 52%);
-    height: 340px;
+    bottom: 96px;
+    width: min(300px, 44%);
+    height: 380px;
     transform: translateX(-50%);
-    background:
-      linear-gradient(180deg, rgba(255, 170, 150, 0.18) 0%, rgba(240, 90, 80, 0.13) 22%, rgba(240, 90, 80, 0.06) 58%, transparent 100%);
-    clip-path: polygon(50% 0%, 84% 100%, 16% 100%);
+    background: radial-gradient(ellipse at bottom, rgba(240, 90, 80, 0.22) 0%, rgba(240, 90, 80, 0.12) 26%, rgba(240, 90, 80, 0.05) 48%, transparent 74%);
     filter: blur(10px);
-    opacity: 0.9;
+    opacity: 0.72;
     z-index: 0;
   }
 
   .about-ground-shadow {
     position: absolute;
     left: 50%;
-    bottom: 62px;
-    width: min(390px, 70%);
-    height: 72px;
+    bottom: 60px;
+    width: min(320px, 60%);
+    height: 54px;
     transform: translateX(-50%);
-    background: radial-gradient(ellipse at center, rgba(240, 90, 80, 0.56) 0%, rgba(240, 90, 80, 0.3) 38%, rgba(240, 90, 80, 0.11) 64%, transparent 82%);
-    box-shadow: 0 0 28px rgba(240, 90, 80, 0.18);
-    opacity: 0.62;
+    background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.72) 0%, rgba(0, 0, 0, 0.52) 40%, rgba(0, 0, 0, 0.18) 68%, transparent 84%);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+    opacity: 0.78;
     animation: about-shadow-breathe 2s infinite ease-in-out;
     z-index: 1;
   }
@@ -1501,8 +1499,9 @@
     display: flex;
     justify-content: center;
     align-items: center;
-    animation: about-logo-bob 2s infinite ease-in-out;
+    animation: about-logo-bob 2.2s infinite ease-in-out;
     transform-origin: center bottom;
+    will-change: transform;
   }
 
   .about-logo-sprite {
@@ -1511,7 +1510,14 @@
     image-rendering: pixelated;
     image-rendering: crisp-edges;
     transform-origin: center center;
-    filter: drop-shadow(0 18px 18px rgba(0, 0, 0, 0.42));
+    filter:
+      contrast(1.04)
+      saturate(1.06)
+      drop-shadow(-3px -3px 0 rgba(255, 255, 255, 0.16))
+      drop-shadow(6px 6px 0 #31486d)
+      drop-shadow(12px 12px 0 #182742)
+      drop-shadow(18px 18px 0 rgba(6, 12, 24, 0.82))
+      drop-shadow(0 22px 24px rgba(0, 0, 0, 0.38));
     animation: about-logo-spin 3s infinite ease-in-out;
     user-select: none;
   }
@@ -1594,7 +1600,7 @@
       transform: translateY(0);
     }
     50% {
-      transform: translateY(-6px);
+      transform: translateY(-14px);
     }
   }
 
@@ -1619,11 +1625,11 @@
   @keyframes about-shadow-breathe {
     0%, 100% {
       transform: translateX(-50%) scaleX(1) scaleY(1);
-      opacity: 0.62;
+      opacity: 0.78;
     }
     50% {
-      transform: translateX(-50%) scaleX(0.8) scaleY(0.86);
-      opacity: 0.34;
+      transform: translateX(-50%) scaleX(0.82) scaleY(0.88);
+      opacity: 0.46;
     }
   }
 
