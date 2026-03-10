@@ -25,7 +25,8 @@ SPAWN_CLEARANCE_RADIUS = 3.25
 TAG_FLASH_S      = 0.3    # how long FLAG_TAGGED stays set so all nodes can see it
 MATCH_END_HOLD_S = 0.5    # extra hold after final tag before clearing players
 LOCKOUT_S        = 0.5    # reject re-registration for this long after match end
-NODE_TIMEOUT_S   = 3.0    # evict node that sends no packets for this long
+NODE_TIMEOUT_S   = 60.0   # pause the match after this long with no packets from a human node
+PAUSE_ABORT_S    = 60.0   # abort only if a paused match stays disconnected this much longer
 
 # ── Grace period after tag reset ─────────────────────────────────────────────
 # Players are teleported to spawn after each tag, so proximity detection is

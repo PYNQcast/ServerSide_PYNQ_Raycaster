@@ -30,7 +30,13 @@ from protocol import (
 )
 from game_logic.anticheat import validate_position, DEFAULT_MAX_SPEED_PER_TICK
 from game_logic.match_state import MatchState
-from t2_constants import MATCH_PLAYERS, NODE_TIMEOUT_S, MAX_GHOSTS, PLAYER_COLLISION_RADIUS
+from t2_constants import (
+    MATCH_PLAYERS,
+    NODE_TIMEOUT_S,
+    PAUSE_ABORT_S,
+    MAX_GHOSTS,
+    PLAYER_COLLISION_RADIUS,
+)
 from t2_map_loader import resolve_walkable_world
 
 
@@ -38,7 +44,8 @@ from t2_map_loader import resolve_walkable_world
 class PacketHandler:
 
     def __init__(self, state: MatchState, packet_queue: asyncio.Queue,
-                 write_queue, map_state, on_match_start, on_match_abort, on_event,
+                 write_queue, map_state, on_match_start, on_match_abort, on_match_pause,
+                 on_match_resume, on_event,
                  udp_transport=None):
         self.state         = state
         self.packet_queue  = packet_queue
@@ -47,6 +54,8 @@ class PacketHandler:
         self.udp_transport = udp_transport
         self._on_match_start = on_match_start
         self._on_match_abort = on_match_abort
+        self._on_match_pause = on_match_pause
+        self._on_match_resume = on_match_resume
         self._on_event       = on_event
 
     # Derive world-space AABB from the current map dimensions
@@ -99,7 +108,9 @@ class PacketHandler:
             return
 
         p = self.state.players[addr]
+        was_timed_out = bool(p.get("timed_out"))
         p["last_seen"] = time.monotonic()
+        p["timed_out"] = False
 
         if pkt_type == PKT_REGISTER:
             if not self.state.match_started or p["player_id"] == 0:
@@ -107,8 +118,16 @@ class PacketHandler:
             p["last_seq"] = seq
             p["movement_mode"] = movement_mode
             p["protocol_version"] = protocol_version
+            self._maybe_resume_match()
             print(f"[T2] P{p['player_id']} protocol=v{protocol_version} "
                   f"movement={decode_movement_mode(movement_mode)}")
+            return
+
+        if self.state.match_paused and not self.state.match_ended:
+            p["last_seq"] = None if was_timed_out else seq
+            p["movement_mode"] = movement_mode
+            p["protocol_version"] = protocol_version
+            self._maybe_resume_match()
             return
 
         last = p["last_seq"]
@@ -139,6 +158,7 @@ class PacketHandler:
 
         client_input = raw_flags & CLIENT_INPUT_FLAGS
         p["flags"] = (p["flags"] & SERVER_STATE_FLAGS) | client_input
+        self._maybe_resume_match()
 
     # ── Player registration ───────────────────────────────────────────────────
     # Record preferred role, then assign roles once two humans are present.
@@ -161,6 +181,7 @@ class PacketHandler:
             "last_seq":         None,
             "movement_mode":    0,
             "protocol_version": 0,
+            "timed_out":        False,
         }
 
         human_count = sum(1 for a in self.state.players if not str(a).startswith("ghost:"))
@@ -253,6 +274,7 @@ class PacketHandler:
             "last_seq":         None,
             "movement_mode":    0,
             "protocol_version": 0,
+            "timed_out":        False,
         }
         print(f"[T2] spawned ghost tagger (player_id={ghost_id}) at {ghost_addr}")
 
@@ -270,31 +292,104 @@ class PacketHandler:
                 print(f"[T2] removed ghost {addr}")
 
     # ── Node eviction ─────────────────────────────────────────────────────────
-    # Remove nodes that have gone silent, aborting any active match
+    # Pause active matches when nodes go silent; only abort after the pause grace.
+
+    def _timed_out_human_ids(self):
+        return sorted(
+            p["player_id"]
+            for addr, p in self.state.players.items()
+            if not str(addr).startswith("ghost:") and p.get("timed_out")
+        )
+
+    def _pause_for_timeouts(self):
+        timed_out_ids = self._timed_out_human_ids()
+        if not timed_out_ids or not self.state.match_started or self.state.match_ended:
+            return
+        if self.state.pause_match("player_timeout", timed_out_ids, abort_after_s=PAUSE_ABORT_S):
+            print(f"[T2] match paused — timed out players {timed_out_ids}")
+            self._on_match_pause({
+                "reason": "player_timeout",
+                "timed_out_player_ids": timed_out_ids,
+                "pause_abort_s": PAUSE_ABORT_S,
+                "game_mode": self.state.game_mode,
+                "bits_mask": self.state.bits_mask,
+            })
+
+    def _maybe_resume_match(self):
+        if (
+            not self.state.match_paused
+            or self.state.pause_reason != "player_timeout"
+            or not self.state.match_started
+            or self.state.match_ended
+        ):
+            return
+
+        timed_out_ids = self._timed_out_human_ids()
+        if timed_out_ids:
+            self.state.paused_player_ids = timed_out_ids
+            return
+
+        for addr, p in self.state.players.items():
+            if str(addr).startswith("ghost:"):
+                continue
+            p["last_seq"] = None
+
+        if self.state.resume_match():
+            print("[T2] match resumed — all timed out players returned")
+            self._on_match_resume({
+                "reason": "player_timeout_cleared",
+                "game_mode": self.state.game_mode,
+                "bits_mask": self.state.bits_mask,
+            })
 
     async def evict_timed_out_nodes(self):
         now = time.monotonic()
-        evicted = [
-            addr for addr, p in self.state.players.items()
-            if not str(addr).startswith("ghost:")
-            and now - p["last_seen"] > NODE_TIMEOUT_S
-        ]
-        for addr in evicted:
+        lobby_evicted = []
+        newly_timed_out = []
+        for addr, p in list(self.state.players.items()):
+            if str(addr).startswith("ghost:"):
+                continue
+            if now - p["last_seen"] <= NODE_TIMEOUT_S:
+                continue
+            if not self.state.match_started or self.state.match_ended:
+                lobby_evicted.append(addr)
+                continue
+            if p.get("timed_out"):
+                continue
+            p["timed_out"] = True
+            p["last_seq"] = None
+            newly_timed_out.append((addr, p["player_id"]))
+
+        for addr in lobby_evicted:
             p = self.state.players.pop(addr)
-            print(f"[T2] evicted player {p['player_id']} from {addr} "
+            print(f"[T2] evicted queued player {p['player_id']} from {addr} "
                   f"— no packets for {NODE_TIMEOUT_S}s")
             self.write_queue.put({"op": "del", "key": f"player:{p['player_id']}"})
 
-        if evicted and self.state.match_started and not self.state.match_ended:
+        if newly_timed_out:
+            print(
+                f"[T2] players timed out after {NODE_TIMEOUT_S}s: "
+                f"{[player_id for _, player_id in newly_timed_out]}"
+            )
+            self._pause_for_timeouts()
+
+        if (
+            self.state.match_paused
+            and self.state.pause_reason == "player_timeout"
+            and self.state.pause_abort_at is not None
+            and self._timed_out_human_ids()
+            and now >= self.state.pause_abort_at
+        ):
+            timed_out_ids = self._timed_out_human_ids()
             remaining_humans = sum(
                 1 for addr in self.state.players
-                if not str(addr).startswith("ghost:")
+                if not str(addr).startswith("ghost:") and not self.state.players[addr].get("timed_out")
             )
-            remaining_players = list(self.state.players.values())
-            for player in remaining_players:
+            for player in list(self.state.players.values()):
                 self.write_queue.put({"op": "del", "key": f"player:{player['player_id']}"})
             abort_event = {
-                "reason": "player_evicted",
+                "reason": "pause_timeout",
+                "timed_out_player_ids": timed_out_ids,
                 "game_mode": self.state.game_mode,
                 "players_remaining": remaining_humans,
                 "ghosts_remaining": sum(
@@ -303,6 +398,6 @@ class PacketHandler:
                 ),
                 "bits_mask": self.state.bits_mask,
             }
-            print("[T2] match aborted — not enough players after eviction")
+            print(f"[T2] match aborted — timed out players never returned {timed_out_ids}")
             self.state.abort_match()
             self._on_match_abort(abort_event)

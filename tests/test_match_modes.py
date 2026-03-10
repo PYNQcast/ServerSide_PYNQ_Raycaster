@@ -312,6 +312,8 @@ def test_sim_packet_handler_requires_register_for_unknown_addr():
             },
             on_match_start=lambda: None,
             on_match_abort=lambda event=None: None,
+            on_match_pause=lambda event=None: None,
+            on_match_resume=lambda event=None: None,
             on_event=lambda event: None,
         )
 
@@ -365,6 +367,8 @@ def test_sim_register_does_not_override_authoritative_spawn_on_match_start():
             map_state,
             on_match_start=lambda: None,
             on_match_abort=lambda event=None: None,
+            on_match_pause=lambda event=None: None,
+            on_match_resume=lambda event=None: None,
             on_event=lambda event: None,
         )
 
@@ -427,6 +431,8 @@ def test_sim_match_start_sends_ack_packets_with_assigned_ids():
             },
             on_match_start=lambda: None,
             on_match_abort=lambda event=None: None,
+            on_match_pause=lambda event=None: None,
+            on_match_resume=lambda event=None: None,
             on_event=lambda event: None,
             udp_transport=transport,
         )
@@ -484,6 +490,207 @@ def test_sim_restart_command_clears_players_and_backlog():
         assert packet_queue.empty()
         assert broadcast_queue.empty()
         assert game_tick.state.lockout_until is None
+
+
+def test_sim_timeout_pauses_match_instead_of_aborting():
+    with sim_import_context():
+        match_state_mod = importlib.import_module("game_logic.match_state")
+        packet_handler_mod = importlib.import_module("t2_packet_handler")
+        constants = importlib.import_module("t2_constants")
+
+        state = match_state_mod.MatchState()
+        now = time.monotonic()
+        state.match_started = True
+        state.players = {
+            ("runner", 1): {
+                "player_id": 1,
+                "x": 0.0,
+                "y": 0.0,
+                "angle": 0.0,
+                "flags": 0,
+                "last_seen": now - (constants.NODE_TIMEOUT_S + 1.0),
+                "last_seq": 5,
+                "movement_mode": 0,
+                "protocol_version": 1,
+                "timed_out": False,
+            },
+            ("tagger", 2): {
+                "player_id": 2,
+                "x": 24.0,
+                "y": 24.0,
+                "angle": 0.0,
+                "flags": 0,
+                "last_seen": now,
+                "last_seq": 8,
+                "movement_mode": 0,
+                "protocol_version": 1,
+                "timed_out": False,
+            },
+        }
+
+        pauses = []
+        aborts = []
+        handler = packet_handler_mod.PacketHandler(
+            state,
+            asyncio.Queue(),
+            queue.SimpleQueue(),
+            {
+                "width": 0,
+                "height": 0,
+                "tile_scale": 8,
+                "tiles": bytearray(),
+                "bits": [],
+                "spawn_positions": [],
+            },
+            on_match_start=lambda: None,
+            on_match_abort=lambda event=None: aborts.append(event),
+            on_match_pause=lambda event=None: pauses.append(event),
+            on_match_resume=lambda event=None: None,
+            on_event=lambda event: None,
+        )
+
+        asyncio.run(handler.evict_timed_out_nodes())
+
+        assert state.match_started is True
+        assert state.match_paused is True
+        assert state.pause_reason == "player_timeout"
+        assert state.paused_player_ids == [1]
+        assert state.players[("runner", 1)]["timed_out"] is True
+        assert pauses and pauses[0]["timed_out_player_ids"] == [1]
+        assert aborts == []
+
+
+def test_sim_timed_out_player_packet_resumes_paused_match():
+    with sim_import_context():
+        protocol = importlib.import_module("protocol")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+        packet_handler_mod = importlib.import_module("t2_packet_handler")
+
+        state = match_state_mod.MatchState()
+        state.match_started = True
+        state.pause_match("player_timeout", [1], abort_after_s=60.0)
+        state.players = {
+            ("runner", 1): {
+                "player_id": 1,
+                "x": -16.0,
+                "y": -12.0,
+                "angle": 0.0,
+                "flags": 0,
+                "last_seen": 0.0,
+                "last_seq": 5,
+                "movement_mode": 0,
+                "protocol_version": 1,
+                "timed_out": True,
+            },
+            ("tagger", 2): {
+                "player_id": 2,
+                "x": 16.0,
+                "y": 12.0,
+                "angle": 0.0,
+                "flags": 0,
+                "last_seen": 0.0,
+                "last_seq": 8,
+                "movement_mode": 0,
+                "protocol_version": 1,
+                "timed_out": False,
+            },
+        }
+
+        resumes = []
+        handler = packet_handler_mod.PacketHandler(
+            state,
+            asyncio.Queue(),
+            queue.SimpleQueue(),
+            {
+                "width": 0,
+                "height": 0,
+                "tile_scale": 8,
+                "tiles": bytearray(),
+                "bits": [],
+                "spawn_positions": [],
+            },
+            on_match_start=lambda: None,
+            on_match_abort=lambda event=None: None,
+            on_match_pause=lambda event=None: None,
+            on_match_resume=lambda event=None: resumes.append(event),
+            on_event=lambda event: None,
+        )
+
+        handler._process_packet({
+            "data": protocol.pack_node_packet(
+                0x0001,
+                9,
+                -8.0,
+                -8.0,
+                0.0,
+                movement_mode=protocol.MOVEMENT_MODE_INTENT_WITH_PREDICTION,
+            ),
+            "addr": ("runner", 1),
+        })
+
+        assert state.match_paused is False
+        assert state.pause_reason is None
+        assert state.paused_player_ids == []
+        assert state.players[("runner", 1)]["timed_out"] is False
+        assert state.players[("runner", 1)]["x"] == -16.0
+        assert state.players[("runner", 1)]["y"] == -12.0
+        assert state.players[("runner", 1)]["last_seq"] is None
+        assert state.players[("tagger", 2)]["last_seq"] is None
+        assert resumes and resumes[0]["reason"] == "player_timeout_cleared"
+
+
+def test_sim_core_logic_freezes_match_state_while_paused():
+    with sim_import_context():
+        protocol = importlib.import_module("protocol")
+        core_logic_mod = importlib.import_module("game_logic.core_logic")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+
+        state = match_state_mod.MatchState()
+        state.match_started = True
+        state.match_paused = True
+        state.match_tick = 11
+        state.game_mode = protocol.GAME_MODE_CHASE
+        state.players = {
+            ("runner", 1): {
+                "player_id": 1,
+                "x": 32.0,
+                "y": 0.0,
+                "angle": 0.0,
+                "flags": 0,
+                "last_seen": 0.0,
+                "last_seq": 0,
+                "movement_mode": 0,
+                "protocol_version": 1,
+            },
+            ("ghost:1",): {
+                "player_id": 3,
+                "x": 0.0,
+                "y": 0.0,
+                "angle": 0.0,
+                "flags": protocol.FLAG_GHOST,
+                "last_seen": 0.0,
+                "last_seq": 0,
+                "movement_mode": 0,
+                "protocol_version": 1,
+            },
+        }
+
+        async def on_event(event):
+            return None
+
+        logic = core_logic_mod.CoreLogic(
+            state,
+            queue.SimpleQueue(),
+            on_event=on_event,
+            on_force_end_consumed=lambda: None,
+            map_state={},
+        )
+
+        asyncio.run(logic.tick())
+
+        assert state.match_tick == 11
+        assert state.players[("ghost:1",)]["x"] == 0.0
+        assert state.players[("ghost:1",)]["y"] == 0.0
 
 
 def test_sim_ghosts_steer_without_crossing_walls():

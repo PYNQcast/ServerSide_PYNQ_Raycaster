@@ -67,6 +67,12 @@ def _as_int(value, default=0):
     except (TypeError, ValueError):
         return default
 
+def _as_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
 def poll_dynamodb():
     global _ddb_cache, _ddb_last_fetch
     now = time.monotonic()
@@ -389,7 +395,9 @@ def current_match_events(raw_events: list):
     return _match_event_log
 
 
-def _live_match_summary(match_events: list, active_map: str, game_mode: int):
+def _live_match_summary(match_events: list, active_map: str, game_mode: int,
+                        paused: bool = False, pause_reason: str | None = None,
+                        paused_player_ids=None):
     if not match_events:
         return None
 
@@ -404,7 +412,7 @@ def _live_match_summary(match_events: list, active_map: str, game_mode: int):
     ghost_count = start_event.get("ghost_count", 0)
     return {
         "match_id": "live-now",
-        "status": "in_progress",
+        "status": "paused" if paused else "in_progress",
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         "has_replay": False,
         "replay_frames": 0,
@@ -413,6 +421,8 @@ def _live_match_summary(match_events: list, active_map: str, game_mode: int):
         "ghost_count": ghost_count,
         "game_mode": game_mode,
         "map_name": active_map,
+        "pause_reason": pause_reason,
+        "paused_player_ids": list(paused_player_ids or []),
     }
 
 # ── Redis state collection ─────────────────────────────────────────────────────
@@ -440,6 +450,17 @@ def collect_state():
     game_raw  = redis_rows[9]
     game_mode = int(game_raw.get("game_mode", 0)) if game_raw else 0
     bits_mask = int(game_raw.get("bits_mask", 0xFFFF)) if game_raw else 0xFFFF
+    match_started = bool(_as_int(game_raw.get("match_started", 0), 0)) if game_raw else False
+    match_ended = bool(_as_int(game_raw.get("match_ended", 0), 0)) if game_raw else False
+    match_paused = bool(_as_int(game_raw.get("match_paused", 0), 0)) if game_raw else False
+    pause_reason = (game_raw.get("pause_reason") or None) if game_raw else None
+    pause_remaining_s = _as_float(game_raw.get("pause_remaining_s"), 0.0) if game_raw else 0.0
+    paused_player_ids = []
+    if game_raw and game_raw.get("paused_player_ids"):
+        try:
+            paused_player_ids = json.loads(game_raw["paused_player_ids"])
+        except Exception:
+            paused_player_ids = []
 
     events_raw = redis_rows[10]
     parsed     = [json.loads(e) for e in events_raw if e]
@@ -470,10 +491,22 @@ def collect_state():
                 active_map = ev["map"]
                 break
 
-    if not any(match.get("status") == "in_progress" for match in matches):
-        live_match = _live_match_summary(match_events, active_map, game_mode)
-        if live_match is not None:
-            matches = [live_match] + matches
+    live_match = _live_match_summary(
+        match_events,
+        active_map,
+        game_mode,
+        paused=match_paused,
+        pause_reason=pause_reason,
+        paused_player_ids=paused_player_ids,
+    )
+    if live_match is not None:
+        matches = [
+            live_match,
+            *[
+                match for match in matches
+                if match.get("status") not in {"in_progress", "paused"}
+            ],
+        ]
 
     return {
         "players": players,
@@ -492,6 +525,14 @@ def collect_state():
         "bits":       bits_positions,      # [[world_x, world_y], ...] from match_start
         "bits_mask":  bits_mask,           # bitmask of active bits this tick
         "active_map": active_map,
+        "match": {
+            "started": match_started,
+            "ended": match_ended,
+            "paused": match_paused,
+            "pause_reason": pause_reason,
+            "paused_player_ids": paused_player_ids,
+            "pause_remaining_s": pause_remaining_s if match_paused else 0.0,
+        },
     }
 
 

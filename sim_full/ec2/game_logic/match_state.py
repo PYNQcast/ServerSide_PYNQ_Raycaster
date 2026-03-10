@@ -5,7 +5,7 @@
 
 import time
 from t2_constants import (
-    SPAWN_POSITIONS, SPAWN_ANGLES, LOCKOUT_S, GRACE_TICKS,
+    SPAWN_POSITIONS, SPAWN_ANGLES, LOCKOUT_S, GRACE_TICKS, PAUSE_ABORT_S,
 )
 from protocol import GAME_MODE_CHASE
 
@@ -44,9 +44,14 @@ class MatchState:
         self.next_id       = 1
         self.match_started = False
         self.match_ended   = False
+        self.match_paused  = False
         self.match_end_at  = None   # monotonic time when match-end hold expires
         self.match_winner  = None
         self.match_end_reason = None
+        self.pause_reason  = None
+        self.paused_at     = None
+        self.pause_abort_at = None
+        self.paused_player_ids = []
         self.tag_count     = 0
         self.tag_flash_at  = None   # monotonic time when FLAG_TAGGED should clear
         self.match_tick    = 0      # ticks elapsed since match started (grace period)
@@ -59,6 +64,34 @@ class MatchState:
     # Called when a node times out mid-match — resets state and arms lockout
     def abort_match(self):
         self.clear_match(arm_lockout=True)
+
+    def pause_match(self, reason: str, paused_player_ids=None, abort_after_s: float = PAUSE_ABORT_S) -> bool:
+        paused_ids = [int(pid) for pid in (paused_player_ids or [])]
+        now = time.monotonic()
+        changed = (
+            not self.match_paused
+            or self.pause_reason != reason
+            or self.paused_player_ids != paused_ids
+        )
+        if not self.match_paused:
+            self.paused_at = now
+            self.pause_abort_at = (
+                now + abort_after_s if abort_after_s is not None else None
+            )
+        self.match_paused = True
+        self.pause_reason = reason
+        self.paused_player_ids = paused_ids
+        return changed
+
+    def resume_match(self) -> bool:
+        if not self.match_paused:
+            return False
+        self.match_paused = False
+        self.pause_reason = None
+        self.paused_at = None
+        self.pause_abort_at = None
+        self.paused_player_ids = []
+        return True
 
     def set_spawn_positions(self, positions):
         self.spawn_positions = [tuple(pos) for pos in positions] if positions else list(SPAWN_POSITIONS)

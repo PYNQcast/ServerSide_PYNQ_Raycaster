@@ -67,12 +67,21 @@ class RedisIO:
                     "flags": p["flags"],
                 },
             })
+        pause_remaining_s = None
+        if self.state.pause_abort_at is not None:
+            pause_remaining_s = max(0.0, self.state.pause_abort_at - time.monotonic())
         # Write match-level state so monitor can read bits_mask and positions per tick
         mapping = {
-            "game_mode":  self.state.game_mode,
-            "bits_mask":  self.state.bits_mask,
-            "match_tick": match_tick,
-            "map":        self.map_state.get("name", ""),
+            "game_mode":         self.state.game_mode,
+            "bits_mask":         self.state.bits_mask,
+            "match_tick":        match_tick,
+            "match_started":     int(self.state.match_started),
+            "match_ended":       int(self.state.match_ended),
+            "match_paused":      int(self.state.match_paused),
+            "pause_reason":      self.state.pause_reason or "",
+            "paused_player_ids": json.dumps(self.state.paused_player_ids),
+            "pause_remaining_s": "" if pause_remaining_s is None else round(pause_remaining_s, 2),
+            "map":               self.map_state.get("name", ""),
             "bits": json.dumps([[round(b[0], 2), round(b[1], 2)]
                                  for b in self.state.bits]),
         }
@@ -111,6 +120,9 @@ class RedisIO:
             "server_tick":  tick_count,
             "match_tick":   match_tick,
             "match_ended":  self.state.match_ended,
+            "match_paused": self.state.match_paused,
+            "pause_reason": self.state.pause_reason,
+            "paused_player_ids": list(self.state.paused_player_ids),
             "game_mode":    self.state.game_mode,
             "map":          self.map_state.get("name", ""),
             "bits_mask":    self.state.bits_mask,

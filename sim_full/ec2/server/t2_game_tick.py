@@ -61,6 +61,8 @@ class GameTick:
             map_state=self.map_state,
             on_match_start=self._on_match_start,
             on_match_abort=self._on_match_abort,
+            on_match_pause=self._on_match_pause,
+            on_match_resume=self._on_match_resume,
             on_event=self._push_event,
             udp_transport=udp_transport,
         )
@@ -196,6 +198,18 @@ class GameTick:
 
     def _on_match_abort(self, event=None):
         payload = {"event": "match_aborted"}
+        if event:
+            payload.update(event)
+        asyncio.ensure_future(self._push_event(payload))
+
+    def _on_match_pause(self, event=None):
+        payload = {"event": "match_paused"}
+        if event:
+            payload.update(event)
+        asyncio.ensure_future(self._push_event(payload))
+
+    def _on_match_resume(self, event=None):
+        payload = {"event": "match_resumed"}
         if event:
             payload.update(event)
         asyncio.ensure_future(self._push_event(payload))

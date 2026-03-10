@@ -36,6 +36,8 @@ class CoreLogic:
 
     async def tick(self):
         await self._check_match_end_hold()
+        if self.state.match_paused:
+            return
         self._move_ghosts()
         await self._check_proximity()
         await self._check_bits()

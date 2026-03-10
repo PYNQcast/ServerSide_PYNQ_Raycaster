@@ -871,12 +871,24 @@ def handle_state_snapshot(event: dict):
                "recorded_at": recorded_at})
 
 
+def handle_transient_match_event(event: dict):
+    if not has_active_match():
+        return
+
+    recorded_at = utc_now_iso()
+    replay_event = dict(event)
+    record_match_event(replay_event, recorded_at)
+    mp_append({**replay_event, "match_id": current_match_id, "recorded_at": recorded_at})
+
+
 # ── Event Dispatch ────────────────────────────────────────────────────────────
 
 HANDLERS = {
     "match_start": handle_match_start,
     "player_tagged": handle_player_tagged,
     "bit_collected": handle_bit_collected,
+    "match_paused": handle_transient_match_event,
+    "match_resumed": handle_transient_match_event,
     "match_end": handle_match_end,
     "match_aborted": handle_match_abort,
     "state_snapshot": handle_state_snapshot,

@@ -18,6 +18,7 @@ import json
 import os
 import queue
 import time
+import threading
 
 import redis as redislib
 
@@ -28,6 +29,9 @@ from t2_packet_handler import PacketHandler
 from game_logic.core_logic import CoreLogic
 from t2_redis_io import RedisIO
 
+_MAPS_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'maps')
+)
 
 class GameTick:
     def __init__(self, packet_queue, broadcast_queue, write_queue, tick_rate=20,
@@ -54,13 +58,15 @@ class GameTick:
                                       map_state=self.map_state,
                                       on_match_start=self._on_match_start,
                                       on_match_abort=self._on_match_abort,
+                                      on_match_pause=self._on_match_pause,
+                                      on_match_resume=self._on_match_resume,
                                       on_event=self._push_event)
 
     # ── Main loop ─────────────────────────────────────────────────────────────
 
     async def run(self):
         print(f"[T2 GameTick] running at {1/self.interval:.0f} Hz")
-        asyncio.ensure_future(self._listen_control())
+        self._start_control_subscriber()
         while True:
             tick_start = time.monotonic()
 
@@ -81,10 +87,8 @@ class GameTick:
     # ── Redis control channel ─────────────────────────────────────────────────
     # Runs redis-py's blocking pubsub in a thread; handles force_end and set_map
 
-    async def _listen_control(self):
-        maps_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'maps')
-
-        def _blocking_subscribe():
+    def _start_control_subscriber(self):
+        def _subscribe():
             rc  = redislib.Redis(host="127.0.0.1", port=6379, decode_responses=True)
             pub = rc.pubsub()
             pub.subscribe(CONTROL_CHANNEL)
@@ -96,11 +100,7 @@ class GameTick:
                 except Exception:
                     continue
                 self.control_queue.put(data)
-
-        try:
-            await asyncio.to_thread(_blocking_subscribe)
-        except Exception as e:
-            print(f"[T2] control listener error: {e}")
+        threading.Thread(target=_subscribe, daemon=True).start()
 
     def _drain_control_commands(self):
         while True:
@@ -111,38 +111,69 @@ class GameTick:
             self._apply_control_command(data)
 
     def _apply_control_command(self, data: dict):
-        maps_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'maps')
         cmd = data.get("cmd")
         if cmd == "force_end":
             self.logic._force_end_flag = True
+        elif cmd == "restart":
+            self._reset_session("restart", arm_lockout=False)
         elif cmd == "set_ghost_count":
             count = int(data.get("count", 0))
             self.packets.set_ghost_count(count)
         elif cmd == "set_map":
             name = data.get("map", "chase")
-            new_map = load_map(os.path.join(maps_dir, f"{name}.txt"))
+            new_map = load_map(os.path.join(_MAPS_DIR, f"{name}.txt"))
             if new_map["width"] > 0:
                 self._swap_map(new_map)
 
     def _swap_map(self, new_map: dict):
+        self._reset_session("map_changed", next_map=new_map, arm_lockout=False)
+
+    def _drain_asyncio_queue(self, q: asyncio.Queue) -> int:
+        drained = 0
+        while True:
+            try:
+                q.get_nowait()
+                drained += 1
+            except asyncio.QueueEmpty:
+                return drained
+
+    def _reset_session(self, reason: str, next_map: dict | None = None, arm_lockout: bool = False):
         current_players = list(self.state.players.values())
+        had_players = bool(current_players)
         was_active = self.state.match_started and not self.state.match_ended
         if was_active:
-            self.redis_io.push_event({
+            event = {
                 "event": "match_aborted",
-                "reason": "map_changed",
+                "reason": reason,
                 "game_mode": self.state.game_mode,
                 "bits_mask": self.state.bits_mask,
                 "map": self.map_state.get("name"),
-                "next_map": new_map.get("name"),
-            })
+            }
+            if next_map is not None:
+                event["next_map"] = next_map.get("name")
+            self.redis_io.push_event(event)
+
+        target_map_name = self.map_state.get("name")
+        if next_map is not None:
+            self.map_state.clear()
+            self.map_state.update(next_map)
+            target_map_name = next_map.get("name")
+        dropped_packets = self._drain_asyncio_queue(self.packet_queue)
+        dropped_broadcasts = self._drain_asyncio_queue(self.broadcast_queue)
         for player in current_players:
             self.write_queue.put({"op": "del", "key": f"player:{player['player_id']}"})
-        self.map_state.clear()
-        self.map_state.update(new_map)
-        self.state.reset_all()
+        self.state.clear_match(arm_lockout=arm_lockout)
         self.state.set_spawn_positions(self.map_state.get("spawn_positions", []))
-        print(f"[T2] map swapped to '{new_map.get('name')}' — state reset for new map")
+        self.logic._force_end_flag = False
+
+        action = "map swapped" if next_map is not None else "match reset"
+        print(
+            f"[T2] {action} ({reason}) — map='{target_map_name}' "
+            f"players_cleared={len(current_players)} "
+            f"packet_backlog={dropped_packets} broadcast_backlog={dropped_broadcasts}"
+        )
+        if not had_players and next_map is None:
+            print("[T2] restart requested with no active or queued players")
 
     # ── Match event callbacks ─────────────────────────────────────────────────
 
@@ -162,6 +193,18 @@ class GameTick:
 
     def _on_match_abort(self, event=None):
         payload = {"event": "match_aborted"}
+        if event:
+            payload.update(event)
+        asyncio.ensure_future(self._push_event(payload))
+
+    def _on_match_pause(self, event=None):
+        payload = {"event": "match_paused"}
+        if event:
+            payload.update(event)
+        asyncio.ensure_future(self._push_event(payload))
+
+    def _on_match_resume(self, event=None):
+        payload = {"event": "match_resumed"}
         if event:
             payload.update(event)
         asyncio.ensure_future(self._push_event(payload))

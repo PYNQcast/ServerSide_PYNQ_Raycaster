@@ -37,6 +37,17 @@
     padding: 2px 8px; border-radius: 20px;
   }
   #game-chip.active { color: #ffaa00; border-color: #ffaa0055; }
+  #game-chip.paused { color: #ffd866; border-color: #ffd86666; background: #1d1708; }
+  .pause-banner {
+    flex-shrink: 0;
+    padding: 7px 14px;
+    background: linear-gradient(90deg, #211506 0%, #17110a 100%);
+    border-bottom: 1px solid #3a2a0d;
+    color: #ffd088;
+    font-size: 11px;
+    letter-spacing: 0.3px;
+  }
+  .pause-banner strong { color: #fff0c2; }
 
   /* ── SEDA Pipeline strip ── */
   .pipeline-strip {
@@ -224,6 +235,8 @@
   .event-item.match_start   { border-left-color: #00ff88; color: #bbffdd; }
   .event-item.match_end     { border-left-color: #ffaa00; color: #ffd088; background: #1a1200; }
   .event-item.match_aborted { border-left-color: #ff6677; color: #ffd0d6; background: #1a0b0f; }
+  .event-item.match_paused  { border-left-color: #ffd866; color: #ffe6a0; background: #191306; }
+  .event-item.match_resumed { border-left-color: #66ccff; color: #d7f3ff; background: #07141c; }
   .event-item.bit_collected { border-left-color: #66ccff; color: #d7f3ff; background: #07141c; }
 
   /* DynamoDB matches */
@@ -235,6 +248,7 @@
   .match-row:last-child { border-bottom: none; }
   .match-id { color: #554a77; font-size: 10px; }
   .match-status.in_progress { color: #ffaa00; }
+  .match-status.paused      { color: #ffd866; }
   .match-status.completed   { color: #00ff88; }
   .match-status.aborted     { color: #ff6677; }
   .match-time { color: #332a55; font-size: 10px; }
@@ -270,6 +284,7 @@
   <span id="game-chip">no game</span>
   <span id="fps"></span>
 </header>
+<div id="pause-banner" class="pause-banner" hidden></div>
 
 <!-- ═══ SEDA Pipeline Strip ═══════════════════════════════════════════════ -->
 <div class="pipeline-strip">
@@ -955,6 +970,28 @@ function updateServices(services) {
   document.getElementById('svc-note').textContent = services.last_action || 'controls run on EC2 only; node simulators still start locally';
 }
 
+function describePausedPlayers(playerIds) {
+  if (!Array.isArray(playerIds) || playerIds.length === 0) return 'player reconnect';
+  return playerIds.map((id) => `P${id}`).join(', ');
+}
+
+function updateMatchState(match) {
+  const banner = document.getElementById('pause-banner');
+  if (!match || !match.paused) {
+    banner.hidden = true;
+    banner.textContent = '';
+    return;
+  }
+
+  const who = describePausedPlayers(match.paused_player_ids);
+  const remaining = Number.isFinite(match.pause_remaining_s)
+    ? Math.max(0, Math.ceil(match.pause_remaining_s))
+    : 0;
+  const tail = remaining > 0 ? ` · abort in ${remaining}s if they do not return` : '';
+  banner.hidden = false;
+  banner.innerHTML = `<strong>match paused</strong> · waiting for ${who}${tail}`;
+}
+
 function updateMatches(matches) {
   const el = document.getElementById('match-list');
   const replayEl = document.getElementById('replay-list');
@@ -972,13 +1009,13 @@ function updateMatches(matches) {
     chip.className = '';
     return;
   }
-  const active = matches.find(m => m.status === 'in_progress');
+  const active = matches.find(m => m.status === 'paused' || m.status === 'in_progress');
   const activeMap = latestState?.active_map || active?.map_name || _activeMapName;
   const modeLabel = gameModeLabel(latestState?.game_mode ?? active?.game_mode ?? 0);
   if (active) {
     const liveLabel = active.match_id === 'live-now' ? 'live' : active.match_id.replace(/^match-/, '');
     chip.textContent = `${modeLabel} · ${activeMap} · ${liveLabel}`;
-    chip.className = 'active';
+    chip.className = active.status === 'paused' ? 'paused' : 'active';
   } else {
     const lastLabel = matches[0].match_id === 'live-now' ? 'live' : matches[0].match_id.replace(/^match-/, '');
     chip.textContent = `${modeLabel} · ${activeMap} · ${lastLabel}`;
@@ -1042,6 +1079,12 @@ function updateEvents(events) {
     }
     else if (type === 'match_end')   text = `match ended  (winner: ${ev.winner ?? '?'})`;
     else if (type === 'match_aborted') text = `match aborted  (${ev.reason ?? 'unknown_reason'})`;
+    else if (type === 'match_paused') {
+      const who = describePausedPlayers(ev.timed_out_player_ids);
+      const tail = ev.pause_abort_s != null ? `, abort in ${Math.round(+ev.pause_abort_s)}s` : '';
+      text = `match paused  (${who}${tail})`;
+    }
+    else if (type === 'match_resumed') text = `match resumed  (all players back)`;
     const when = ev.display_time || '';
     return `<div class="event-item ${type}"><span class="event-text">${text}</span><span class="event-time">${when}</span></div>`;
   }).join('');
@@ -1080,6 +1123,7 @@ function connect() {
     updateServices(state.services);
     updatePipeline(state.pipeline);
     updateMatches(state.matches);
+    updateMatchState(state.match);
     updateEvents(state.events);
     updateMapSelector(state.active_map);
     wsUpdateCount++;
