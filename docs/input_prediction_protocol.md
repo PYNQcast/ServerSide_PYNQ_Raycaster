@@ -1,133 +1,171 @@
 # Input Prediction Protocol
 
-This repo now uses a hybrid node -> EC2 protocol designed for responsive local control on PYNQ while keeping EC2 authoritative over game outcomes.
+This repo uses a node -> EC2 movement protocol that is trying to satisfy two constraints at once:
+
+- the board or simulator must feel responsive locally
+- EC2 must stay authoritative for match state
+
+That tension is the whole reason prediction exists here.
 
 ## Why send predicted pose at all?
 
-The node has two jobs that pull in different directions:
+If the node waited for EC2 before updating its local pose, controls would feel slow and uneven because every movement step would be gated by network round-trip time and server tick timing.
 
-- it must feel immediate to the local player
-- it must not become the authority for multiplayer state
+So the node does this instead:
 
-That is why the node computes a local pose immediately from its inputs, but the server still decides what the real game state is.
+1. read local input immediately
+2. compute the pose it thinks that input should produce
+3. send that pose to EC2
+4. accept EC2 broadcast state as the real answer
 
 In protocol terms:
 
 - `input_flags` = what the player actually pressed this tick
-- `pred_x`, `pred_y`, `pred_angle` = what the node thinks those inputs produced locally
-- EC2 broadcast state = what actually counts
+- `pred_x`, `pred_y`, `pred_angle` = the node's local best guess of the resulting pose
+- EC2 broadcast state = authoritative truth
 
-The word `predicted` matters. The node is reporting its local result as a guess, not as the final truth.
+The word `predicted` matters. The node is not declaring authority. It is reporting what it thinks happened locally so the server can validate or compare it.
 
-## Is this standard?
+## Why have three movement modes?
 
-Yes, the standard multiplayer pattern is:
+The three movement modes are there because they represent three different ownership models for movement, and the repo is still evolving between them.
 
-1. client sends input
-2. client predicts locally for responsiveness
-3. server simulates authoritative state
-4. client reconciles to server state
+### `MOVEMENT_MODE_POSE`
 
-The only optional part is whether the client also sends its predicted pose to the server.
+Meaning:
 
-Two common designs are:
+- the node sends a pose update
+- the server interprets `x/y/angle` as the movement payload for this tick
+- the server may still clamp, collision-resolve, or reject it
 
-- `input only`
-  - simplest authoritative model
-  - server computes everything
-  - client keeps prediction local only
-- `input + predicted pose`
-  - server still uses input as the authoritative cause
-  - predicted pose helps with drift detection, validation, debugging, and reconciliation tooling
+This is the simplest mode to get working because the node does most of the movement step already.
 
-For this repo, `input + predicted pose` is the pragmatic choice because we have:
+### `MOVEMENT_MODE_INTENT_ONLY`
 
-- a PYNQ PS implementation
-- a simulator implementation
-- an EC2 authoritative tick
-- future FPGA/PS offload work where comparing node-side and server-side behaviour is useful
+Meaning:
 
-## Current packet meaning
+- the node sends only player intent
+- the server should ignore `x/y/angle`
+- the server should simulate movement entirely on EC2
 
-The node packet stays 24 bytes, but the old pad bytes now carry explicit metadata.
+This is the cleanest authoritative model, but it requires richer input flags and complete server-side movement logic.
 
-Node -> server fields:
+### `MOVEMENT_MODE_INTENT_WITH_PREDICTION`
 
-- `type`
-- `seq`
-- `timestamp`
-- `pred_x`
-- `pred_y`
-- `pred_angle`
-- `input_flags`
-- `movement_mode`
-- `protocol_version`
-- `reserved`
+Meaning:
 
-Important interpretation:
+- the node sends player intent
+- the node also sends the pose it predicted from that intent
+- the server can use the predicted pose as a validation or debugging signal
 
-- if `movement_mode = pose`, the server treats the node pose as the primary update and validates it
-- if `movement_mode = intent_only`, the server should simulate movement entirely from `input_flags`
-- if `movement_mode = intent_with_prediction`, the server can use `input_flags` as the real driver and use predicted pose as a validation/debug hint
+This is the hybrid model. It is useful when the node needs immediate local responsiveness, but you still want the protocol to carry enough information to compare node-side and server-side movement behaviour.
 
-At the moment, the repo is in an intermediate state:
+## Why prediction is useful in this repo specifically
 
-- protocol supports all three modes
-- clients default to `intent_with_prediction`
-- T2 parses the mode/version cleanly
-- full EC2-side movement integration for `intent_only` is still the next step
+Prediction is not just a generic game-networking idea here. It is useful for this codebase because we have:
+
+- a simulator client
+- a PYNQ Python client
+- an EC2 server that can validate movement
+- future FPGA / PS offload work where node-side and server-side movement may diverge
+
+Sending predicted pose gives you a cheap comparison point:
+
+- what the node thought should happen
+- what the server actually accepted
+
+That helps with:
+
+- responsiveness
+- validation
+- debugging drift
+- migration from simulator behaviour to real board behaviour
+
+## What the code does today
+
+The protocol supports all three modes, but the implementation is not fully symmetric yet.
+
+Current reality:
+
+- clients default to `MOVEMENT_MODE_INTENT_WITH_PREDICTION`
+- the current PYNQ client still computes its own movement locally
+- the current EC2 server treats all non-`INTENT_ONLY` modes as pose-carrying updates
+- `INTENT_ONLY` is the intended cleaner end state, but it is not fully wired yet because the protocol does not yet carry all movement intents needed for full server-side simulation
+
+So today:
+
+- `POSE` and `INTENT_WITH_PREDICTION` are semantically different
+- but in the current server implementation they are handled very similarly
+
+That is why all three exist even though only two are meaningfully distinct in the live code right now.
+
+## What do `0x00`, `0x01`, and `0x02` mean?
+
+These are hexadecimal integer literals.
+
+They are:
+
+- not register addresses
+- not byte counts
+- not memory offsets
+
+They are just small numeric tags stored in the one-byte `movement_mode` field of the packet.
+
+Examples:
+
+- `0x00` means decimal `0`
+- `0x01` means decimal `1`
+- `0x02` means decimal `2`
+
+Hex is used because protocol constants, flags, and packet types are easier to scan in hex when you are looking at bytes on the wire.
+
+In this specific case:
+
+- `MOVEMENT_MODE_POSE = 0x00`
+- `MOVEMENT_MODE_INTENT_ONLY = 0x01`
+- `MOVEMENT_MODE_INTENT_WITH_PREDICTION = 0x02`
+
+That means the single byte on the wire will literally contain:
+
+- `00`
+- `01`
+- or `02`
+
+depending on which movement model the node is declaring for that packet.
+
+## What does `NODE_PROTOCOL_VERSION = 1` mean?
+
+This is another one-byte tag in the packet.
+
+It is not the size of the packet and not a register value. It is just the declared version of the node packet format.
+
+The purpose is:
+
+- if the wire format changes later in a breaking way
+- the node can send a newer version number
+- the server can reject or route that packet appropriately
+
+At the moment `1` means "the current 24-byte NodePacket layout".
 
 ## Why this fits PYNQ well
 
-On the PYNQ board, four hardware buttons map naturally to movement intent:
-
-- `forward`
-- `back`
-- `turn_left`
-- `turn_right`
-
-The PS can turn those button states into local movement immediately for smooth feel. That local movement becomes the predicted pose.
-
-So the board remains responsive, but EC2 still owns:
+On the PYNQ board, local controls naturally exist on the board side first. That means the board can react immediately, while EC2 still remains authoritative for:
 
 - tag resolution
 - match flow
 - fairness
-- final state
+- final broadcast state
 
-## Where `game_logic_bridge` fits
-
-`pynq_full/ec2/server/game_logic_bridge.py` is only a server-side adapter.
-
-Its role is:
-
-- Python T2 calls one stable API
-- if `libgame_logic.so` exists, it uses the native C++ implementation
-- otherwise it falls back to Python logic
-
-That means T2 can stay simple:
-
-- parse packet
-- read `input_flags`, `movement_mode`, and predicted pose
-- validate/apply authoritative rules
-- broadcast authoritative state
-
-The bridge does not change protocol semantics. It only changes whether the EC2-side logic runs in Python or native C++.
+That is exactly the kind of setup where prediction makes sense.
 
 ## Intended end state
 
-The target architecture is:
+The long-term clean model is:
 
-1. PYNQ PS or simulator reads local input
-2. node predicts motion immediately
-3. node sends `input_flags + predicted pose + seq`
-4. EC2 simulates the authoritative result
-5. EC2 compares predicted pose against authoritative state when useful
-6. EC2 broadcasts authoritative game state back to all nodes
+1. node reads local controls
+2. node may predict locally for feel
+3. node sends intent and possibly predicted pose
+4. EC2 decides authoritative movement and match outcomes
+5. node reconciles to EC2 broadcast state
 
-This gives:
-
-- responsive controls locally
-- authoritative fairness centrally
-- a clear place for FPGA/PS acceleration
-- a clear reconciliation path when local and server state diverge
+The likely architectural direction is to move closer to `INTENT_ONLY` over time, but `INTENT_WITH_PREDICTION` is a practical bridge while the real board path is being brought up and compared against simulator behaviour.

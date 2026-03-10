@@ -27,6 +27,13 @@ DYNAMO_TABLE = "pynq-raycaster-seda-matches"
 AWS_REGION   = "eu-west-2"
 REPO_ROOT    = Path(__file__).resolve().parents[3]
 MAPS_DIR     = REPO_ROOT / "pynq_full" / "ec2" / "maps"
+MONITOR_DIR  = Path(__file__).resolve().parent
+MONITOR_ASSETS = {
+    "monitor.css",
+    "monitor-state.js",
+    "monitor-render.js",
+    "monitor-app.js",
+}
 
 SERVICE_SPECS = {
     "server": {
@@ -629,8 +636,14 @@ async def ws_handler(request):
 # ── Static file handler ────────────────────────────────────────────────────────
 
 async def index_handler(request):
-    here = os.path.dirname(__file__)
-    return web.FileResponse(os.path.join(here, "index.html"))
+    return web.FileResponse(MONITOR_DIR / "index.html")
+
+
+async def asset_handler(request):
+    name = request.path.lstrip("/")
+    if name not in MONITOR_ASSETS:
+        raise web.HTTPNotFound(text=f"unknown asset: {name}")
+    return web.FileResponse(MONITOR_DIR / name)
 
 
 async def replay_handler(request):
@@ -683,6 +696,10 @@ async def map_handler(request):
 async def main():
     app = web.Application()
     app.router.add_get("/",   index_handler)
+    app.router.add_get("/monitor.css", asset_handler)
+    app.router.add_get("/monitor-state.js", asset_handler)
+    app.router.add_get("/monitor-render.js", asset_handler)
+    app.router.add_get("/monitor-app.js", asset_handler)
     app.router.add_get("/ws", ws_handler)
     app.router.add_get("/api/replay/{match_id}", replay_handler)
     app.router.add_get("/api/maps", maps_list_handler)

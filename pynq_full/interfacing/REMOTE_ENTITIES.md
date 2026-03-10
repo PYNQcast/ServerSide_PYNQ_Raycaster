@@ -1,5 +1,7 @@
 # Remote Entities On PYNQ
 
+See also: `INTERFACING_NOTES.md` for the broader board-side split and offload status.
+
 This note describes the minimum board-side work needed to render basic ghosts
 and other remote entities on the PYNQ path.
 

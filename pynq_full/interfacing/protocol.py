@@ -53,11 +53,11 @@ GAME_MODE_CHASE_BITS = 0x01   # runner collects bits, tagger tries to tag before
 
 # ── Node movement modes ───────────────────────────────────────────────────────
 
-NODE_PROTOCOL_VERSION = 1
+NODE_PROTOCOL_VERSION = 1  # Version of the 24-byte NodePacket wire format; bump only for breaking packet-layout changes.
 
-MOVEMENT_MODE_POSE                   = 0x00
-MOVEMENT_MODE_INTENT_ONLY            = 0x01
-MOVEMENT_MODE_INTENT_WITH_PREDICTION = 0x02
+MOVEMENT_MODE_POSE = 0x00  # Node sends a raw pose update; server treats x/y/angle as the movement payload for this tick.
+MOVEMENT_MODE_INTENT_ONLY = 0x01  # Node is only declaring intent/inputs; server should ignore predicted x/y/angle and advance movement itself.
+MOVEMENT_MODE_INTENT_WITH_PREDICTION = 0x02  # Node sends inputs plus its locally predicted pose; server validates/corrects that prediction instead of trusting it blindly.
 
 # ── Wire format ───────────────────────────────────────────────────────────────
 #
