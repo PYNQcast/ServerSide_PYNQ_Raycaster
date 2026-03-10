@@ -1502,6 +1502,12 @@
     will-change: transform;
   }
 
+  .about-coin-stage {
+    position: relative;
+    display: inline-block;
+    line-height: 0;
+  }
+
   .about-stage.three-ready .about-light-cone,
   .about-stage.three-ready .about-sprite-wrap {
     animation: none;
