@@ -57,11 +57,12 @@ export function mountPYNQCASTCoin(rootEl) {
     if (!renderer || !camera) return;
     const width = Math.max(280, Math.round(host.clientWidth || 480));
     const height = Math.max(280, Math.round(host.clientHeight || width));
-    const renderWidth = Math.max(1, Math.round(width / 3));
-    const renderHeight = Math.max(1, Math.round(height / 3));
+    const renderWidth = Math.max(1, Math.floor(width / 6));
+    const renderHeight = Math.max(1, Math.floor(height / 6));
     renderer.setSize(renderWidth, renderHeight, false);
     renderer.domElement.style.width = `${width}px`;
     renderer.domElement.style.height = `${height}px`;
+    renderer.domElement.style.imageRendering = 'pixelated';
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
     renderFrame();
@@ -114,11 +115,11 @@ export function mountPYNQCASTCoin(rootEl) {
   rimLight.position.set(0, -2.5, -3);
   scene.add(rimLight);
 
-  edgeGeo = new THREE.CylinderGeometry(1.14, 1.14, 0.14, 48, 1, true);
-  frontFillGeo = new THREE.CircleGeometry(1.13, 48);
-  backFillGeo = new THREE.CircleGeometry(1.13, 48);
-  frontGeo = new THREE.CircleGeometry(1.14, 48);
-  backGeo = new THREE.CircleGeometry(1.14, 48);
+  edgeGeo = new THREE.CylinderGeometry(1.14, 1.14, 0.14, 10, 1, true);
+  frontFillGeo = new THREE.CircleGeometry(1.13, 10);
+  backFillGeo = new THREE.CircleGeometry(1.13, 10);
+  frontGeo = new THREE.CircleGeometry(1.14, 10);
+  backGeo = new THREE.CircleGeometry(1.14, 10);
 
   const edgeMaterial = new THREE.MeshStandardMaterial({
     color: 0x7d2429,
