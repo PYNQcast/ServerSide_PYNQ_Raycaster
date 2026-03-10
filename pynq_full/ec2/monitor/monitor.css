@@ -1504,6 +1504,24 @@
     will-change: transform;
   }
 
+  .about-sprite-wrap.three-ready .about-logo-sprite {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .about-3d-host {
+    width: clamp(320px, 40vw, 620px);
+    aspect-ratio: 1.8 / 1;
+    display: block;
+  }
+
+  .about-3d-host canvas {
+    display: block;
+    width: 100% !important;
+    height: 100% !important;
+    image-rendering: pixelated;
+  }
+
   .about-logo-sprite {
     width: clamp(320px, 40vw, 620px);
     max-width: 100%;
@@ -1773,6 +1791,10 @@
     }
 
     .about-logo-sprite {
+      width: clamp(240px, 66vw, 420px);
+    }
+
+    .about-3d-host {
       width: clamp(240px, 66vw, 420px);
     }
 

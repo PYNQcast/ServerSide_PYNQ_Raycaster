@@ -10,6 +10,7 @@
 #
 # Monitor (pynq_full/ec2/monitor/monitor.py) runs on EC2 port 8080.
 # SSH tunnel in the monitor pane forwards it to http://localhost:8080
+# Shared React monitor bundle is built locally into monitor_ui/dist before sync.
 #
 # Usage: ./pynq_dev.sh  (from repo root)
 # Requires: tmux, SSH key at repo root raycastpair.pem
@@ -161,6 +162,10 @@ cleanup_local() {
   fuser -k 8080/tcp 2>/dev/null || true
 }
 
+build_monitor_ui() {
+  npm -C "$REPO" run build:monitor-ui
+}
+
 stop_remote_services() {
   ssh -i "$KEY" "$EC2" 'printf "#!/bin/bash\npkill -f server.py 2>/dev/null; pkill -f sidecar.py 2>/dev/null; pkill -f monitor.py 2>/dev/null; fuser -k 8080/tcp 2>/dev/null; true\n" > /tmp/_stop_pynq.sh && bash /tmp/_stop_pynq.sh'
 }
@@ -217,8 +222,9 @@ banner
 section "Preflight"
 [ -f "$KEY" ] || die "Missing SSH key: $KEY"
 log_ok "SSH key found"
-require_cmds tmux ssh git fuser nc hostname awk
-log_ok "Dependencies available (tmux, ssh, git, fuser, nc)"
+require_cmds tmux ssh git fuser nc hostname awk npm
+log_ok "Dependencies available (tmux, ssh, git, fuser, nc, npm)"
+run_step "Building shared React monitor bundle" build_monitor_ui || die "Failed building monitor_ui bundle"
 ensure_clean_git || exit 1
 log_ok "Git state is clean and pushed"
 
