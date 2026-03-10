@@ -53,7 +53,7 @@ _ddb_cache      = []
 _ddb_last_fetch = 0.0
 _service_cache  = {}
 _service_last_fetch = 0.0
-_service_message = "controls run on EC2 only; node simulators still start locally"
+_service_message = "controls run on EC2 only; FPGA boards stay connected over UDP"
 _replay_cache = {}
 _active_map = "chase"    # tracks which map the server is using
 _redis_stats_cache = {}
@@ -269,26 +269,13 @@ def _stop_service(name: str):
 def handle_control_command(cmd: str):
     global _service_message
 
-    def publish_node_mode(node_index: int, mode: str):
-        payload = json.dumps({"cmd": "set_mode", "mode": mode, "node_index": node_index})
-        r.publish("game:control", payload)
-        return f"node {node_index + 1} switched to {mode} mode"
-
     if cmd == "force_end":
         r.publish("game:control", json.dumps({"cmd": "force_end"}))
         _service_message = "force_end sent — match will end this tick"
     elif cmd == "restart":
         payload = json.dumps({"cmd": "restart"})
         r.publish("game:control", payload)
-        _service_message = "restart signal sent to node simulators"
-    elif cmd == "node1_auto":
-        _service_message = publish_node_mode(0, "auto")
-    elif cmd == "node1_manual":
-        _service_message = publish_node_mode(0, "manual")
-    elif cmd == "node2_auto":
-        _service_message = publish_node_mode(1, "auto")
-    elif cmd == "node2_manual":
-        _service_message = publish_node_mode(1, "manual")
+        _service_message = "restart signal sent to the live server"
     elif cmd == "start_server":
         _service_message = _start_service("server")
     elif cmd == "stop_server":
@@ -670,8 +657,13 @@ async def map_handler(request):
             continue
         rows.append([1 if c == "#" else 0 for c in line])
 
-    return web.json_response({"name": name, "width": len(rows[0]) if rows else 0,
-                               "height": len(rows), "tiles": rows})
+    return web.json_response({
+        "name": name,
+        "width": len(rows[0]) if rows else 0,
+        "height": len(rows),
+        "tile_scale": 8,
+        "tiles": rows,
+    })
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
