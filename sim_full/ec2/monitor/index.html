@@ -417,9 +417,123 @@
   }
 
   .viewport-card {
+    position: relative;
     min-height: 0;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+  }
+
+  .viewport-head {
+    align-items: flex-start;
+  }
+
+  .viewport-head-meta {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 10px;
+  }
+
+  .archive-toggle-btn,
+  .archive-close-btn {
+    font-family: 'Press Start 2P', cursive;
+    font-size: 9px;
+    line-height: 1.8;
+    padding: 10px 14px;
+    border: none;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: transform 0.05s steps(2);
+  }
+
+  .archive-toggle-btn {
+    background: #2f3f63;
+    color: #ffe69d;
+    box-shadow:
+      inset -3px -3px 0 0 #1a2137,
+      inset 3px 3px 0 0 #66789f,
+      4px 4px 0 0 #000;
+  }
+
+  .archive-toggle-btn.active {
+    background: #0891b2;
+    color: #eefcff;
+    box-shadow:
+      inset -3px -3px 0 0 #065a73,
+      inset 3px 3px 0 0 #22d3ee,
+      4px 4px 0 0 #000;
+  }
+
+  .archive-close-btn {
+    background: var(--coral);
+    color: #fff7f7;
+    box-shadow:
+      inset -3px -3px 0 0 var(--coral-dark),
+      inset 3px 3px 0 0 var(--coral-light),
+      4px 4px 0 0 #000;
+  }
+
+  .archive-toggle-btn:active,
+  .archive-close-btn:active {
+    transform: translate(3px, 3px);
+  }
+
+  .archive-drawer {
+    position: absolute;
+    top: 86px;
+    right: 16px;
+    width: min(420px, calc(100% - 32px));
+    max-height: calc(100% - 102px);
+    z-index: 4;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    background: rgba(15, 52, 96, 0.97);
+  }
+
+  .archive-drawer-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding-bottom: 12px;
+    border-bottom: 2px dashed rgba(232, 232, 232, 0.18);
+  }
+
+  .archive-drawer-head h2 {
+    font-family: 'Press Start 2P', cursive;
+    font-size: 10px;
+    line-height: 1.8;
+    color: var(--cyan);
+    text-transform: uppercase;
+  }
+
+  .archive-drawer-body {
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding-right: 4px;
+  }
+
+  .archive-drawer .replay-btn,
+  .archive-drawer .control-btn {
+    width: 100%;
+  }
+
+  .archive-drawer .ddb-note,
+  .archive-drawer .metric-note {
+    font-size: 18px;
+  }
+
+  .replay-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 10px;
   }
 
   .viewport-wrap {
@@ -603,9 +717,12 @@
   }
 
   .storage-panel,
-  .archive-panel,
   .events-terminal {
     grid-column: span 4;
+  }
+
+  .events-terminal {
+    grid-column: span 8;
   }
 
   .events-terminal {
@@ -940,12 +1057,18 @@
     .server-health,
     .pipeline-panel,
     .storage-panel,
-    .archive-panel,
     .events-terminal,
     .controls-actions,
     .controls-sim,
     .controls-notes {
       grid-column: span 12;
+    }
+
+    .archive-drawer {
+      width: min(400px, calc(100% - 24px));
+      top: 78px;
+      right: 12px;
+      max-height: calc(100% - 92px);
     }
   }
 
@@ -981,6 +1104,22 @@
 
     #fps {
       font-size: 24px;
+    }
+
+    .viewport-head {
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .viewport-head-meta {
+      justify-content: flex-start;
+    }
+
+    .archive-drawer {
+      position: static;
+      width: 100%;
+      max-height: none;
+      margin-top: 12px;
     }
   }
 </style>
@@ -1040,13 +1179,53 @@
 
       <div class="game-layout">
         <div class="panel-raised viewport-card">
-          <div class="panel-head">
+          <div class="panel-head viewport-head">
             <h2>Raycast Arena</h2>
-            <span id="canvas-label" class="panel-head-note">map play · loading map…</span>
+            <div class="viewport-head-meta">
+              <span id="canvas-label" class="panel-head-note">map play · loading map…</span>
+              <button
+                id="archive-toggle"
+                class="archive-toggle-btn"
+                type="button"
+                aria-controls="archive-drawer"
+                aria-expanded="false"
+                onclick="toggleArchiveDrawer()"
+              >Archive</button>
+            </div>
           </div>
           <div class="viewport-wrap">
             <canvas id="arena" width="480" height="480"></canvas>
           </div>
+          <aside id="archive-drawer" class="panel-raised archive-drawer" hidden>
+            <div class="archive-drawer-head">
+              <h2>DynamoDB + Replay</h2>
+              <button class="archive-close-btn" type="button" onclick="toggleArchiveDrawer(false)">Close</button>
+            </div>
+            <div class="archive-drawer-body">
+              <div>
+                <div class="panel-head">
+                  <h2>Archive</h2>
+                  <span class="micro-chip">warm tier</span>
+                </div>
+                <div id="match-list"><span style="color:#90a3c4">loading...</span></div>
+                <div class="ddb-note">warm tier only · recent META rows kept in DynamoDB · older match rows archived to S3</div>
+              </div>
+
+              <div>
+                <div class="panel-head">
+                  <h2>Replay</h2>
+                  <span class="micro-chip">S3</span>
+                </div>
+                <div class="metric-note" id="replay-status">no replay loaded</div>
+                <div class="replay-list" id="replay-list">
+                  <button class="replay-btn empty" disabled>waiting for replayable matches...</button>
+                </div>
+                <div class="control-stack">
+                  <button class="control-btn stop" type="button" onclick="stopReplay()">Stop Replay</button>
+                </div>
+              </div>
+            </div>
+          </aside>
         </div>
 
         <div class="game-sidebar">
@@ -1268,26 +1447,6 @@
           <div class="metric-note" id="redis-note">measuring live Redis load...</div>
         </div>
 
-        <div class="panel-raised archive-panel">
-          <div class="panel-head">
-            <h2>DynamoDB + Replay</h2>
-            <span class="micro-chip">archive</span>
-          </div>
-          <div id="match-list"><span style="color:#90a3c4">loading...</span></div>
-          <div class="ddb-note">warm tier only · recent META rows kept in DynamoDB · older match rows archived to S3</div>
-          <div class="panel-head" style="margin-top:16px;">
-            <h2>Replay</h2>
-            <span class="micro-chip">S3</span>
-          </div>
-          <div class="metric-note" id="replay-status">no replay loaded</div>
-          <div class="replay-list" id="replay-list">
-            <button class="replay-btn empty" disabled>waiting for replayable matches...</button>
-          </div>
-          <div class="control-stack">
-            <button class="control-btn stop" type="button" onclick="stopReplay()">Stop Replay</button>
-          </div>
-        </div>
-
         <div class="panel-terminal events-terminal">
           <div class="panel-head">
             <h2>Live Event Feed</h2>
@@ -1402,6 +1561,7 @@ let _viewMode = 'map';
 const requestedNodeModes = { 1: 'manual', 2: 'manual' };
 let _mapManualSyncPending = true;
 let _activePage = 'game';
+let _archiveDrawerOpen = false;
 const frameTimeHistory = [];
 let lastRenderSampleAt = performance.now();
 
@@ -1550,6 +1710,29 @@ function setActiveTab(tab) {
   const nextHash = target === 'game' ? '' : `#${target}`;
   history.replaceState(null, '', `${location.pathname}${location.search}${nextHash}`);
 }
+
+function setArchiveDrawer(open) {
+  const target = Boolean(open);
+  _archiveDrawerOpen = target;
+  const drawer = document.getElementById('archive-drawer');
+  const toggle = document.getElementById('archive-toggle');
+  if (drawer) drawer.hidden = !target;
+  if (toggle) {
+    toggle.classList.toggle('active', target);
+    toggle.setAttribute('aria-expanded', target ? 'true' : 'false');
+  }
+}
+
+function toggleArchiveDrawer(force) {
+  const next = typeof force === 'boolean' ? force : !_archiveDrawerOpen;
+  setArchiveDrawer(next);
+}
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && _archiveDrawerOpen) {
+    setArchiveDrawer(false);
+  }
+});
 
 function pushFrameSample(frameMs) {
   if (!Number.isFinite(frameMs) || frameMs <= 0 || frameMs > 100) return;
