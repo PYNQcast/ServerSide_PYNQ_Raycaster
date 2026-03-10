@@ -1470,27 +1470,29 @@
     position: absolute;
     left: 50%;
     bottom: 96px;
-    width: min(300px, 44%);
-    height: 380px;
+    width: min(280px, 40%);
+    height: 320px;
     transform: translateX(-50%);
-    background: radial-gradient(ellipse at bottom, rgba(240, 90, 80, 0.22) 0%, rgba(240, 90, 80, 0.12) 26%, rgba(240, 90, 80, 0.05) 48%, transparent 74%);
-    filter: blur(10px);
-    opacity: 0.72;
+    background: radial-gradient(ellipse at bottom, rgba(240, 90, 80, 0.24) 0%, rgba(240, 90, 80, 0.14) 24%, rgba(240, 90, 80, 0.06) 50%, transparent 74%);
+    filter: blur(12px);
+    opacity: 0.62;
     z-index: 0;
+    will-change: transform, opacity;
   }
 
   .about-ground-shadow {
     position: absolute;
     left: 50%;
     bottom: 60px;
-    width: min(320px, 60%);
-    height: 54px;
+    width: min(280px, 50%);
+    height: 38px;
     transform: translateX(-50%);
-    background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.72) 0%, rgba(0, 0, 0, 0.52) 40%, rgba(0, 0, 0, 0.18) 68%, transparent 84%);
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
-    opacity: 0.78;
+    background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.92) 0%, rgba(0, 0, 0, 0.72) 34%, rgba(0, 0, 0, 0.28) 60%, transparent 82%);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+    opacity: 0.88;
     animation: about-shadow-breathe 2s infinite ease-in-out;
     z-index: 1;
+    will-change: transform, opacity, filter;
   }
 
   .about-sprite-wrap {
@@ -1504,15 +1506,26 @@
     will-change: transform;
   }
 
+  .about-stage.three-ready .about-ground-shadow,
+  .about-stage.three-ready .about-light-cone,
+  .about-stage.three-ready .about-sprite-wrap {
+    animation: none;
+  }
+
+  .about-sprite-wrap.three-ready {
+    transform: none;
+  }
+
   .about-sprite-wrap.three-ready .about-logo-sprite {
     opacity: 0;
     pointer-events: none;
   }
 
   .about-3d-host {
-    width: clamp(320px, 40vw, 620px);
-    aspect-ratio: 1.8 / 1;
+    width: clamp(300px, 34vw, 540px);
+    aspect-ratio: 1 / 1;
     display: block;
+    pointer-events: none;
   }
 
   .about-3d-host canvas {
@@ -1795,7 +1808,7 @@
     }
 
     .about-3d-host {
-      width: clamp(240px, 66vw, 420px);
+      width: clamp(240px, 68vw, 420px);
     }
 
     .about-copy {
