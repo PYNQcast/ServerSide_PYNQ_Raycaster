@@ -168,9 +168,9 @@ function updateCanvasLabel() {
 }
 
 function setActiveTab(tab) {
-  const target = (tab === 'server' || tab === 'controls') ? tab : 'game';
+  const target = (tab === 'server' || tab === 'controls' || tab === 'about') ? tab : 'game';
   _activePage = target;
-  ['game', 'server', 'controls'].forEach((page) => {
+  ['game', 'server', 'controls', 'about'].forEach((page) => {
     const panel = document.getElementById(`page-${page}`);
     const tabBtn = document.getElementById(`tab-${page}`);
     if (panel) panel.hidden = page !== target;
