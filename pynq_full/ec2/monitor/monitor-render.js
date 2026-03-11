@@ -199,7 +199,7 @@ function renderLoop() {
   }
   renderCount++;
   if (now - renderLastTime >= 1000) {
-    document.getElementById('fps').textContent = String(renderCount);
+    document.getElementById('fps').textContent = String(wsHz);
     document.getElementById('hud-frame-ms').textContent = `${averageFrameMs().toFixed(1)} ms/frame`;
     document.getElementById('hud-ws-rate').textContent = `${wsHz} / s`;
     renderCount = 0; renderLastTime = now;
