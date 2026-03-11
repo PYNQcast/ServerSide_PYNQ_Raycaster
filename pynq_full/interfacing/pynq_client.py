@@ -14,8 +14,15 @@
 #   Player position: 0x80  [31:16]=x, [15:0]=y, unsigned Q6.10 tile coords
 #   Player angle:    0x84  [11:0]=angle, 0..4095 maps a full turn
 #
-# Run on PYNQ-Z1:
-#   python3 pynq_client.py [--server 3.9.71.204] [--port 9000] [--overlay raycaster.bit]
+# Upload to board:
+#   scp... etc
+#   Make sure raycaster.hwh matches the exact raycaster.bit build.
+#
+# Run on board:
+#   ssh xilinx@<PYNQ_IP>
+#   cd /home/xilinx/jupyter_notebooks
+#***#
+#   python3 pynq_client.py --server 3.9.71.204 --port 9000 --overlay raycaster.bit
 
 import asyncio
 import socket
