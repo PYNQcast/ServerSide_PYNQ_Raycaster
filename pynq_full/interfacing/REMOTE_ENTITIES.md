@@ -23,7 +23,7 @@ path is not.
 
 ## Direction
 
-For the real PYNQ build, rendering should be board-side, not software fallback.
+For the real PYNQ build, rendering should be board-side only.
 The Python client should behave as a thin transport/control layer:
 
 - receive world state from EC2
@@ -31,8 +31,8 @@ The Python client should behave as a thin transport/control layer:
 - write a compact entity list into FPGA-visible registers or BRAM
 - let the FPGA renderer draw walls + sprites
 
-The software fallback renderer in `pynq_client.py` is useful for bring-up, but
-it should not be treated as the target architecture.
+`pynq_client.py` should fail loudly if the expected PYNQ/overlay hardware path
+is unavailable, rather than silently switching to a different renderer.
 
 ## Minimum PYNQ Changes
 

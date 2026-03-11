@@ -45,11 +45,6 @@ function drawArena(players, bits, bitsMask) {
         ctx.strokeRect(px, py, ts, ts);
       });
     });
-  } else {
-    ctx.beginPath(); ctx.arc(ox, oy, ORBIT_RADIUS * sc, 0, Math.PI*2);
-    ctx.strokeStyle = 'rgba(0,212,255,0.12)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
   }
 
   // Bit collectibles — yellow dot if active, grey if collected

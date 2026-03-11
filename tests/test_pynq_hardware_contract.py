@@ -116,3 +116,19 @@ def test_pynq_client_caps_remote_entity_count():
 
         assert len(entities) == pynq_client.MAX_REMOTE_ENTITIES
         assert [entity["entity_id"] for entity in entities] == [2, 3, 4, 5]
+
+
+def test_pynq_client_decodes_button_gpio_bits():
+    with pynq_import_context():
+        pynq_client = importlib.import_module("pynq_client")
+
+        buttons = pynq_client.decode_button_bits(
+            pynq_client.BUTTON_FORWARD_MASK | pynq_client.BUTTON_TURN_RIGHT_MASK
+        )
+
+        assert buttons == {
+            "forward": True,
+            "backward": False,
+            "turn_left": False,
+            "turn_right": True,
+        }
