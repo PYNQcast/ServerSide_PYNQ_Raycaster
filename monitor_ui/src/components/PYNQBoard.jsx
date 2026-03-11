@@ -286,7 +286,7 @@ function BoardStage({ hostSlot }) {
       board.rotation.y = t * 1.1;
       board.rotation.x = 0.25 + Math.sin(t * 0.5) * 0.08;
       board.rotation.z = Math.sin(t * 0.7) * 0.06;
-      board.position.y = Math.sin(t * 1.4) * 0.18;
+      board.position.y = 0.24 + Math.sin(t * 1.4) * 0.18;
 
       redKey.position.x = Math.cos(t * 0.6) * 4;
       redKey.position.z = Math.sin(t * 0.6) * 4 + 2;
