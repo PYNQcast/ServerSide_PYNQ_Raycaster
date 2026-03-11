@@ -137,24 +137,26 @@ function BoardStage({ hostSlot }) {
       trace.position.set(x, y, 0.09);
       board.add(trace);
     };
-    addTrace(-0.18,  0.56, 0.78, 0.035);
-    addTrace( 0.52,  0.56, 0.56, 0.035);
-    addTrace( 0.78,  0.55, 0.035, 0.22);
-    addTrace( 1.05,  0.55, 0.32, 0.035);
-    addTrace(-0.72,  0.12, 0.52, 0.035);
-    addTrace(-0.96,  0.12, 0.035, 0.62);
-    addTrace(-0.96, -0.20, 0.28, 0.035);
-    addTrace( 0.20,  0.12, 0.92, 0.035);
-    addTrace( 0.92,  0.10, 0.035, 0.86);
-    addTrace( 0.64, -0.30, 0.58, 0.035);
-    addTrace(-0.30, -0.26, 0.035, 0.62);
-    addTrace(-0.30, -0.58, 1.46, 0.035);
-    addTrace(-1.18, -0.70, 0.035, 0.30);
-    addTrace(-1.02, -0.82, 0.34, 0.035);
-    addTrace( 0.94, -0.82, 0.035, 0.42);
-    addTrace( 1.14, -0.62, 0.42, 0.035);
-    addTrace(-1.08,  0.76, 1.74, 0.03);
-    addTrace( 0.16,  1.00, 0.03, 0.18);
+    addTrace(-0.12,  0.56, 0.64, 0.03);
+    addTrace( 0.42,  0.56, 0.46, 0.03);
+    addTrace( 0.72,  0.48, 0.03, 0.18);
+    addTrace( 0.98,  0.48, 0.22, 0.03);
+    addTrace(-0.78,  0.10, 0.36, 0.03);
+    addTrace(-0.94,  0.02, 0.03, 0.46);
+    addTrace(-0.84, -0.18, 0.20, 0.03);
+    addTrace( 0.12,  0.10, 0.72, 0.03);
+    addTrace( 0.82,  0.02, 0.03, 0.70);
+    addTrace( 0.60, -0.24, 0.42, 0.03);
+    addTrace(-0.30, -0.22, 0.03, 0.48);
+    addTrace(-0.08, -0.56, 1.08, 0.03);
+    addTrace(-1.18, -0.64, 0.03, 0.20);
+    addTrace(-1.04, -0.72, 0.24, 0.03);
+    addTrace( 0.92, -0.74, 0.03, 0.28);
+    addTrace( 1.08, -0.60, 0.28, 0.03);
+    addTrace(-0.82,  0.84, 1.22, 0.026);
+    addTrace(-0.14,  0.94, 0.026, 0.12);
+    addTrace(-1.34,  0.32, 0.03, 0.86);
+    addTrace( 1.30,  0.26, 0.03, 0.74);
 
     // ── Large Zynq SoC and supporting components ──
     const fpga = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.85, 0.12), pcbEdgeMaterial);
@@ -255,8 +257,8 @@ function BoardStage({ hostSlot }) {
     });
 
     // Back logo — flipped outward
-    const logoPlaneBack = new THREE.Mesh(new THREE.PlaneGeometry(3.18, 1.9), logoMaterial);
-    logoPlaneBack.position.set(0.06, 0.06, -0.106);
+    const logoPlaneBack = new THREE.Mesh(new THREE.PlaneGeometry(3.28, 2.0), logoMaterial);
+    logoPlaneBack.position.set(0.04, 0.04, -0.106);
     logoPlaneBack.rotation.y = Math.PI;
     board.add(logoPlaneBack);
 
