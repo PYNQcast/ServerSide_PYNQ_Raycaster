@@ -79,7 +79,7 @@ def _handle_packet(data: bytes, *, registered_state: dict):
 
 def main():
     parser = argparse.ArgumentParser(description="UDP smoke test for the current PYNQ protocol")
-    parser.add_argument("--server", default="18.175.238.148")
+    parser.add_argument("--server", default="3.9.71.204")
     parser.add_argument("--port", type=int, default=9000)
     parser.add_argument("--tick-rate", type=int, default=20)
     parser.add_argument("--register-timeout", type=float, default=5.0)

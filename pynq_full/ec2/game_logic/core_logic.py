@@ -206,7 +206,7 @@ class CoreLogic:
         self.state.clear_match(arm_lockout=True)
 
     # ── Proximity / tag detection ─────────────────────────────────────────────
-    # Pairwise check — skipped during grace period so nodes reach their orbits first
+    # Pairwise check — skipped during grace period so players can separate after spawn/reset
 
     async def _check_proximity(self):
         players = list(self.state.players.values())

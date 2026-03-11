@@ -10,13 +10,16 @@ PKT_STATE_UPDATE = 0x0001   # node  → server: position this tick
 PKT_GAME_STATE   = 0x0002   # server → node:  all player positions
 PKT_HEARTBEAT    = 0x0010   # node  → server: keepalive
 PKT_REGISTER     = 0x0020   # node  → server: first contact, triggers ACK
+
 PKT_ACK          = 0x0030   # server → node:  confirms registration
                              #   byte 8 = player_id (1=RUNNER, 2=TAGGER) — wait for this
                              #   before sending STATE_UPDATEs. No node-to-node comms needed;
                              #   opponent position arrives in every PKT_GAME_STATE broadcast.
+                             
 PKT_MAP          = 0x0040   # server → node:  map tile data, sent once after PKT_ACK
                              #   header (8 bytes) + MapHeader (4 bytes) + tiles (width*height bytes)
                              #   node stores tiles in DRAM; FPGA raycaster reads them each frame.
+
 PKT_BITS_INIT    = 0x0050   # server → node:  bit positions, sent once at match start
                              #   header (8 bytes) + count (1 byte) + N × BitEntry (6 bytes each)
                              #   node stores positions; server sends bitmask each tick to flag collection.

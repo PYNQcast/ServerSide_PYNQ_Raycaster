@@ -5,8 +5,7 @@ const frameChartCtx = frameChartCanvas.getContext('2d');
 const stackedFrameChart = document.getElementById('stacked-frame-chart');
 const W = canvas.width, H = canvas.height;
 const TAG_RADIUS     = 20.0;   // must match t2_game_tick.py TAG_RADIUS
-const ORBIT_RADIUS   = 50.0;   // must match t2_game_tick.py ORBIT_RADIUS
-const WORLD_LIMIT    = ORBIT_RADIUS + TAG_RADIUS + 10.0;  // 80u total safe view
+const WORLD_LIMIT    = 80.0;   // fallback half-extent when no map is loaded
 const TILE_SCALE     = 8;      // world units per tile — must match MAP_TILE_SCALE
 const PLAYER_COLLISION_RADIUS = 2.5;
 const FLAG_TAGGED    = 0x02;
