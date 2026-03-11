@@ -28,8 +28,12 @@ AWS_REGION   = "eu-west-2"
 REPO_ROOT    = Path(__file__).resolve().parents[3]
 MAPS_DIR     = REPO_ROOT / "pynq_full" / "ec2" / "maps"   # shared map files
 MONITOR_DIR  = Path(__file__).resolve().parent
-LOGO_ASSET_NAMES = ("PNG_LOGO.png", "BNW_LOGO.png")
-LOGO_ASSET_PATHS = {name: REPO_ROOT / name for name in LOGO_ASSET_NAMES}
+LOGO_ASSET_PATHS = {
+    "PNG_LOGO.png": REPO_ROOT / "PNG_LOGO.png",
+    "BNW_LOGO.png": REPO_ROOT / "BNW_LOGO.png",
+    "assets/pynqcast-white.png": REPO_ROOT / "BNW_LOGO.png",
+}
+LOGO_ASSET_NAMES = tuple(LOGO_ASSET_PATHS.keys())
 MONITOR_UI_ASSET_NAME = "monitor-ui.js"
 MONITOR_UI_ASSET_PATH = REPO_ROOT / "monitor_ui" / "dist" / MONITOR_UI_ASSET_NAME
 MONITOR_ASSETS = {
