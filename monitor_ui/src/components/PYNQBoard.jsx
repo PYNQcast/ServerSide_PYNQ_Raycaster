@@ -48,18 +48,17 @@ function BoardStage({ hostSlot }) {
     renderer.domElement.style.imageRendering = 'pixelated';
     renderer.setClearColor(0x000000, 0);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.7;
+    renderer.toneMappingExposure = 1.2;
     renderer.setPixelRatio(1);
-    if ('outputColorSpace' in renderer) renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
     mount.appendChild(renderer.domElement);
 
-    // ── Environment map for metallic reflections ──
+    // ── Environment map ──
     const pmrem = new THREE.PMREMGenerator(renderer);
     pmrem.compileEquirectangularShader();
     const envMap = pmrem.fromScene(new RoomEnvironment()).texture;
     pmrem.dispose();
 
-    // ── Scene ──
     const scene = new THREE.Scene();
     scene.environment = envMap;
 
@@ -67,13 +66,13 @@ function BoardStage({ hostSlot }) {
     camera.position.set(0, 0.2, 6.2);
     camera.lookAt(0, 0, 0);
 
-    // ── Lights ──
-    scene.add(new THREE.AmbientLight(0x330000, 2.5));
+    // ── Lights — scaled for Three.js r183 physical units ──
+    scene.add(new THREE.AmbientLight(0x330000, 8));
 
-    const redKey  = new THREE.PointLight(0xbb1500, 70, 16);
-    const glint1  = new THREE.PointLight(0xffffff, 55,  7);
-    const glint2  = new THREE.PointLight(0xffeedd, 40,  6);
-    const rimLight = new THREE.PointLight(0x1133aa, 18, 10);
+    const redKey   = new THREE.PointLight(0xbb1500, 600, 16);
+    const glint1   = new THREE.PointLight(0xffffff, 400,  7);
+    const glint2   = new THREE.PointLight(0xffeedd, 300,  6);
+    const rimLight = new THREE.PointLight(0x1133aa, 150, 10);
 
     redKey.position.set(2.5, 1.8, 3);
     glint1.position.set(1, 1.5, 2.5);
@@ -164,7 +163,7 @@ function BoardStage({ hostSlot }) {
       tex.magFilter = THREE.NearestFilter;
       tex.minFilter = THREE.NearestFilter;
       tex.generateMipmaps = false;
-      if ('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace;
+      tex.colorSpace = THREE.SRGBColorSpace;
       tex.needsUpdate = true;
     });
 
@@ -179,12 +178,12 @@ function BoardStage({ hostSlot }) {
       alphaTest: 0.08,
     });
 
-    // Front face logo
+    // Front logo
     const logoPlane = new THREE.Mesh(new THREE.PlaneGeometry(2.28, 1.28), logoMaterial);
     logoPlane.position.set(0.02, 0.1, 0.106);
     board.add(logoPlane);
 
-    // Back face logo — flipped to face outward
+    // Back logo — flipped outward
     const logoPlaneBack = new THREE.Mesh(new THREE.PlaneGeometry(2.28, 1.28), logoMaterial);
     logoPlaneBack.position.set(0.02, 0.1, -0.106);
     logoPlaneBack.rotation.y = Math.PI;
