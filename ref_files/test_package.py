@@ -1,39 +1,26 @@
-import argparse
-import importlib.util
 import random
 import socket
 import struct
 import time
-from pathlib import Path
+
+import protocol
 
 
-def _load_protocol():
-    local_candidate = Path(__file__).resolve().with_name("protocol.py")
-    if local_candidate.exists():
-        spec = importlib.util.spec_from_file_location("pynq_protocol", local_candidate)
-        module = importlib.util.module_from_spec(spec)
-        assert spec.loader is not None
-        spec.loader.exec_module(module)
-        return module
-
-    for parent in Path(__file__).resolve().parents:
-        candidate = parent / "pynq_full" / "interfacing" / "protocol.py"
-        if candidate.exists():
-            spec = importlib.util.spec_from_file_location("pynq_protocol", candidate)
-            module = importlib.util.module_from_spec(spec)
-            assert spec.loader is not None
-            spec.loader.exec_module(module)
-            return module
-    raise RuntimeError("Could not locate protocol.py next to test_package.py or under pynq_full/interfacing/")
-
-
-protocol = _load_protocol()
-
-ROLE_LOOKUP = {
-    "any": protocol.ROLE_ANY,
-    "runner": protocol.ROLE_RUNNER,
-    "tagger": protocol.ROLE_TAGGER,
-}
+# Keep protocol.py beside this file on the board.
+#
+# Edit these constants directly for quick Jupyter-side testing.
+SERVER_IP = "3.9.71.204"
+SERVER_PORT = 9000
+USERNAME = ""
+PREFERRED_ROLE = protocol.ROLE_ANY  # or protocol.ROLE_RUNNER / protocol.ROLE_TAGGER
+TICK_RATE = 20
+TICK_INTERVAL = 1.0 / TICK_RATE
+REGISTER_TIMEOUT_S = 5.0
+MOVEMENT_MODE = protocol.MOVEMENT_MODE_INTENT_WITH_PREDICTION
+STATE_MODE = "static"  # "static" or "random"
+STATE_X = 0.0
+STATE_Y = 0.0
+STATE_ANGLE = 0.0
 
 
 def _describe_packet(data: bytes):
@@ -43,7 +30,7 @@ def _describe_packet(data: bytes):
     return f"type=0x{pkt_type:04x} seq={seq} ts={timestamp} len={len(data)}"
 
 
-def _handle_packet(data: bytes, *, registered_state: dict):
+def _handle_packet(data: bytes, state: dict):
     if len(data) < protocol.HEADER_SIZE:
         print(f"[SHORT] {len(data)} bytes")
         return
@@ -56,8 +43,8 @@ def _handle_packet(data: bytes, *, registered_state: dict):
             return
         player_id = struct.unpack_from("<B", data, protocol.HEADER_SIZE)[0]
         role = "RUNNER" if player_id == 1 else "TAGGER" if player_id == 2 else "UNKNOWN"
-        registered_state["registered"] = True
-        registered_state["player_id"] = player_id
+        state["registered"] = True
+        state["player_id"] = player_id
         print(f"[ACK] player_id={player_id} role={role} header_seq={seq} ts={timestamp}")
         return
 
@@ -91,88 +78,63 @@ def _handle_packet(data: bytes, *, registered_state: dict):
     print(f"[OTHER] {_describe_packet(data)} hex={data[:32].hex()}")
 
 
-def _next_pose(args):
-    if args.state_mode == "random":
+def _next_pose():
+    if STATE_MODE == "random":
         return (
             random.uniform(-10.0, 10.0),
             random.uniform(-10.0, 10.0),
             random.uniform(0.0, 6.28),
         )
-    return args.x, args.y, args.angle
+    return STATE_X, STATE_Y, STATE_ANGLE
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Simple UDP smoke client for the current PYNQ protocol"
-    )
-    parser.add_argument("--server", default="3.9.71.204")
-    parser.add_argument("--port", type=int, default=9000)
-    parser.add_argument("--tick-rate", type=int, default=20)
-    parser.add_argument("--register-timeout", type=float, default=5.0)
-    parser.add_argument("--username", default="",
-                        help="Optional display name stored in player history")
-    parser.add_argument("--role", choices=sorted(ROLE_LOOKUP), default="any",
-                        help="Preferred role sent in PKT_REGISTER")
-    parser.add_argument("--x", type=float, default=0.0)
-    parser.add_argument("--y", type=float, default=0.0)
-    parser.add_argument("--angle", type=float, default=0.0)
-    parser.add_argument("--state-mode", choices=["static", "random"], default="static",
-                        help="Static re-sends the same pose; random jitters for protocol smoke tests")
-    parser.add_argument("--movement-mode", type=int,
-                        default=protocol.MOVEMENT_MODE_INTENT_WITH_PREDICTION)
-    args = parser.parse_args()
-
-    tick_interval = 1.0 / args.tick_rate
-    server_address = (args.server, args.port)
-    state = {"registered": False, "player_id": None}
-    preferred_role = ROLE_LOOKUP[args.role]
-
-    print(f"Setting up UDP socket to {args.server}:{args.port} ...")
+    print(f"Setting up UDP socket to EC2 ({SERVER_IP}:{SERVER_PORT})...")
     print(
         f"Protocol check: HEADER_SIZE={protocol.HEADER_SIZE}, "
         f"PLAYER_SIZE={protocol.PLAYER_SIZE}, NODE_SIZE={protocol.NODE_SIZE}"
     )
     print(
-        f"Client config: username={args.username or '<none>'} "
-        f"role={args.role} state_mode={args.state_mode} "
-        f"pose=({args.x:.2f}, {args.y:.2f}, {args.angle:.2f})"
+        f"Client config: username={USERNAME or '<none>'} "
+        f"state_mode={STATE_MODE} pose=({STATE_X:.2f}, {STATE_Y:.2f}, {STATE_ANGLE:.2f})"
     )
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    server_address = (SERVER_IP, SERVER_PORT)
+    state = {"registered": False, "player_id": None}
 
     try:
         seq_num = 0
         reg_packet = protocol.pack_register_packet(
             seq=seq_num,
-            x=args.x,
-            y=args.y,
-            angle=args.angle,
-            preferred_role=preferred_role,
-            username=args.username,
-            movement_mode=args.movement_mode,
+            x=STATE_X,
+            y=STATE_Y,
+            angle=STATE_ANGLE,
+            preferred_role=PREFERRED_ROLE,
+            username=USERNAME,
+            movement_mode=MOVEMENT_MODE,
         )
 
-        print("Sending PKT_REGISTER ...")
+        print("Sending PKT_REGISTER...")
         sock.sendto(reg_packet, server_address)
         seq_num = (seq_num + 1) & 0xFFFF
 
-        sock.settimeout(args.register_timeout)
+        sock.settimeout(REGISTER_TIMEOUT_S)
         while not state["registered"]:
             try:
                 data, addr = sock.recvfrom(2048)
                 print(f"[RX] from {addr} {_describe_packet(data)}")
-                _handle_packet(data, registered_state=state)
+                _handle_packet(data, state)
             except socket.timeout:
-                print("No ACK yet, retrying registration ...")
+                print("No response, retrying registration...")
                 sock.sendto(reg_packet, server_address)
 
-        sock.settimeout(tick_interval)
-        print(f"Starting {args.tick_rate}Hz update loop")
+        sock.settimeout(TICK_INTERVAL)
+        print(f"Starting {TICK_RATE}Hz loop\n")
 
-        packet_index = 0
         while True:
             loop_start = time.time()
-            state_x, state_y, state_angle = _next_pose(args)
+            state_x, state_y, state_angle = _next_pose()
 
             packet = protocol.pack_node_packet(
                 pkt_type=protocol.PKT_STATE_UPDATE,
@@ -181,17 +143,16 @@ def main():
                 y=state_y,
                 angle=state_angle,
                 flags=0,
-                movement_mode=args.movement_mode,
+                movement_mode=MOVEMENT_MODE,
             )
             sock.sendto(packet, server_address)
             seq_num = (seq_num + 1) & 0xFFFF
-            packet_index += 1
 
             while True:
                 try:
                     data, addr = sock.recvfrom(4096)
                     print(f"[RX] from {addr} {_describe_packet(data)}")
-                    _handle_packet(data, registered_state=state)
+                    _handle_packet(data, state)
                 except socket.timeout:
                     break
                 except Exception as exc:
@@ -199,7 +160,7 @@ def main():
                     break
 
             elapsed = time.time() - loop_start
-            sleep_time = tick_interval - elapsed
+            sleep_time = TICK_INTERVAL - elapsed
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
