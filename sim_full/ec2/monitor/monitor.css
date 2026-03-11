@@ -1422,8 +1422,8 @@
     min-height: 0;
     display: grid;
     grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.8fr);
-    gap: 24px;
-    padding: 20px 10px 24px;
+    gap: 12px;
+    padding: 10px 8px 18px;
     overflow: hidden;
     background:
       radial-gradient(circle at 24% 20%, rgba(0, 212, 255, 0.08), transparent 20%),
@@ -1437,8 +1437,8 @@
     min-height: clamp(520px, 70vh, 860px);
     display: flex;
     align-items: flex-end;
-    justify-content: center;
-    padding: 36px 32px 84px;
+    justify-content: flex-end;
+    padding: 18px 12px 66px 28px;
     isolation: isolate;
     background:
       radial-gradient(circle at 50% 22%, rgba(0, 212, 255, 0.1), transparent 20%),
@@ -1448,7 +1448,7 @@
   .about-stage::before {
     content: '';
     position: absolute;
-    inset: auto 5% 36px;
+    inset: auto 4% 52px 18%;
     height: 3px;
     background: linear-gradient(90deg, transparent, rgba(90, 159, 212, 0.32), transparent);
     box-shadow: 0 0 22px rgba(0, 212, 255, 0.1);
@@ -1468,10 +1468,10 @@
 
   .about-light-cone {
     position: absolute;
-    left: 50%;
-    bottom: 96px;
-    width: min(280px, 40%);
-    height: 320px;
+    left: 59%;
+    bottom: 112px;
+    width: min(340px, 46%);
+    height: 344px;
     transform: translateX(-50%);
     background: radial-gradient(ellipse at bottom, rgba(240, 90, 80, 0.24) 0%, rgba(240, 90, 80, 0.14) 24%, rgba(240, 90, 80, 0.06) 50%, transparent 74%);
     filter: blur(12px);
@@ -1499,11 +1499,12 @@
     align-items: center;
     transform-origin: center bottom;
     will-change: transform;
+    transform: translate(22px, -26px);
   }
 
   .about-sprite-wrap.board-ready {
     animation: none;
-    transform: none;
+    transform: translate(22px, -26px);
   }
 
   .about-react-board-slot {
@@ -1523,7 +1524,7 @@
   }
 
   .about-sprite-wrap.three-ready {
-    transform: none;
+    transform: translate(22px, -26px);
   }
 
   .about-sprite-wrap.three-ready .about-logo-sprite {
@@ -1581,7 +1582,7 @@
     flex-direction: column;
     justify-content: center;
     gap: 18px;
-    padding: 24px 18px 24px 0;
+    padding: 8px 12px 16px 0;
   }
 
   .about-title-row {
@@ -1796,10 +1797,28 @@
     .about-stage {
       min-height: 420px;
       padding: 28px 20px 80px;
+      justify-content: center;
+    }
+
+    .about-stage::before {
+      inset: auto 6% 40px;
+    }
+
+    .about-light-cone {
+      left: 50%;
+      bottom: 100px;
+      width: min(300px, 54%);
+      height: 300px;
     }
 
     .about-copy-column {
       padding: 0 8px 12px;
+    }
+
+    .about-sprite-wrap,
+    .about-sprite-wrap.board-ready,
+    .about-sprite-wrap.three-ready {
+      transform: translate(0, -12px);
     }
 
     .about-logo-sprite {
