@@ -37,8 +37,8 @@ function BoardStage({ hostSlot }) {
 
     wrap.classList.add('board-ready');
 
-    const W = Math.max(320, Math.round(mount.clientWidth || 480));
-    const H = Math.max(280, Math.round(mount.clientHeight || 280));
+    const W = Math.max(420, Math.round(mount.clientWidth || 620));
+    const H = Math.max(360, Math.round(mount.clientHeight || 360));
 
     // ── Renderer ──
     const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true });
@@ -86,15 +86,15 @@ function BoardStage({ hostSlot }) {
 
     // ── Materials ──
     const pcbFaceMaterial = new THREE.MeshStandardMaterial({
-      color: 0x280000,
+      color: 0x450406,
       metalness: 0.85,
       roughness: 0.08,
-      emissive: new THREE.Color('#060000'),
-      emissiveIntensity: 0.3,
+      emissive: new THREE.Color('#120002'),
+      emissiveIntensity: 0.38,
       envMapIntensity: 1.8,
     });
     const pcbEdgeMaterial = new THREE.MeshStandardMaterial({
-      color: 0x180000,
+      color: 0x2a0002,
       metalness: 0.8,
       roughness: 0.15,
       envMapIntensity: 1.2,
@@ -110,6 +110,7 @@ function BoardStage({ hostSlot }) {
 
     // ── Board geometry ──
     const board = new THREE.Group();
+    board.scale.setScalar(1.22);
     scene.add(board);
 
     const boardBase = new THREE.Mesh(new THREE.BoxGeometry(3.55, 2.3, 0.16), pcbEdgeMaterial);
@@ -179,12 +180,12 @@ function BoardStage({ hostSlot }) {
     });
 
     // Front logo
-    const logoPlane = new THREE.Mesh(new THREE.PlaneGeometry(2.28, 1.28), logoMaterial);
+    const logoPlane = new THREE.Mesh(new THREE.PlaneGeometry(2.7, 1.52), logoMaterial);
     logoPlane.position.set(0.02, 0.1, 0.106);
     board.add(logoPlane);
 
     // Back logo — flipped outward
-    const logoPlaneBack = new THREE.Mesh(new THREE.PlaneGeometry(2.28, 1.28), logoMaterial);
+    const logoPlaneBack = new THREE.Mesh(new THREE.PlaneGeometry(3.02, 1.7), logoMaterial);
     logoPlaneBack.position.set(0.02, 0.1, -0.106);
     logoPlaneBack.rotation.y = Math.PI;
     board.add(logoPlaneBack);
@@ -248,15 +249,15 @@ function BoardStage({ hostSlot }) {
   }, [hostSlot]);
 
   return (
-    <div ref={mountRef} style={{ width: '100%', height: 280, position: 'relative' }}>
+    <div ref={mountRef} style={{ width: '100%', height: 360, position: 'relative' }}>
       <div
         ref={shadowRef}
         style={{
           position: 'absolute',
           bottom: 12,
           left: '50%',
-          width: 200,
-          height: 18,
+          width: 240,
+          height: 22,
           background: 'radial-gradient(ellipse at center, rgba(180,20,20,0.6) 0%, transparent 70%)',
           pointerEvents: 'none',
           transformOrigin: 'center center',
