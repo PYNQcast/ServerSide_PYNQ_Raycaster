@@ -140,6 +140,31 @@ def test_pynq_client_decodes_button_gpio_bits():
         }
 
 
+def test_pynq_client_drop_to_registration_clears_live_state():
+    with pynq_import_context():
+        pynq_client = importlib.import_module("pynq_client")
+
+        class DummyHardware:
+            pass
+
+        node = pynq_client.PYNQNode("127.0.0.1", 9000, DummyHardware())
+        node.registered = True
+        node.player_id = 2
+        node.match_ended = True
+        node.server_flags = pynq_client.FLAG_MATCH_END
+        node.remote_entities = [{"entity_id": 3}]
+        node.last_server_packet_at = 123.0
+
+        node._drop_to_registration("test")
+
+        assert node.registered is False
+        assert node.player_id is None
+        assert node.match_ended is False
+        assert node.server_flags == 0
+        assert node.remote_entities == []
+        assert node.last_server_packet_at is None
+
+
 def test_register_packet_round_trips_username_trailer():
     with pynq_import_context():
         protocol = importlib.import_module("protocol")
