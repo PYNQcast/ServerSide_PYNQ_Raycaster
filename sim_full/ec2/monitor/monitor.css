@@ -1425,10 +1425,7 @@
     gap: 12px;
     padding: 10px 8px 18px;
     overflow: hidden;
-    background:
-      radial-gradient(circle at 24% 20%, rgba(0, 212, 255, 0.08), transparent 20%),
-      radial-gradient(circle at 78% 24%, rgba(240, 82, 82, 0.08), transparent 22%),
-      linear-gradient(180deg, rgba(9, 17, 31, 0.48), rgba(9, 17, 31, 0.08));
+    background: linear-gradient(180deg, rgba(9, 17, 31, 0.48), rgba(9, 17, 31, 0.08));
   }
 
   .about-stage {
@@ -1440,13 +1437,11 @@
     justify-content: flex-end;
     padding: 18px 12px 66px 28px;
     isolation: isolate;
-    background:
-      radial-gradient(circle at 50% 22%, rgba(0, 212, 255, 0.1), transparent 20%),
-      linear-gradient(180deg, rgba(14, 28, 56, 0.1) 0%, rgba(7, 11, 22, 0.05) 100%);
+    background: linear-gradient(180deg, rgba(14, 28, 56, 0.06) 0%, rgba(7, 11, 22, 0.03) 100%);
   }
 
   .about-stage::before {
-    content: '';
+    content: none;
     position: absolute;
     inset: auto 4% 52px 18%;
     height: 3px;
@@ -1467,17 +1462,7 @@
   }
 
   .about-light-cone {
-    position: absolute;
-    left: 59%;
-    bottom: 112px;
-    width: min(340px, 46%);
-    height: 344px;
-    transform: translateX(-50%);
-    background: radial-gradient(ellipse at bottom, rgba(240, 90, 80, 0.24) 0%, rgba(240, 90, 80, 0.14) 24%, rgba(240, 90, 80, 0.06) 50%, transparent 74%);
-    filter: blur(12px);
-    opacity: 0.62;
-    z-index: 0;
-    will-change: transform, opacity;
+    display: none;
   }
 
   #ground-shadow {
@@ -1798,17 +1783,6 @@
       min-height: 420px;
       padding: 28px 20px 80px;
       justify-content: center;
-    }
-
-    .about-stage::before {
-      inset: auto 6% 40px;
-    }
-
-    .about-light-cone {
-      left: 50%;
-      bottom: 100px;
-      width: min(300px, 54%);
-      height: 300px;
     }
 
     .about-copy-column {
