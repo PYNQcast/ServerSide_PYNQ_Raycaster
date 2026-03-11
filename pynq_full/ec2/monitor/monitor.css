@@ -1507,7 +1507,7 @@
   }
 
   .about-react-board-slot {
-    width: clamp(340px, 42vw, 560px);
+    width: clamp(420px, 50vw, 720px);
     max-width: 100%;
   }
 
