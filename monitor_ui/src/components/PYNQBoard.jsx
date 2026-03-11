@@ -4,6 +4,27 @@ import * as THREE from 'three';
 
 const WHITE_LOGO_TEXTURE = '/assets/pynqcast-white.png';
 
+class RoomEnvironment extends THREE.Scene {
+  constructor() {
+    super();
+    const geo = new THREE.BoxGeometry();
+    geo.deleteAttribute('uv');
+    const room = new THREE.Mesh(geo, [
+      new THREE.MeshStandardMaterial({ color: 0x888888, side: THREE.BackSide }),
+      new THREE.MeshStandardMaterial({ color: 0x888888, side: THREE.BackSide }),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, side: THREE.BackSide }),
+      new THREE.MeshStandardMaterial({ color: 0x444444, side: THREE.BackSide }),
+      new THREE.MeshStandardMaterial({ color: 0x888888, side: THREE.BackSide }),
+      new THREE.MeshStandardMaterial({ color: 0x888888, side: THREE.BackSide }),
+    ]);
+    room.scale.setScalar(10);
+    this.add(room);
+    const l1 = new THREE.PointLight(0xff4400, 2, 20); l1.position.set(5, 5, 5);   this.add(l1);
+    const l2 = new THREE.PointLight(0x0044ff, 1, 20); l2.position.set(-5, 5, -5); this.add(l2);
+    const l3 = new THREE.PointLight(0xffffff, 1, 20); l3.position.set(0, 10, 0);  this.add(l3);
+  }
+}
+
 function BoardStage({ hostSlot }) {
   const mountRef = useRef(null);
   const shadowRef = useRef(null);
@@ -12,15 +33,14 @@ function BoardStage({ hostSlot }) {
     const mount = mountRef.current;
     const shadow = shadowRef.current;
     const wrap = hostSlot?.closest('.about-sprite-wrap');
-    if (!mount || !shadow || !wrap) {
-      return () => {};
-    }
+    if (!mount || !shadow || !wrap) return () => {};
 
     wrap.classList.add('board-ready');
 
     const W = Math.max(320, Math.round(mount.clientWidth || 480));
     const H = Math.max(280, Math.round(mount.clientHeight || 280));
 
+    // ── Renderer ──
     const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true });
     renderer.setSize(Math.floor(W / 4), Math.floor(H / 4));
     renderer.domElement.style.width = `${W}px`;
@@ -30,130 +50,121 @@ function BoardStage({ hostSlot }) {
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 0.7;
     renderer.setPixelRatio(1);
-    if ('outputColorSpace' in renderer) {
-      renderer.outputColorSpace = THREE.SRGBColorSpace;
-    }
+    if ('outputColorSpace' in renderer) renderer.outputColorSpace = THREE.SRGBColorSpace;
     mount.appendChild(renderer.domElement);
 
+    // ── Environment map for metallic reflections ──
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    pmrem.compileEquirectangularShader();
+    const envMap = pmrem.fromScene(new RoomEnvironment()).texture;
+    pmrem.dispose();
+
+    // ── Scene ──
     const scene = new THREE.Scene();
+    scene.environment = envMap;
+
     const camera = new THREE.PerspectiveCamera(38, W / H, 0.1, 100);
     camera.position.set(0, 0.2, 6.2);
+    camera.lookAt(0, 0, 0);
 
+    // ── Lights ──
     scene.add(new THREE.AmbientLight(0x330000, 2.5));
 
-    const redKey = new THREE.PointLight(0xdd2200, 80, 16);
-    const glint1 = new THREE.PointLight(0xffffff, 55, 7);
-    const glint2 = new THREE.PointLight(0xffeedd, 40, 6);
+    const redKey  = new THREE.PointLight(0xbb1500, 70, 16);
+    const glint1  = new THREE.PointLight(0xffffff, 55,  7);
+    const glint2  = new THREE.PointLight(0xffeedd, 40,  6);
     const rimLight = new THREE.PointLight(0x1133aa, 18, 10);
 
-    rimLight.position.set(-2.4, 1.6, -2.8);
     redKey.position.set(2.5, 1.8, 3);
     glint1.position.set(1, 1.5, 2.5);
     glint2.position.set(-1.6, 1.1, 2.0);
+    rimLight.position.set(-2.4, 1.6, -2.8);
 
     scene.add(redKey);
     scene.add(glint1);
     scene.add(glint2);
     scene.add(rimLight);
 
-    const board = new THREE.Group();
-    scene.add(board);
-
+    // ── Materials ──
     const pcbFaceMaterial = new THREE.MeshStandardMaterial({
-      color: 0x3a0000,
+      color: 0x280000,
       metalness: 0.85,
-      roughness: 0.12,
-      emissive: new THREE.Color('#0a0000'),
-      emissiveIntensity: 0.4,
+      roughness: 0.08,
+      emissive: new THREE.Color('#060000'),
+      emissiveIntensity: 0.3,
+      envMapIntensity: 1.8,
     });
-
     const pcbEdgeMaterial = new THREE.MeshStandardMaterial({
-      color: 0x250000,
+      color: 0x180000,
       metalness: 0.8,
-      roughness: 0.2,
+      roughness: 0.15,
+      envMapIntensity: 1.2,
     });
-
     const goldMaterial = new THREE.MeshStandardMaterial({
       color: 0xFFB800,
       metalness: 1.0,
       roughness: 0.04,
       emissive: new THREE.Color('#221100'),
       emissiveIntensity: 0.15,
+      envMapIntensity: 2.5,
     });
 
-    const boardBase = new THREE.Mesh(
-      new THREE.BoxGeometry(3.55, 2.3, 0.16),
-      pcbEdgeMaterial,
-    );
+    // ── Board geometry ──
+    const board = new THREE.Group();
+    scene.add(board);
+
+    const boardBase = new THREE.Mesh(new THREE.BoxGeometry(3.55, 2.3, 0.16), pcbEdgeMaterial);
     board.add(boardBase);
 
-    const boardCore = new THREE.Mesh(
-      new THREE.BoxGeometry(3.35, 2.1, 0.11),
-      pcbFaceMaterial,
-    );
+    const boardCore = new THREE.Mesh(new THREE.BoxGeometry(3.35, 2.1, 0.11), pcbFaceMaterial);
     boardCore.position.z = 0.03;
     board.add(boardCore);
 
-    const boardBack = new THREE.Mesh(
-      new THREE.BoxGeometry(3.35, 2.1, 0.11),
-      pcbFaceMaterial,
-    );
+    const boardBack = new THREE.Mesh(new THREE.BoxGeometry(3.35, 2.1, 0.11), pcbFaceMaterial);
     boardBack.position.z = -0.03;
     board.add(boardBack);
 
+    // ── Traces ──
     const addTrace = (x, y, width, height, depth = 0.012) => {
-      const trace = new THREE.Mesh(
-        new THREE.BoxGeometry(width, height, depth),
-        goldMaterial,
-      );
+      const trace = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), goldMaterial);
       trace.position.set(x, y, 0.09);
       board.add(trace);
     };
-
-    addTrace(-0.92, 0.62, 1.12, 0.08);
-    addTrace(0.38, 0.62, 1.32, 0.08);
-    addTrace(-1.08, 0.16, 0.18, 0.86);
-    addTrace(1.16, 0.12, 0.18, 0.92);
-    addTrace(-0.24, -0.3, 2.12, 0.08);
-    addTrace(0.0, -0.72, 1.52, 0.08);
+    addTrace(-0.92,  0.62, 1.12, 0.08);
+    addTrace( 0.38,  0.62, 1.32, 0.08);
+    addTrace(-1.08,  0.16, 0.18, 0.86);
+    addTrace( 1.16,  0.12, 0.18, 0.92);
+    addTrace(-0.24, -0.30, 2.12, 0.08);
+    addTrace( 0.00, -0.72, 1.52, 0.08);
     addTrace(-0.78, -0.95, 0.18, 0.54);
-    addTrace(0.84, -0.9, 0.18, 0.42);
+    addTrace( 0.84, -0.90, 0.18, 0.42);
 
-    const chip = new THREE.Mesh(
-      new THREE.BoxGeometry(1.22, 0.92, 0.16),
-      pcbEdgeMaterial,
-    );
+    // ── Main chip ──
+    const chip = new THREE.Mesh(new THREE.BoxGeometry(1.22, 0.92, 0.16), pcbEdgeMaterial);
     chip.position.set(0.08, 0.04, 0.13);
     board.add(chip);
 
-    const chipInset = new THREE.Mesh(
-      new THREE.BoxGeometry(1.08, 0.78, 0.04),
-      pcbFaceMaterial,
-    );
+    const chipInset = new THREE.Mesh(new THREE.BoxGeometry(1.08, 0.78, 0.04), pcbFaceMaterial);
     chipInset.position.set(0.08, 0.04, 0.21);
     board.add(chipInset);
 
-    for (let index = 0; index < 10; index += 1) {
-      const pin = new THREE.Mesh(
-        new THREE.BoxGeometry(0.12, 0.08, 0.06),
-        goldMaterial,
-      );
-      pin.position.set(-1.54 + index * 0.34, 1.23, 0.04);
+    // ── Edge pins ──
+    for (let i = 0; i < 10; i++) {
+      const pin = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.06), goldMaterial);
+      pin.position.set(-1.54 + i * 0.34, 1.23, 0.04);
       board.add(pin);
-
-      const oppositePin = pin.clone();
-      oppositePin.position.y = -1.23;
-      board.add(oppositePin);
+      const pinB = pin.clone();
+      pinB.position.y = -1.23;
+      board.add(pinB);
     }
 
+    // ── Logo texture ──
     const loader = new THREE.TextureLoader();
     const tex = loader.load(WHITE_LOGO_TEXTURE, () => {
       tex.magFilter = THREE.NearestFilter;
       tex.minFilter = THREE.NearestFilter;
       tex.generateMipmaps = false;
-      if ('colorSpace' in tex) {
-        tex.colorSpace = THREE.SRGBColorSpace;
-      }
+      if ('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace;
       tex.needsUpdate = true;
     });
 
@@ -168,29 +179,31 @@ function BoardStage({ hostSlot }) {
       alphaTest: 0.08,
     });
 
-    const logoPlane = new THREE.Mesh(
-      new THREE.PlaneGeometry(2.28, 1.28),
-      logoMaterial,
-    );
+    // Front face logo
+    const logoPlane = new THREE.Mesh(new THREE.PlaneGeometry(2.28, 1.28), logoMaterial);
     logoPlane.position.set(0.02, 0.1, 0.106);
     board.add(logoPlane);
 
+    // Back face logo — flipped to face outward
+    const logoPlaneBack = new THREE.Mesh(new THREE.PlaneGeometry(2.28, 1.28), logoMaterial);
+    logoPlaneBack.position.set(0.02, 0.1, -0.106);
+    logoPlaneBack.rotation.y = Math.PI;
+    board.add(logoPlaneBack);
+
+    // ── Cleanup arrays ──
     const materials = [pcbFaceMaterial, pcbEdgeMaterial, goldMaterial, logoMaterial];
     const geometries = [
-      boardBase.geometry,
-      boardCore.geometry,
-      boardBack.geometry,
-      chip.geometry,
-      chipInset.geometry,
-      logoPlane.geometry,
+      boardBase.geometry, boardCore.geometry, boardBack.geometry,
+      chip.geometry, chipInset.geometry,
+      logoPlane.geometry, logoPlaneBack.geometry,
     ];
-
     board.children.forEach((child) => {
-      if (child !== boardBase && child !== boardCore && child !== boardBack && child !== chip && child !== chipInset && child !== logoPlane) {
+      if (![boardBase, boardCore, boardBack, chip, chipInset, logoPlane, logoPlaneBack].includes(child)) {
         geometries.push(child.geometry);
       }
     });
 
+    // ── Animation ──
     let rafId = 0;
     const clock = new THREE.Clock();
 
@@ -205,7 +218,6 @@ function BoardStage({ hostSlot }) {
 
       redKey.position.x = Math.cos(t * 0.6) * 4;
       redKey.position.z = Math.sin(t * 0.6) * 4 + 2;
-
       glint1.position.x = Math.cos(t * 2.2) * 2.5;
       glint1.position.y = Math.sin(t * 1.6) * 2.0;
       glint1.position.z = 2.5;
@@ -220,27 +232,24 @@ function BoardStage({ hostSlot }) {
       renderer.render(scene, camera);
       rafId = requestAnimationFrame(render);
     };
-
     render();
 
     return () => {
       wrap.classList.remove('board-ready');
       cancelAnimationFrame(rafId);
       tex.dispose();
-      materials.forEach((material) => material.dispose());
-      geometries.forEach((geometry) => geometry?.dispose());
+      envMap.dispose();
+      materials.forEach((m) => m.dispose());
+      geometries.forEach((g) => g?.dispose());
       renderer.dispose();
-      if (mountRef.current && renderer.domElement.parentNode === mountRef.current) {
-        mountRef.current.removeChild(renderer.domElement);
+      if (mount && renderer.domElement.parentNode === mount) {
+        mount.removeChild(renderer.domElement);
       }
     };
   }, [hostSlot]);
 
   return (
-    <div
-      ref={mountRef}
-      style={{ width: '100%', height: 280, position: 'relative' }}
-    >
+    <div ref={mountRef} style={{ width: '100%', height: 280, position: 'relative' }}>
       <div
         ref={shadowRef}
         style={{
@@ -266,9 +275,7 @@ export default function PYNQBoard({ hostRef }) {
     setPortalTarget(target || null);
   }, [hostRef]);
 
-  if (!portalTarget) {
-    return null;
-  }
+  if (!portalTarget) return null;
 
   return createPortal(<BoardStage hostSlot={portalTarget} />, portalTarget);
 }
