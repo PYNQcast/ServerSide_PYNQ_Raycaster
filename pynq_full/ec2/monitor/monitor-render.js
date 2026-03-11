@@ -201,7 +201,12 @@ function renderLoop() {
   if (now - renderLastTime >= 1000) {
     document.getElementById('fps').textContent = String(wsHz);
     document.getElementById('hud-frame-ms').textContent = `${averageFrameMs().toFixed(1)} ms/frame`;
-    document.getElementById('hud-ws-rate').textContent = `${wsHz} / s`;
+    let latencyText = '— ms';
+    if (latestState?.timestamp) {
+      const stateAge = (now - latestState.timestamp) * 1000;
+      latencyText = `${Math.round(stateAge)} ms`;
+    }
+    document.getElementById('hud-latency').textContent = latencyText;
     renderCount = 0; renderLastTime = now;
   }
   requestAnimationFrame(renderLoop);
