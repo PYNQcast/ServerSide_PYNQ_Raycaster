@@ -473,6 +473,7 @@ def collect_state():
             continue
         players.append({
             "id":              pid,
+            "entity_key":      f"player:{pid}",
             "x":               float(raw.get("x", 0)),
             "y":               float(raw.get("y", 0)),
             "angle":           float(raw.get("angle", 0)),
@@ -483,6 +484,8 @@ def collect_state():
             "controller_key":  raw.get("controller_key", ""),
             "identity_source": raw.get("identity_source", ""),
             "is_ghost":        bool(_as_int(raw.get("is_ghost", 0), 0)),
+            "queued":          False,
+            "queue_slot":      None,
         })
 
     game_raw  = redis_rows[9]
@@ -499,6 +502,36 @@ def collect_state():
             paused_player_ids = json.loads(game_raw["paused_player_ids"])
         except Exception:
             paused_player_ids = []
+    queued_players = []
+    if game_raw and game_raw.get("queued_players"):
+        try:
+            queued_players = json.loads(game_raw["queued_players"])
+        except Exception:
+            queued_players = []
+    for index, raw in enumerate(queued_players, start=1):
+        queue_slot = _as_int(raw.get("queue_slot", index), index)
+        entity_key = (
+            raw.get("controller_key")
+            or raw.get("profile_key")
+            or raw.get("display_name")
+            or f"queued:{queue_slot}"
+        )
+        players.append({
+            "id":              0,
+            "entity_key":      f"queued:{entity_key}",
+            "x":               _as_float(raw.get("x"), 0.0),
+            "y":               _as_float(raw.get("y"), 0.0),
+            "angle":           _as_float(raw.get("angle"), 0.0),
+            "flags":           _as_int(raw.get("flags", 0), 0),
+            "username":        raw.get("username", ""),
+            "display_name":    raw.get("display_name", ""),
+            "profile_key":     raw.get("profile_key", ""),
+            "controller_key":  raw.get("controller_key", ""),
+            "identity_source": raw.get("identity_source", ""),
+            "is_ghost":        False,
+            "queued":          True,
+            "queue_slot":      queue_slot,
+        })
 
     events_raw = redis_rows[10]
     parsed     = [json.loads(e) for e in events_raw if e]
