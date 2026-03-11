@@ -222,7 +222,56 @@ def test_packet_handler_registers_username_and_profile_metadata():
         assert player["display_name"] == "kat"
         assert player["profile_key"] == "kat"
         assert player["controller_key"] == "controller-192-168-2-10"
-        assert state.pending_roles[addr] == protocol.ROLE_TAGGER
+        assert player["player_id"] == 1
+        assert state.match_started is True
+
+
+def test_pynq_packet_handler_starts_single_player_session():
+    with pynq_import_context():
+        import asyncio
+
+        protocol = importlib.import_module("protocol")
+        packet_handler_mod = importlib.import_module("t2_packet_handler")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+
+        state = match_state_mod.MatchState()
+        match_started = []
+        handler = packet_handler_mod.PacketHandler(
+            state=state,
+            packet_queue=asyncio.Queue(),
+            write_queue=[],
+            udp_transport=None,
+            map_state={
+                "width": 32,
+                "height": 32,
+                "tile_scale": 8,
+                "tiles": bytearray(32 * 32),
+                "bits": [],
+                "spawn_positions": [(0.0, 0.0), (8.0, 0.0), (16.0, 0.0)],
+            },
+            on_match_start=lambda: match_started.append(True),
+            on_match_abort=lambda event=None: None,
+            on_match_pause=lambda event=None: None,
+            on_match_resume=lambda event=None: None,
+            on_event=lambda event=None: None,
+        )
+
+        addr = ("192.168.2.10", 40000)
+        packet = protocol.pack_register_packet(
+            seq=1,
+            x=0.0,
+            y=0.0,
+            angle=0.0,
+            preferred_role=protocol.ROLE_TAGGER,
+            username="solo",
+            movement_mode=protocol.MOVEMENT_MODE_POSE,
+        )
+        handler._process_packet({"data": packet, "addr": addr})
+
+        assert state.match_started is True
+        assert match_started == [True]
+        assert state.players[addr]["player_id"] == 1
+        assert not any(str(player_addr).startswith("ghost:") for player_addr in state.players)
 
 
 def test_pynq_packet_handler_double_runner_stays_two_human_only():
@@ -275,10 +324,71 @@ def test_pynq_packet_handler_double_runner_stays_two_human_only():
         assert not any(str(addr).startswith("ghost:") for addr in state.players)
 
 
-def test_pynq_packet_handler_ignores_monitor_ghost_requests():
+def test_pynq_packet_handler_allows_late_second_human_join_after_solo_start():
     with pynq_import_context():
         import asyncio
 
+        protocol = importlib.import_module("protocol")
+        packet_handler_mod = importlib.import_module("t2_packet_handler")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+
+        state = match_state_mod.MatchState()
+        handler = packet_handler_mod.PacketHandler(
+            state=state,
+            packet_queue=asyncio.Queue(),
+            write_queue=[],
+            udp_transport=None,
+            map_state={
+                "width": 32,
+                "height": 32,
+                "tile_scale": 8,
+                "tiles": bytearray(32 * 32),
+                "bits": [],
+                "spawn_positions": [(0.0, 0.0), (8.0, 0.0), (16.0, 0.0)],
+            },
+            on_match_start=lambda: None,
+            on_match_abort=lambda event=None: None,
+            on_match_pause=lambda event=None: None,
+            on_match_resume=lambda event=None: None,
+            on_event=lambda event=None: None,
+        )
+
+        solo_addr = ("192.168.2.10", 40000)
+        late_addr = ("192.168.2.11", 40001)
+        solo_packet = protocol.pack_register_packet(
+            seq=1,
+            x=0.0,
+            y=0.0,
+            angle=0.0,
+            preferred_role=protocol.ROLE_ANY,
+            username="solo",
+            movement_mode=protocol.MOVEMENT_MODE_POSE,
+        )
+        late_packet = protocol.pack_register_packet(
+            seq=2,
+            x=0.0,
+            y=0.0,
+            angle=0.0,
+            preferred_role=protocol.ROLE_ANY,
+            username="late",
+            movement_mode=protocol.MOVEMENT_MODE_POSE,
+        )
+
+        handler._process_packet({"data": solo_packet, "addr": solo_addr})
+        handler._process_packet({"data": late_packet, "addr": late_addr})
+
+        assert state.match_started is True
+        assert solo_addr in state.players
+        assert late_addr in state.players
+        assert state.players[solo_addr]["player_id"] == 1
+        assert state.players[late_addr]["player_id"] == 2
+
+
+def test_pynq_packet_handler_monitor_ghost_requests_do_not_start_match():
+    with pynq_import_context():
+        import asyncio
+
+        protocol = importlib.import_module("protocol")
         packet_handler_mod = importlib.import_module("t2_packet_handler")
         match_state_mod = importlib.import_module("game_logic.match_state")
 
@@ -311,25 +421,12 @@ def test_pynq_packet_handler_ignores_monitor_ghost_requests():
             on_event=lambda event=None: None,
         )
 
-        state.players["ghost:1"] = {
-            "player_id": 3,
-            "x": 0.0,
-            "y": 0.0,
-            "angle": 0.0,
-            "flags": 0,
-            "last_seen": 0.0,
-            "last_seq": None,
-            "movement_mode": 0,
-            "protocol_version": 0,
-            "timed_out": False,
-            "username": "",
-            "display_name": "ghost-3",
-            "profile_key": "",
-            "controller_key": "",
-            "identity_source": "ghost",
-        }
+        handler.set_ghost_count(1)
 
-        handler.set_ghost_count(2)
-
-        assert not any(str(addr).startswith("ghost:") for addr in state.players)
-        assert write_queue.items == [{"op": "del", "key": "player:3"}]
+        ghost_keys = [addr for addr in state.players if str(addr).startswith("ghost:")]
+        assert len(ghost_keys) == 1
+        assert state.match_started is False
+        ghost = state.players[ghost_keys[0]]
+        assert ghost["flags"] & protocol.FLAG_GHOST
+        assert ghost["player_id"] >= 3
+        assert write_queue.items == []
