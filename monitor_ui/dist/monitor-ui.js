@@ -4102,9 +4102,9 @@ void main() {
         </div>
 
         <div class="panel-raised hud-card">
-          <div class="hud-label">Socket Feed</div>
-          <div id="hud-ws-rate" class="hud-value">0 / s</div>
-          <div class="hud-sub">browser update stream</div>
+          <div class="hud-label">Est. Latency</div>
+          <div id="hud-latency" class="hud-value">\u2014 ms</div>
+          <div class="hud-sub">server state age</div>
         </div>
 
         <div class="panel-terminal hud-events-card">
@@ -4575,9 +4575,9 @@ void main() {
         </div>
 
         <div class="panel-raised hud-card">
-          <div class="hud-label">Socket Feed</div>
-          <div id="hud-ws-rate" class="hud-value">0 / s</div>
-          <div class="hud-sub">browser update stream</div>
+          <div class="hud-label">Est. Latency</div>
+          <div id="hud-latency" class="hud-value">\u2014 ms</div>
+          <div class="hud-sub">server state age</div>
         </div>
 
         <div class="panel-terminal hud-events-card">
