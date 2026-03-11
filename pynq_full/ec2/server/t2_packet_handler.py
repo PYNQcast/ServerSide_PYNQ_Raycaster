@@ -19,7 +19,7 @@ from protocol import (
     NODE_SIZE, PKT_REGISTER, PKT_ACK, HEADER_FMT,
     CLIENT_INPUT_FLAGS, SERVER_STATE_FLAGS, MOVEMENT_MODE_INTENT_ONLY,
     ROLE_ANY, ROLE_RUNNER, ROLE_TAGGER,
-    GAME_MODE_CHASE, GAME_MODE_CHASE_BITS,
+    GAME_MODE_CHASE, GAME_MODE_CHASE_BITS, FLAG_GHOST,
     # functions
     decode_movement_mode, unpack_node_packet, unpack_register_packet,
     pack_map_packet, pack_bits_init_packet,
@@ -29,7 +29,9 @@ from t2_constants import (
     MATCH_PLAYERS,
     NODE_TIMEOUT_S,
     PAUSE_ABORT_S,
+    MAX_GHOSTS,
     PLAYER_COLLISION_RADIUS,
+    SPAWN_ANGLES,
 )
 from game_logic.match_state import MatchState
 from t2_map_loader import resolve_walkable_world
@@ -165,13 +167,41 @@ class PacketHandler:
         self._maybe_resume_match()
 
     # ── Player registration ───────────────────────────────────────────────────
-    # Record preferred role, then when both humans are registered assign roles
-    # and start the match. The PYNQ stack is currently two-human only, so
-    # monitor-injected ghosts are disabled here until the FPGA path can render them.
+    # Record preferred role, then assign roles and start the match once at least
+    # one human is present. Ghosts may exist in the match, but they never consume
+    # the reserved human player_id slots 1 and 2.
 
     def _register_player(self, addr, x=0.0, y=0.0, angle=0.0,
                          preferred_role=ROLE_ANY, username=""):
         if self.state.is_in_lockout():
+            return
+        if self.state.match_started:
+            human_count = sum(1 for a in self.state.players if not str(a).startswith("ghost:"))
+            if human_count == 1:
+                identity = build_player_identity(username, addr)
+                spawn_x, spawn_y = (
+                    self.state.spawn_positions[1]
+                    if len(self.state.spawn_positions) > 1 else (x, y)
+                )
+                spawn_angle = SPAWN_ANGLES[1] if len(SPAWN_ANGLES) > 1 else angle
+                self.state.players[addr] = {
+                    "player_id":        2,
+                    "x": spawn_x, "y": spawn_y, "angle": spawn_angle, "flags": 0,
+                    "last_seen":        time.monotonic(),
+                    "last_seq":         None,
+                    "movement_mode":    0,
+                    "protocol_version": 0,
+                    "timed_out":        False,
+                    **identity,
+                }
+                self._send_ack(addr, 2)
+                self._send_map(addr)
+                bits = self.map_state.get("bits", [])
+                if bits:
+                    self._send_bits_init(addr)
+                print(f"[T2] late-joined TAGGER(2) at {addr} into active single-player session")
+                return
+            print(f"[T2] rejected {addr} — match already started")
             return
         # Count only human players (not ghost sentinels) for the cap check
         human_count = sum(1 for a in self.state.players if not str(a).startswith("ghost:"))
@@ -197,11 +227,9 @@ class PacketHandler:
         }
 
         human_count = sum(1 for a in self.state.players if not str(a).startswith("ghost:"))
-        if human_count < MATCH_PLAYERS:
-            print(f"[T2] player queued from {addr} (waiting for {MATCH_PLAYERS - human_count} more)")
-            return
-
-        # Both humans registered — resolve roles now
+        if human_count == 1:
+            print(f"[T2] solo player joined from {addr} — starting single-player session")
+        # One or two humans registered — resolve roles now
         self._assign_roles_and_start()
 
     # Assign player_id 1 (runner) and 2 (tagger) based on declared preferences.
@@ -209,23 +237,26 @@ class PacketHandler:
         addrs = [a for a in self.state.players if not str(a).startswith("ghost:")]
         roles = {a: self.state.pending_roles.get(a, ROLE_ANY) for a in addrs}
 
+        if len(addrs) == 1:
+            runner_addr = addrs[0]
+            tagger_addr = None
         # Determine who gets runner (player_id=1)
-        runners = [a for a, r in roles.items() if r == ROLE_RUNNER]
-        taggers = [a for a, r in roles.items() if r == ROLE_TAGGER]
-
-        if runners and taggers:
-            # Each got what they want
-            runner_addr = runners[0]
-            tagger_addr = taggers[0]
-        elif len(runners) == 2:
-            # PYNQ is still a two-human MVP, so fall back to first-come runner
-            # and second human tagger instead of spawning a ghost.
-            runner_addr = addrs[0]
-            tagger_addr = addrs[1]
         else:
-            # Both want tagger, or both ROLE_ANY → first-come is runner
-            runner_addr = addrs[0]
-            tagger_addr = addrs[1] if len(addrs) > 1 else None
+            runners = [a for a, r in roles.items() if r == ROLE_RUNNER]
+            taggers = [a for a, r in roles.items() if r == ROLE_TAGGER]
+
+            if runners and taggers:
+                # Each got what they want
+                runner_addr = runners[0]
+                tagger_addr = taggers[0]
+            elif len(runners) == 2:
+                # Two-human PYNQ MVP: fall back to first-come runner and second human tagger.
+                runner_addr = addrs[0]
+                tagger_addr = addrs[1]
+            else:
+                # Both want tagger, or both ROLE_ANY → first-come is runner
+                runner_addr = addrs[0]
+                tagger_addr = addrs[1] if len(addrs) > 1 else None
 
         self.state.players[runner_addr]["player_id"] = 1
         self._send_ack(runner_addr, 1)
@@ -263,10 +294,12 @@ class PacketHandler:
 
     # Adjust ghost count at runtime (e.g. from Monitor "set_ghost_count" control command)
     def set_ghost_count(self, target: int):
-        if target > 0:
-            print("[T2] ignoring ghost request on pynq_full — ghosts are disabled on the FPGA stack")
+        target  = max(0, min(target, MAX_GHOSTS))
         current = [a for a in self.state.players if str(a).startswith("ghost:")]
-        while current:
+        while len(current) < target:
+            self._spawn_ghost()
+            current = [a for a in self.state.players if str(a).startswith("ghost:")]
+        while len(current) > target:
             addr = current.pop()
             p = self.state.players.pop(addr, None)
             if p:
@@ -275,7 +308,34 @@ class PacketHandler:
 
     # Create a ghost tagger entry in players — driven by CoreLogic, not UDP packets
     def _spawn_ghost(self):
-        print("[T2] ghost spawn skipped on pynq_full — FPGA ghost rendering is not enabled yet")
+        ghost_count = sum(1 for a in self.state.players if str(a).startswith("ghost:"))
+        if ghost_count >= MAX_GHOSTS:
+            return
+        import math
+        ghost_addr = f"ghost:{ghost_count + 1}"
+        used_ids   = {player["player_id"] for player in self.state.players.values()}
+        ghost_id   = 3
+        while ghost_id in used_ids:
+            ghost_id += 1
+        angle      = math.pi / 2
+        spawn_positions = self.state.spawn_positions
+        x, y = spawn_positions[ghost_id - 1] if ghost_id - 1 < len(spawn_positions) else (0.0, 0.0)
+        self.state.players[ghost_addr] = {
+            "player_id":        ghost_id,
+            "x":                x, "y":  y, "angle": angle,
+            "flags":            FLAG_GHOST,
+            "last_seen":        time.monotonic(),
+            "last_seq":         None,
+            "movement_mode":    0,
+            "protocol_version": 0,
+            "timed_out":        False,
+            "username":         "",
+            "display_name":     f"ghost-{ghost_id}",
+            "profile_key":      "",
+            "controller_key":   "",
+            "identity_source":  "ghost",
+        }
+        print(f"[T2] spawned ghost tagger (player_id={ghost_id}) at {ghost_addr}")
 
     # ── Node-to-node messaging ────────────────────────────────────────────────
     # These are sent directly over the T1 socket, not via the broadcast queue
