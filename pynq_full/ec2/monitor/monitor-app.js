@@ -383,6 +383,53 @@ function connect() {
   };
   ws.onerror = () => ws.close();
 }
+
+// ── Theme toggle ────────────────────────────────────────────────────────────
+function initThemeToggle() {
+  const toggle = document.getElementById('theme-toggle');
+  const html = document.documentElement;
+  
+  // Load saved theme or use system preference
+  const savedTheme = localStorage.getItem('monitor-theme');
+  let currentTheme = savedTheme;
+  
+  if (!currentTheme) {
+    // Use system preference if no saved theme
+    const prefersLight = window.matchMedia('(prefers-color-scheme: light)').matches;
+    currentTheme = prefersLight ? 'light' : 'dark';
+  }
+  
+  // Apply initial theme
+  html.setAttribute('data-theme', currentTheme);
+  updateThemeButton(toggle, currentTheme);
+  
+  // Listen for system theme changes
+  window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e) => {
+    if (!localStorage.getItem('monitor-theme')) {
+      const newTheme = e.matches ? 'light' : 'dark';
+      html.setAttribute('data-theme', newTheme);
+      updateThemeButton(toggle, newTheme);
+    }
+  });
+  
+  // Toggle button click handler
+  if (toggle) {
+    toggle.addEventListener('click', () => {
+      const current = html.getAttribute('data-theme') || 'dark';
+      const next = current === 'dark' ? 'light' : 'dark';
+      html.setAttribute('data-theme', next);
+      localStorage.setItem('monitor-theme', next);
+      updateThemeButton(toggle, next);
+    });
+  }
+}
+
+function updateThemeButton(button, theme) {
+  if (!button) return;
+  button.textContent = theme === 'light' ? '☀️ Light' : '🌙 Dark';
+  button.setAttribute('aria-pressed', theme === 'light' ? 'false' : 'true');
+}
+
 updateGameHud(null);
 drawFrameChart();
 if (stackedFrameChart) {
@@ -390,4 +437,5 @@ if (stackedFrameChart) {
   setInterval(() => pushStackedFrame(generateDummyPipelineFrame()), 100);
 }
 setActiveTab(window.location.hash.replace('#', ''));
+initThemeToggle();
 connect();
