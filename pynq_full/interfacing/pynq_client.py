@@ -30,6 +30,7 @@ import math
 import argparse
 import sys
 import os
+import time
 
 sys.path.insert(0, os.path.dirname(__file__))
 from protocol import (
@@ -46,6 +47,8 @@ from protocol import (
 # ── Network cadence ───────────────────────────────────────────────────────────
 
 TICK_RATE = 60  # Hz — keep the board client aligned with the server send loop
+REGISTER_RETRY_S = 2.0
+SERVER_SILENCE_TIMEOUT_S = 3.0
 
 # ── Real hardware BRAM layout ─────────────────────────────────────────────────
 
@@ -270,6 +273,7 @@ class PYNQNode:
 
         # asyncio transport
         self.transport  = None
+        self.last_server_packet_at = None
 
     # ── UDP transport callback ─────────────────────────────────────────────
 
@@ -280,6 +284,7 @@ class PYNQNode:
     def datagram_received(self, data: bytes, addr):
         if len(data) < HEADER_SIZE:
             return
+        self.last_server_packet_at = time.monotonic()
         pkt_type, seq, timestamp = unpack_header(data)
 
         if pkt_type == PKT_ACK:
@@ -325,6 +330,17 @@ class PYNQNode:
 
     def error_received(self, exc):
         print(f"[Node] UDP error: {exc}")
+
+    # Return to the registration state so the board can recover from server resets/map swaps.
+    def _drop_to_registration(self, reason: str):
+        if self.registered or self.player_id is not None:
+            print(f"[Node] {reason} — re-registering")
+        self.registered = False
+        self.player_id = None
+        self.match_ended = False
+        self.server_flags = 0
+        self.remote_entities = []
+        self.last_server_packet_at = None
 
     # Apply button-driven local movement while keeping the player inside walkable map space.
     def _is_walkable(self, x: float, y: float, radius: float = PLAYER_COLLISION_RADIUS) -> bool:
@@ -431,16 +447,27 @@ class PYNQNode:
         self._send_register()
 
         interval = 1.0 / TICK_RATE
-        reg_retry_at = loop.time() + 2.0  # resend REGISTER if no ACK
+        reg_retry_at = loop.time() + REGISTER_RETRY_S
 
         try:
             while True:
                 tick_start = loop.time()
+                now_monotonic = time.monotonic()
+
+                if (
+                    self.registered
+                    and self.last_server_packet_at is not None
+                    and (now_monotonic - self.last_server_packet_at) > SERVER_SILENCE_TIMEOUT_S
+                ):
+                    self._drop_to_registration(
+                        f"server silent for {SERVER_SILENCE_TIMEOUT_S:.1f}s (map swap/restart?)"
+                    )
+                    reg_retry_at = loop.time()
 
                 if not self.registered:
                     if loop.time() >= reg_retry_at:
                         self._send_register()
-                        reg_retry_at = loop.time() + 2.0
+                        reg_retry_at = loop.time() + REGISTER_RETRY_S
                 else:
                     self._apply_manual_input()
                     self._send_state()
