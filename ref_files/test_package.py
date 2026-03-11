@@ -21,6 +21,12 @@ def _load_protocol():
 
 protocol = _load_protocol()
 
+ROLE_LOOKUP = {
+    "any": protocol.ROLE_ANY,
+    "runner": protocol.ROLE_RUNNER,
+    "tagger": protocol.ROLE_TAGGER,
+}
+
 
 def _describe_packet(data: bytes):
     if len(data) < protocol.HEADER_SIZE:
@@ -77,12 +83,33 @@ def _handle_packet(data: bytes, *, registered_state: dict):
     print(f"[OTHER] {_describe_packet(data)} hex={data[:32].hex()}")
 
 
+def _next_pose(args):
+    if args.state_mode == "random":
+        return (
+            random.uniform(-10.0, 10.0),
+            random.uniform(-10.0, 10.0),
+            random.uniform(0.0, 6.28),
+        )
+    return args.x, args.y, args.angle
+
+
 def main():
-    parser = argparse.ArgumentParser(description="UDP smoke test for the current PYNQ protocol")
+    parser = argparse.ArgumentParser(
+        description="Simple UDP smoke client for the current PYNQ protocol"
+    )
     parser.add_argument("--server", default="3.9.71.204")
     parser.add_argument("--port", type=int, default=9000)
     parser.add_argument("--tick-rate", type=int, default=20)
     parser.add_argument("--register-timeout", type=float, default=5.0)
+    parser.add_argument("--username", default="",
+                        help="Optional display name stored in player history")
+    parser.add_argument("--role", choices=sorted(ROLE_LOOKUP), default="any",
+                        help="Preferred role sent in PKT_REGISTER")
+    parser.add_argument("--x", type=float, default=0.0)
+    parser.add_argument("--y", type=float, default=0.0)
+    parser.add_argument("--angle", type=float, default=0.0)
+    parser.add_argument("--state-mode", choices=["static", "random"], default="static",
+                        help="Static re-sends the same pose; random jitters for protocol smoke tests")
     parser.add_argument("--movement-mode", type=int,
                         default=protocol.MOVEMENT_MODE_INTENT_WITH_PREDICTION)
     args = parser.parse_args()
@@ -90,26 +117,31 @@ def main():
     tick_interval = 1.0 / args.tick_rate
     server_address = (args.server, args.port)
     state = {"registered": False, "player_id": None}
+    preferred_role = ROLE_LOOKUP[args.role]
 
     print(f"Setting up UDP socket to {args.server}:{args.port} ...")
     print(
         f"Protocol check: HEADER_SIZE={protocol.HEADER_SIZE}, "
         f"PLAYER_SIZE={protocol.PLAYER_SIZE}, NODE_SIZE={protocol.NODE_SIZE}"
     )
+    print(
+        f"Client config: username={args.username or '<none>'} "
+        f"role={args.role} state_mode={args.state_mode} "
+        f"pose=({args.x:.2f}, {args.y:.2f}, {args.angle:.2f})"
+    )
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     try:
         seq_num = 0
-        reg_packet = protocol.pack_node_packet(
-            pkt_type=protocol.PKT_REGISTER,
+        reg_packet = protocol.pack_register_packet(
             seq=seq_num,
-            x=0.0,
-            y=0.0,
-            angle=0.0,
-            flags=0,
+            x=args.x,
+            y=args.y,
+            angle=args.angle,
+            preferred_role=preferred_role,
+            username=args.username,
             movement_mode=args.movement_mode,
-            reserved=protocol.ROLE_ANY,
         )
 
         print("Sending PKT_REGISTER ...")
@@ -129,23 +161,23 @@ def main():
         sock.settimeout(tick_interval)
         print(f"Starting {args.tick_rate}Hz update loop")
 
+        packet_index = 0
         while True:
             loop_start = time.time()
-            mock_x = random.uniform(-10.0, 10.0)
-            mock_y = random.uniform(-10.0, 10.0)
-            mock_angle = random.uniform(0.0, 6.28)
+            state_x, state_y, state_angle = _next_pose(args)
 
             packet = protocol.pack_node_packet(
                 pkt_type=protocol.PKT_STATE_UPDATE,
                 seq=seq_num,
-                x=mock_x,
-                y=mock_y,
-                angle=mock_angle,
+                x=state_x,
+                y=state_y,
+                angle=state_angle,
                 flags=0,
                 movement_mode=args.movement_mode,
             )
             sock.sendto(packet, server_address)
             seq_num = (seq_num + 1) & 0xFFFF
+            packet_index += 1
 
             while True:
                 try:
