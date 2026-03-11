@@ -4069,6 +4069,7 @@ void main() {
     <div class="top-status">
       <span id="status" class="disconnected">\u25CF DISCONNECTED</span>
       <span id="game-chip">no game</span>
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle theme">\u{1F319} Dark</button>
     </div>
   </header>
 
@@ -4541,6 +4542,7 @@ void main() {
     <div class="top-status">
       <span id="status" class="disconnected">\u25CF DISCONNECTED</span>
       <span id="game-chip">no game</span>
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle theme">\u{1F319} Dark</button>
     </div>
   </header>
 
