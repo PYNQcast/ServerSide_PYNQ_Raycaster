@@ -1,6 +1,8 @@
 import React, { useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
-import { mountPYNQCASTCoin } from './PYNQCASTCoin.js';
+import PYNQBoard from './components/PYNQBoard.jsx';
+// Swap this import back in if you want the legacy coin centerpiece again.
+// import PYNQCASTCoin from './components/PYNQCASTCoin.jsx';
 import { monitorMarkup } from './templates.generated.js';
 
 const LEGACY_SCRIPTS = ['/monitor-state.js', '/monitor-render.js', '/monitor-app.js'];
@@ -32,17 +34,18 @@ function MonitorRoot({ mode }) {
   const rootRef = useRef(null);
 
   useEffect(() => {
-    const cleanupAbout = mountPYNQCASTCoin(rootRef.current);
     loadLegacyScripts();
-    return () => cleanupAbout();
   }, []);
 
   return (
-    <div
-      ref={rootRef}
-      className="react-monitor-root"
-      dangerouslySetInnerHTML={{ __html: monitorMarkup[mode] || monitorMarkup.pynq }}
-    />
+    <>
+      <div
+        ref={rootRef}
+        className="react-monitor-root"
+        dangerouslySetInnerHTML={{ __html: monitorMarkup[mode] || monitorMarkup.pynq }}
+      />
+      <PYNQBoard hostRef={rootRef} />
+    </>
   );
 }
 

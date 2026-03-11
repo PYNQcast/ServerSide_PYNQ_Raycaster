@@ -1497,9 +1497,18 @@
     display: flex;
     justify-content: center;
     align-items: center;
-    animation: about-logo-bob 2.2s infinite ease-in-out;
     transform-origin: center bottom;
     will-change: transform;
+  }
+
+  .about-sprite-wrap.board-ready {
+    animation: none;
+    transform: none;
+  }
+
+  .about-react-board-slot {
+    width: clamp(340px, 42vw, 560px);
+    max-width: 100%;
   }
 
   .about-coin-stage {
