@@ -17,7 +17,7 @@ def pynq_import_context():
     sys.path[:0] = [str(JUPYTER_SIDE), str(PYNQ_INTERFACING), str(PYNQ_SERVER), str(PYNQ_EC2)]
     for name in list(sys.modules):
         if name in {
-            "t2_constants", "t2_map_loader", "pynq_client", "protocol", "test_package",
+            "t2_constants", "t2_map_loader", "pynq_client", "protocol", "test_package_v2",
             "player_profiles", "t2_packet_handler", "t2_redis_io",
         }:
             sys.modules.pop(name, None)
@@ -27,7 +27,7 @@ def pynq_import_context():
         sys.path[:] = original_path
         for name in list(sys.modules):
             if name in {
-                "t2_constants", "t2_map_loader", "pynq_client", "protocol", "test_package",
+                "t2_constants", "t2_map_loader", "pynq_client", "protocol", "test_package_v2",
                 "player_profiles", "t2_packet_handler", "t2_redis_io",
             }:
                 sys.modules.pop(name, None)
@@ -144,7 +144,7 @@ def test_pynq_client_decodes_button_gpio_bits():
 def test_test_package_auto_runner_prefers_nearest_active_bit_in_bits_mode():
     with pynq_import_context():
         protocol = importlib.import_module("protocol")
-        test_package = importlib.import_module("test_package")
+        test_package = importlib.import_module("test_package_v2")
 
         state = {
             "registered": True,
@@ -175,7 +175,7 @@ def test_test_package_auto_runner_prefers_nearest_active_bit_in_bits_mode():
 def test_test_package_auto_tagger_chases_runner_and_shoots_when_aligned():
     with pynq_import_context():
         protocol = importlib.import_module("protocol")
-        test_package = importlib.import_module("test_package")
+        test_package = importlib.import_module("test_package_v2")
 
         state = {
             "registered": True,
@@ -208,7 +208,7 @@ def test_test_package_auto_tagger_chases_runner_and_shoots_when_aligned():
 
 def test_test_package_pathfinder_routes_through_gap():
     with pynq_import_context():
-        test_package = importlib.import_module("test_package")
+        test_package = importlib.import_module("test_package_v2")
 
         width = 8
         height = 8

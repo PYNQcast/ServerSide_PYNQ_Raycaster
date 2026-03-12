@@ -10,7 +10,7 @@ try:
     from pynq.ps import Clocks
 except ImportError as exc:
     raise SystemExit(
-        "test_package.py must run on the PYNQ board with the pynq package installed"
+        "test_package_v1.py must run on the PYNQ board with the pynq package installed"
     ) from exc
 
 import protocol
@@ -19,12 +19,12 @@ import protocol
 # Keep protocol.py beside this file on the board.
 #
 # Copy to board:
-#   scp ref_files/test_package.py pynq_full/interfacing/protocol.py \
+#   scp ref_files/test_package_v1.py pynq_full/interfacing/protocol.py \
 #       xilinx@<PYNQ_IP>:/home/xilinx/jupyter_notebooks/
 #
 # Run on board:
 #   cd /home/xilinx/jupyter_notebooks
-#   python3 test_package.py
+#   python3 test_package_v1.py
 
 
 # --- Network configuration ---
