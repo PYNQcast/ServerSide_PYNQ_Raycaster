@@ -24,6 +24,8 @@ import {
   serialiseRuntimeText,
 } from './map-editor/utils.js';
 
+const MONITOR_STATE_EVENT = 'monitor:state';
+
 function describeValidation(grid, spawns, markers) {
   if (!hasSolidBorder(grid)) {
     return {
@@ -189,6 +191,7 @@ export default function MapEditorTab() {
       setSelectedMapId(mapId);
       setNotice({ kind: 'success', text: payload.message || `Map '${mapId}' pushed live.` });
       refreshCatalog({ silent: true });
+      window.requestMapListRefresh?.(0);
     } catch (error) {
       setNotice({ kind: 'error', text: `Push live failed: ${error.message}` });
     }
@@ -226,8 +229,9 @@ export default function MapEditorTab() {
         setActiveMapId(savedMap.map_id);
         setSelectedMapId(savedMap.map_id);
       }
+      window.invalidateMonitorMapCache?.(savedMap.map_id);
       await refreshCatalog({ silent: true });
-      window.loadMapList?.();
+      window.requestMapListRefresh?.(0);
     } catch (error) {
       setNotice({ kind: 'error', text: `Map save failed: ${error.message}` });
     } finally {
@@ -246,8 +250,9 @@ export default function MapEditorTab() {
         setLoadedMap(null);
       }
       setNotice({ kind: 'success', text: `Deleted '${entry.map_id}'.` });
+      window.invalidateMonitorMapCache?.(entry.map_id);
       await refreshCatalog({ silent: true });
-      window.loadMapList?.();
+      window.requestMapListRefresh?.(0);
     } catch (error) {
       setNotice({ kind: 'error', text: `Delete failed: ${error.message}` });
     } finally {
@@ -272,16 +277,19 @@ export default function MapEditorTab() {
 
   useEffect(() => {
     if (!pageVisible) return () => {};
-    const syncLiveState = () => {
-      const activeMap = window.latestState?.active_map;
-      const selectedMap = window.latestState?.selected_map;
+    const syncLiveState = (state = window.latestState) => {
+      const activeMap = state?.active_map;
+      const selectedMap = state?.selected_map;
       if (activeMap) setActiveMapId(String(activeMap));
       if (selectedMap || activeMap) setSelectedMapId(String(selectedMap || activeMap));
     };
+    const handleState = (event) => {
+      syncLiveState(event.detail);
+    };
 
     syncLiveState();
-    const intervalId = window.setInterval(syncLiveState, 500);
-    return () => window.clearInterval(intervalId);
+    window.addEventListener(MONITOR_STATE_EVENT, handleState);
+    return () => window.removeEventListener(MONITOR_STATE_EVENT, handleState);
   }, [pageVisible]);
 
   const validation = describeValidation(gridRef.current, spawns, markers);

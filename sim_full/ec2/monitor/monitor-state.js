@@ -25,6 +25,11 @@ let _pendingMapName = '';
 let _pendingMapRequestedAt = 0;
 let _mapFilterText = '';
 let _lastMapButtonsSignature = '';
+const _mapPayloadCache = new Map();
+const _mapLoadPromises = new Map();
+let _mapLoadRequestId = 0;
+let _mapListPromise = null;
+let _mapListRefreshTimer = 0;
 let _showMap = true;  // map play is the default; orbit view is a sim-only test tool
 let _viewMode = 'map';
 const requestedNodeModes = { 1: 'manual', 2: 'manual' };
@@ -44,17 +49,56 @@ function hasSelectedMap(name) {
   return Boolean(String(name || '').trim());
 }
 
-async function loadMap(name = _activeMapName) {
+function cloneCachedMapPayload(name, payload) {
+  return { ...payload, name };
+}
+
+function invalidateMapCache(name) {
+  if (name) {
+    const targetName = String(name);
+    _mapPayloadCache.delete(targetName);
+    if (mapData?.name === targetName) {
+      mapData = null;
+    }
+    return;
+  }
+  _mapPayloadCache.clear();
+  mapData = null;
+}
+
+async function loadMap(name = _activeMapName, options = {}) {
+  const { force = false } = options;
   if (!name) {
     mapData = null;
     updateCanvasLabel();
     return;
   }
+  const requestId = ++_mapLoadRequestId;
+  const cachedPayload = !force ? _mapPayloadCache.get(name) : null;
+  if (cachedPayload) {
+    if (requestId !== _mapLoadRequestId) return;
+    mapData = cloneCachedMapPayload(name, cachedPayload);
+    updateCanvasLabel();
+    return;
+  }
   try {
-    const resp = await fetch(`/api/map/${encodeURIComponent(name)}`);
-    if (!resp.ok) return;
-    mapData = await resp.json();
-    mapData.name = name;
+    let payloadPromise = _mapLoadPromises.get(name);
+    if (!payloadPromise || force) {
+      payloadPromise = fetch(`/api/map/${encodeURIComponent(name)}`)
+        .then(async (resp) => {
+          if (!resp.ok) throw new Error(`map load failed (${resp.status})`);
+          const payload = await resp.json();
+          _mapPayloadCache.set(name, payload);
+          return payload;
+        })
+        .finally(() => {
+          _mapLoadPromises.delete(name);
+        });
+      _mapLoadPromises.set(name, payloadPromise);
+    }
+    const payload = await payloadPromise;
+    if (requestId !== _mapLoadRequestId) return;
+    mapData = cloneCachedMapPayload(name, payload);
     updateCanvasLabel();
   } catch (e) {
     console.warn('[monitor] map load failed:', e);
@@ -62,6 +106,8 @@ async function loadMap(name = _activeMapName) {
 }
 
 async function loadMapList() {
+  if (_mapListPromise) return _mapListPromise;
+  _mapListPromise = (async () => {
   try {
     const resp = await fetch('/api/maps');
     if (!resp.ok) return;
@@ -77,6 +123,23 @@ async function loadMapList() {
   } catch (e) {
     console.warn('[monitor] map list load failed:', e);
   }
+  })().finally(() => {
+    _mapListPromise = null;
+  });
+  return _mapListPromise;
+}
+
+function requestMapListRefresh(delayMs = 0) {
+  if (_mapListRefreshTimer) {
+    window.clearTimeout(_mapListRefreshTimer);
+    _mapListRefreshTimer = 0;
+  }
+  return new Promise((resolve) => {
+    _mapListRefreshTimer = window.setTimeout(() => {
+      _mapListRefreshTimer = 0;
+      loadMapList().finally(resolve);
+    }, Math.max(0, delayMs));
+  });
 }
 
 function renderMapButtons() {
@@ -520,3 +583,6 @@ function countActiveBits(bitsMask, totalBits) {
 window.setActiveTab = setActiveTab;
 window.setMapFilterText = setMapFilterText;
 window.toggleArchiveDrawer = toggleArchiveDrawer;
+window.loadMapList = loadMapList;
+window.requestMapListRefresh = requestMapListRefresh;
+window.invalidateMonitorMapCache = invalidateMapCache;
