@@ -437,3 +437,7 @@ function countActiveBits(bitsMask, totalBits) {
   }
   return active;
 }
+
+// Expose tab/UI functions needed by inline onclick handlers in the template HTML.
+window.setActiveTab = setActiveTab;
+window.toggleArchiveDrawer = toggleArchiveDrawer;

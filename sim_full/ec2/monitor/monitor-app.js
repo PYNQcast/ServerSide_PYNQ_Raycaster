@@ -437,6 +437,10 @@ if (stackedFrameChart) {
   seedStackedFrameChart();
   setInterval(() => pushStackedFrame(generateDummyPipelineFrame()), 100);
 }
+// Expose functions needed by inline onclick handlers in the template HTML.
+window.stopReplay = stopReplay;
+window.sendControl = sendControl;
+
 setActiveTab(window.location.hash.replace('#', ''));
 initThemeToggle();
 connect();
