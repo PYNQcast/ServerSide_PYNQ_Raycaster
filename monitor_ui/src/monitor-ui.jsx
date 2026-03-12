@@ -9,8 +9,10 @@ import { monitorMarkup } from './templates.generated.js';
 
 const loadPYNQBoard = () => import('./components/PYNQBoard.jsx');
 const loadPlayerStatsTab = () => import('./components/PlayerStatsTab.jsx');
+const loadMapEditorTab = () => import('./components/MapEditorTab.jsx');
 const PYNQBoard = lazy(loadPYNQBoard);
 const PlayerStatsTab = lazy(loadPlayerStatsTab);
+const MapEditorTab = lazy(loadMapEditorTab);
 
 const LEGACY_SCRIPTS = ['/monitor-state.js', '/monitor-render.js', '/monitor-app.js'];
 
@@ -40,8 +42,10 @@ function loadLegacyScripts() {
 function MonitorPortals({ hostRef, mode }) {
   const [aboutSlot, setAboutSlot] = useState(null);
   const [playerSlot, setPlayerSlot] = useState(null);
+  const [editorSlot, setEditorSlot] = useState(null);
   const [aboutActivated, setAboutActivated] = useState(false);
   const [playersActivated, setPlayersActivated] = useState(false);
+  const [editorActivated, setEditorActivated] = useState(false);
 
   useLayoutEffect(() => {
     const root = hostRef.current;
@@ -51,13 +55,17 @@ function MonitorPortals({ hostRef, mode }) {
     const syncSlots = () => {
       const aboutPage = root.querySelector('#page-about');
       const playersPage = root.querySelector('#page-players');
+      const editorPage = root.querySelector('#page-editor');
       const aboutVisible = Boolean(aboutPage && !aboutPage.hidden);
       const playersVisible = Boolean(playersPage && !playersPage.hidden);
+      const editorVisible = Boolean(editorPage && !editorPage.hidden);
 
       setAboutSlot(root.querySelector('.about-react-board-slot') || null);
       setPlayerSlot(root.querySelector('#player-stats-react-slot') || null);
+      setEditorSlot(root.querySelector('#map-editor-react-slot') || null);
       if (aboutVisible) setAboutActivated(true);
       if (playersVisible) setPlayersActivated(true);
+      if (editorVisible) setEditorActivated(true);
     };
 
     syncSlots();
@@ -72,7 +80,7 @@ function MonitorPortals({ hostRef, mode }) {
     };
   }, [hostRef, mode]);
 
-  if (!aboutSlot && !playerSlot) return null;
+  if (!aboutSlot && !playerSlot && !editorSlot) return null;
 
   return (
     <>
@@ -84,6 +92,12 @@ function MonitorPortals({ hostRef, mode }) {
           <PlayerStatsTab />
         </Suspense>,
         playerSlot,
+      ) : null}
+      {editorSlot && editorActivated ? createPortal(
+        <Suspense fallback={null}>
+          <MapEditorTab />
+        </Suspense>,
+        editorSlot,
       ) : null}
     </>
   );
@@ -100,6 +114,7 @@ function MonitorRoot({ mode }) {
     const preload3D = () => {
       loadPYNQBoard();
       loadPlayerStatsTab();
+      loadMapEditorTab();
     };
 
     if (typeof window.requestIdleCallback === 'function') {
