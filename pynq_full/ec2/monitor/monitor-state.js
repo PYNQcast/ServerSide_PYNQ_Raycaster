@@ -535,6 +535,8 @@ function normalisePlayers(players) {
     profileKey: p.profile_key ?? p.profileKey ?? '',
     username: p.username ?? '',
     controllerKey: p.controller_key ?? p.controllerKey ?? '',
+    boardSlot: p.board_slot ?? p.boardSlot ?? null,
+    controlMode: p.control_mode ?? p.controlMode ?? 'manual',
   }));
 }
 

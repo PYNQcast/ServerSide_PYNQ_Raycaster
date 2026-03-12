@@ -341,6 +341,11 @@ def _stop_service(name: str):
 def handle_control_command(cmd: str):
     global _service_message
 
+    def publish_node_mode(board_slot: int, mode: str):
+        payload = json.dumps({"cmd": "set_node_mode", "mode": mode, "board_slot": board_slot})
+        r.publish("game:control", payload)
+        return f"board {board_slot} {mode} mode sent"
+
     if cmd == "force_end":
         r.publish("game:control", json.dumps({"cmd": "force_end"}))
         _service_message = "force_end sent — session will return to the lobby after the end hold"
@@ -351,6 +356,14 @@ def handle_control_command(cmd: str):
         payload = json.dumps({"cmd": "restart"})
         r.publish("game:control", payload)
         _service_message = "restart signal sent to the live server"
+    elif cmd == "node1_auto":
+        _service_message = publish_node_mode(1, "auto")
+    elif cmd == "node1_manual":
+        _service_message = publish_node_mode(1, "manual")
+    elif cmd == "node2_auto":
+        _service_message = publish_node_mode(2, "auto")
+    elif cmd == "node2_manual":
+        _service_message = publish_node_mode(2, "manual")
     elif cmd == "start_server":
         _service_message = _start_service("server")
     elif cmd == "stop_server":
@@ -514,6 +527,8 @@ def collect_state():
             "y":               float(raw.get("y", 0)),
             "angle":           float(raw.get("angle", 0)),
             "flags":           int(raw.get("flags", 0)),
+            "board_slot":      _as_optional_int(raw.get("board_slot")),
+            "control_mode":    raw.get("control_mode", "manual") or "manual",
             "username":        raw.get("username", ""),
             "display_name":    raw.get("display_name", ""),
             "profile_key":     raw.get("profile_key", ""),
@@ -535,11 +550,21 @@ def collect_state():
     pause_reason = (game_raw.get("pause_reason") or None) if game_raw else None
     pause_remaining_s = _as_float(game_raw.get("pause_remaining_s"), 0.0) if game_raw else 0.0
     paused_player_ids = []
+    slot_modes = {1: "manual", 2: "manual"}
     if game_raw and game_raw.get("paused_player_ids"):
         try:
             paused_player_ids = json.loads(game_raw["paused_player_ids"])
         except Exception:
             paused_player_ids = []
+    if game_raw and game_raw.get("slot_modes"):
+        try:
+            decoded_slot_modes = json.loads(game_raw["slot_modes"])
+            slot_modes = {
+                1: str(decoded_slot_modes.get("1", decoded_slot_modes.get(1, "manual")) or "manual"),
+                2: str(decoded_slot_modes.get("2", decoded_slot_modes.get(2, "manual")) or "manual"),
+            }
+        except Exception:
+            slot_modes = {1: "manual", 2: "manual"}
     queued_players = []
     if game_raw and game_raw.get("queued_players"):
         try:
@@ -561,6 +586,8 @@ def collect_state():
             "y":               _as_float(raw.get("y"), 0.0),
             "angle":           _as_float(raw.get("angle"), 0.0),
             "flags":           _as_int(raw.get("flags", 0), 0),
+            "board_slot":      _as_optional_int(raw.get("board_slot")) or queue_slot,
+            "control_mode":    raw.get("control_mode", slot_modes.get(queue_slot, "manual")) or slot_modes.get(queue_slot, "manual"),
             "username":        raw.get("username", ""),
             "display_name":    raw.get("display_name", ""),
             "profile_key":     raw.get("profile_key", ""),
@@ -641,6 +668,7 @@ def collect_state():
         "bits_mask":  bits_mask,           # bitmask of active bits this tick
         "active_map": active_map,
         "selected_map": selected_map,
+        "slot_modes": slot_modes,
         "match": {
             "started": match_started,
             "ended": match_ended,

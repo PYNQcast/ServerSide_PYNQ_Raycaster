@@ -75,6 +75,20 @@ BUTTON_FORWARD_MASK = 1 << 2
 BUTTON_TURN_LEFT_MASK = 1 << 3
 
 
+# Convert a runtime mode name into the board client's internal mode label.
+def _normalise_mode_name(value: str) -> str:
+    return "auto" if str(value).lower() == "auto" else "manual"
+
+
+# Convert a wire-level node control mode byte into a runtime mode label.
+def _mode_name_from_packet(mode_value: int) -> str:
+    return (
+        "auto"
+        if mode_value == protocol.NODE_CONTROL_MODE_AUTO
+        else "manual"
+    )
+
+
 # Convert a server player id into a readable role label for logs.
 def _role_name(player_id: int) -> str:
     if player_id == 0:
@@ -610,6 +624,14 @@ def _handle_packet(data: bytes, state: dict, bram) -> None:
         print(f"[BITS_INIT] count={len(raw_bits)}")
         return
 
+    if pkt_type == protocol.PKT_NODE_MODE:
+        next_mode = _mode_name_from_packet(protocol.unpack_node_mode_packet(data))
+        previous_mode = state.get("mode", "manual")
+        state["mode"] = next_mode
+        if previous_mode != next_mode:
+            print(f"[CTRL] mode {previous_mode} -> {next_mode}")
+        return
+
     if pkt_type == protocol.PKT_GAME_STATE:
         _, rx_seq, rx_ts, game_mode, players, bits_mask = protocol.unpack_server_packet(data)
         state["game_mode"] = game_mode
@@ -674,7 +696,7 @@ def main():
     server_address = (args.server, args.port)
 
     state = {
-        "mode": args.mode,
+        "mode": _normalise_mode_name(args.mode),
         "registered": False,
         "player_id": None,
         "seq": 0,

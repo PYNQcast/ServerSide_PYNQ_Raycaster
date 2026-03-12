@@ -36,15 +36,20 @@ function updatePlayers(players) {
   });
 }
 
-function updateNodeLinks(players) {
-  const normalised = normalisePlayers(players);
+function updateNodeLinks(stateOrPlayers) {
+  const state = Array.isArray(stateOrPlayers)
+    ? { players: stateOrPlayers, slot_modes: latestState?.slot_modes || { 1: 'manual', 2: 'manual' } }
+    : (stateOrPlayers || { players: [], slot_modes: { 1: 'manual', 2: 'manual' } });
+  const normalised = normalisePlayers(state.players);
+  const slotModes = state.slot_modes || { 1: 'manual', 2: 'manual' };
   [1, 2].forEach((nodeId) => {
     const el = document.getElementById(`node${nodeId}-link`);
-    const activePlayer = normalised.find((player) => player.id === nodeId);
-    const queuedPlayer = normalised.find((player) => player.queued && player.queueSlot === nodeId);
+    const activePlayer = normalised.find((player) => !player.queued && player.boardSlot === nodeId);
+    const queuedPlayer = normalised.find((player) => player.queued && player.boardSlot === nodeId);
     const statusText = activePlayer ? 'connected' : queuedPlayer ? 'lobby' : 'offline';
     const statusColour = activePlayer ? '#baffd8' : queuedPlayer ? '#7dc3ff' : '#665a8a';
-    el.textContent = `${statusText} · fpga`;
+    const modeText = String((activePlayer || queuedPlayer)?.controlMode || slotModes[nodeId] || 'manual').toLowerCase();
+    el.textContent = `${statusText} · ${modeText}`;
     el.style.color = statusColour;
   });
 }
@@ -402,7 +407,7 @@ function connect() {
     window.dispatchEvent(new CustomEvent(MONITOR_STATE_EVENT, { detail: state }));
     updateGameHud(state);
     if (!replayState.active) updatePlayers(state.players);
-    updateNodeLinks(state.players);
+    updateNodeLinks(state);
     updateBitsPanel(state);
     updateRedis(state.redis);
     updateServices(state.services);

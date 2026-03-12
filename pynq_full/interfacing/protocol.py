@@ -25,6 +25,7 @@ PKT_MAP          = 0x0040   # server → node:  map tile data, sent once after P
 PKT_BITS_INIT    = 0x0050   # server → node:  bit positions, sent once at match start
                              #   header (8 bytes) + count (1 byte) + N × BitEntry (6 bytes each)
                              #   node stores positions; server sends bitmask each tick to flag collection.
+PKT_NODE_MODE    = 0x0060   # server → node:  runtime control mode switch (manual/auto)
 
 # ── Flags bitmask (uint8 flags field) ─────────────────────────────────────────
 #
@@ -64,6 +65,11 @@ MAX_USERNAME_BYTES = 32
 MOVEMENT_MODE_POSE = 0x00  # Node sends a raw pose update; server treats x/y/angle as the movement payload for this tick.
 MOVEMENT_MODE_INTENT_ONLY = 0x01  # Node is only declaring intent/inputs; server should ignore predicted x/y/angle and advance movement itself.
 MOVEMENT_MODE_INTENT_WITH_PREDICTION = 0x02  # Node sends inputs plus its locally predicted pose; server validates/corrects that prediction instead of trusting it blindly.
+
+# ── Runtime board control modes ───────────────────────────────────────────────
+
+NODE_CONTROL_MODE_MANUAL = 0x00
+NODE_CONTROL_MODE_AUTO   = 0x01
 
 # ── Wire format ───────────────────────────────────────────────────────────────
 #
@@ -154,6 +160,10 @@ BIT_ENTRY_FMT  = '<Bff'
 BIT_ENTRY_SIZE = struct.calcsize(BIT_ENTRY_FMT)
 assert BIT_ENTRY_SIZE == 9, f"BitEntry must be 9 bytes, got {BIT_ENTRY_SIZE}"
 
+NODE_MODE_FMT = '<B'
+NODE_MODE_SIZE = struct.calcsize(NODE_MODE_FMT)
+assert NODE_MODE_SIZE == 1, f"NodeMode payload must be 1 byte, got {NODE_MODE_SIZE}"
+
 # ── Pack helpers (build outgoing packets) ─────────────────────────────────────
 
 # Build PKT_BITS_INIT: header + count byte + N × BitEntry (9 bytes each)
@@ -178,6 +188,20 @@ def unpack_bits_init_packet(data):
         bits.append((bit_id, x, y))
         offset += BIT_ENTRY_SIZE
     return bits
+
+
+# Build PKT_NODE_MODE: header + one byte mode payload for runtime board control.
+def pack_node_mode_packet(seq, mode):
+    timestamp = int(time.time() * 1000) & 0xFFFFFFFF
+    header = struct.pack(HEADER_FMT, PKT_NODE_MODE, seq & 0xFFFF, timestamp)
+    return header + struct.pack(NODE_MODE_FMT, mode & 0xFF)
+
+
+# Unpack PKT_NODE_MODE — returns NODE_CONTROL_MODE_MANUAL/AUTO.
+def unpack_node_mode_packet(data):
+    if len(data) < HEADER_SIZE + NODE_MODE_SIZE:
+        raise ValueError(f"PKT_NODE_MODE too short: {len(data)} bytes")
+    return struct.unpack_from(NODE_MODE_FMT, data, HEADER_SIZE)[0]
 
 # Build PKT_MAP: 8-byte header + 4-byte MapHeader + tiles (0=empty, 1=wall)
 def pack_map_packet(seq, width, height, tile_scale, tiles):
@@ -246,6 +270,13 @@ def decode_movement_mode(mode):
         MOVEMENT_MODE_POSE: "pose",
         MOVEMENT_MODE_INTENT_ONLY: "intent_only",
         MOVEMENT_MODE_INTENT_WITH_PREDICTION: "intent_with_prediction",
+    }.get(mode, f"unknown({mode})")
+
+
+def decode_node_control_mode(mode):
+    return {
+        NODE_CONTROL_MODE_MANUAL: "manual",
+        NODE_CONTROL_MODE_AUTO: "auto",
     }.get(mode, f"unknown({mode})")
 
 
