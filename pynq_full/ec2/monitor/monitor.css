@@ -793,6 +793,13 @@
     margin-top: 10px;
   }
 
+  .replay-action-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: stretch;
+  }
+
   .viewport-wrap {
     flex: 1;
     min-height: 0;
@@ -1560,6 +1567,17 @@
     box-shadow:
       inset -3px -3px 0 0 #065a73,
       inset 3px 3px 0 0 #22d3ee,
+      4px 4px 0 0 #000;
+  }
+
+  .replay-btn.auto {
+    min-width: 132px;
+    text-align: center;
+    background: #7c4f0f;
+    color: #fff6e6;
+    box-shadow:
+      inset -3px -3px 0 0 #4d2f06,
+      inset 3px 3px 0 0 #f2b347,
       4px 4px 0 0 #000;
   }
 

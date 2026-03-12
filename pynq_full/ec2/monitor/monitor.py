@@ -346,6 +346,30 @@ def handle_control_command(cmd: str):
         r.publish("game:control", payload)
         return f"board {board_slot} {mode} mode sent"
 
+    def queue_replay_autoplay(match_id: str):
+        match_meta = fetch_match_meta(match_id)
+        map_name = str(match_meta.get("map_name", "") or "").strip()
+        if not _valid_map_name(map_name):
+            raise ValueError(f"replay {match_id} has no valid map_name")
+        map_path = MAPS_DIR / f"{map_name}.txt"
+        if not map_path.exists():
+            raise ValueError(f"replay map missing locally: {map_name}")
+
+        ghost_count = _as_int(match_meta.get("ghost_count", 0), 0)
+        for payload in (
+            {"cmd": "set_map", "map": map_name},
+            {"cmd": "set_ghost_count", "count": ghost_count},
+            {"cmd": "set_node_mode", "board_slot": 1, "mode": "auto"},
+            {"cmd": "set_node_mode", "board_slot": 2, "mode": "auto"},
+            {"cmd": "start_match"},
+        ):
+            r.publish("game:control", json.dumps(payload))
+
+        global _active_map
+        _active_map = map_name
+        _prime_map_state_cache(map_name)
+        return f"replay {match_id} → auto play on {map_name} ({ghost_count} ghosts)"
+
     if cmd == "force_end":
         r.publish("game:control", json.dumps({"cmd": "force_end"}))
         _service_message = "force_end sent — session will return to the lobby after the end hold"
@@ -384,6 +408,12 @@ def handle_control_command(cmd: str):
             _active_map = map_name
             _prime_map_state_cache(map_name)
             _service_message = f"map set to {map_name} — active players are returned to the lobby on the new map"
+    elif cmd.startswith("replay_autoplay:"):
+        match_id = cmd.split(":", 1)[1].strip()
+        if not match_id:
+            _service_message = "missing replay match id"
+        else:
+            _service_message = queue_replay_autoplay(match_id)
     elif cmd.startswith("set_ghosts_"):
         count = int(cmd.split("_")[-1])
         r.publish("game:control", json.dumps({"cmd": "set_ghost_count", "count": count}))
@@ -738,6 +768,14 @@ def fetch_replay(match_id: str):
         if oldest != match_id:
             _replay_cache.pop(oldest, None)
     return payload
+
+
+def fetch_match_meta(match_id: str):
+    resp = dyndb.get_item(Key={"match_id": match_id, "record_type": "META"})
+    item = resp.get("Item")
+    if not item:
+        raise web.HTTPNotFound(text=f"unknown match_id: {match_id}")
+    return item
 
 
 def fetch_players():

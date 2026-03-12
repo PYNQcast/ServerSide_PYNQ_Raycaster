@@ -142,6 +142,18 @@ async function loadReplay(matchId) {
   }
 }
 
+async function autoPlayReplay(matchId) {
+  if (!matchId) {
+    return;
+  }
+  stopReplay(false);
+  setReplayStatus(`arming auto play from ${matchId.replace(/^match-/, '')}...`);
+  await sendControl(`replay_autoplay:${matchId}`, `replay ${matchId.replace(/^match-/, '')} auto play`);
+  if (typeof window.requestMapListRefresh === 'function') {
+    window.requestMapListRefresh(250);
+  }
+}
+
 function updateRedis(redis) {
   document.getElementById('r-ops').textContent     = redis.ops_per_sec;
   document.getElementById('r-mem').textContent     = redis.mem_used;
@@ -271,9 +283,14 @@ function updateMatches(matches) {
   const replaySignature = JSON.stringify(replayable.map(m => [m.match_id, m.replay_frames]));
   if (replaySignature !== lastReplayListSignature) {
     replayEl.innerHTML = replayable.map(m => `
-      <button class="replay-btn" onclick="loadReplay('${m.match_id}')">
-        replay ${m.match_id.replace(/^match-/, '')} (${m.replay_frames}f)
-      </button>
+      <div class="replay-action-row">
+        <button class="replay-btn" onclick="loadReplay('${m.match_id}')">
+          replay ${m.match_id.replace(/^match-/, '')} (${m.replay_frames}f)
+        </button>
+        <button class="replay-btn auto" onclick="autoPlayReplay('${m.match_id}')">
+          auto play
+        </button>
+      </div>
     `).join('');
     lastReplayListSignature = replaySignature;
   }
@@ -351,7 +368,7 @@ async function sendControl(cmd, label) {
     setServiceNote('select a map before starting the match');
     return;
   }
-  const forceHttp = String(cmd || '').startsWith('set_map:');
+  const forceHttp = String(cmd || '').startsWith('set_map:') || String(cmd || '').startsWith('replay_autoplay:');
   if (!forceHttp && ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({cmd}));
     setServiceNote(`${label} requested...`);
