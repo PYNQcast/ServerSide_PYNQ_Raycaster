@@ -29,12 +29,12 @@ except ImportError:
 
 from protocol import (
     # constants
-    HEADER_SIZE, PKT_ACK, PKT_GAME_STATE, PKT_REGISTER,
+    HEADER_SIZE, PKT_ACK, PKT_GAME_STATE, PKT_MAP, PKT_REGISTER,
     MOVEMENT_MODE_INTENT_WITH_PREDICTION,
     FLAG_SHOOTING, FLAG_TAGGED, FLAG_MATCH_END,
     # functions
     client_input_flags, decode_flag_names, decode_movement_mode,
-    pack_node_packet, pack_register_packet, unpack_header, unpack_server_packet,
+    pack_node_packet, pack_register_packet, unpack_header, unpack_map_packet, unpack_server_packet,
 )
 
 # How long to wait after restart signal before re-registering.
@@ -644,6 +644,14 @@ def run_node(server_ip, server_port, player_id, node_index,
                             orbit_phase = math.atan2(y, x) if abs(x) > 0.01 or abs(y) > 0.01 else angle
                             have_authoritative_state = False
                             last_authoritative_state_at = 0.0
+                        continue
+                    if pkt_type == PKT_MAP:
+                        width, height, tile_scale, tiles = unpack_map_packet(data)
+                        map_state["width"] = width
+                        map_state["height"] = height
+                        map_state["tile_scale"] = tile_scale
+                        map_state["tiles"] = tiles
+                        print(f"{tag} loaded server map {width}x{height} tile_scale={tile_scale}")
                         continue
                     if pkt_type == PKT_GAME_STATE:
                         _, _, _, _, players, _ = unpack_server_packet(data)

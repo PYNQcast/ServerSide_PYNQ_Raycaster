@@ -23,6 +23,7 @@ PKT_REGISTER     = 0x0020   # node  → server: first contact, triggers ACK
                              #   optional trailer after the 24-byte NodePacket:
                              #   username_len (1 byte) + UTF-8 username bytes
 PKT_ACK          = 0x0030   # server → node:  confirms registration
+PKT_MAP          = 0x0040   # server → node:  map dimensions + tile bytes
 PKT_BITS_INIT    = 0x0050   # server → node:  bit positions, sent once at match start
                              #   header (8 bytes) + count (1 byte) + N × BitEntry (9 bytes each)
 
@@ -108,6 +109,11 @@ PLAYER_FMT  = '<BfffB'
 PLAYER_SIZE = struct.calcsize(PLAYER_FMT)
 assert PLAYER_SIZE == 14, f"PlayerEntry must be 14 bytes, got {PLAYER_SIZE}"
 
+# MapHeader (follows the 8-byte ServerPacketHeader in a PKT_MAP packet): 4 bytes
+MAP_HEADER_FMT  = '<BBBx'
+MAP_HEADER_SIZE = struct.calcsize(MAP_HEADER_FMT)
+assert MAP_HEADER_SIZE == 4, f"MapHeader must be 4 bytes, got {MAP_HEADER_SIZE}"
+
 # PKT_GAME_STATE extension header (precedes player entries): 4 bytes
 #   game_mode (B) + player_count (B) + bits_mask (H)
 
@@ -144,6 +150,13 @@ def unpack_bits_init_packet(data):
         bits.append((bit_id, x, y))
         offset += BIT_ENTRY_SIZE
     return bits
+
+
+def pack_map_packet(seq, width, height, tile_scale, tiles):
+    timestamp = int(time.time() * 1000) & 0xFFFFFFFF
+    header = struct.pack(HEADER_FMT, PKT_MAP, seq & 0xFFFF, timestamp)
+    map_hdr = struct.pack(MAP_HEADER_FMT, width & 0xFF, height & 0xFF, tile_scale & 0xFF)
+    return header + map_hdr + bytes(tiles)
 
 # Pack a NodePacket for sending to the server — returns 24 bytes ready for sendto()
 def pack_node_packet(pkt_type, seq, x, y, angle, flags=0,
@@ -287,3 +300,12 @@ def unpack_server_packet(data):
         return pkt_type, seq, timestamp, game_mode, players, bits_mask
     players = unpack_player_entries(payload)
     return pkt_type, seq, timestamp, GAME_MODE_CHASE, players, 0xFFFF
+
+
+def unpack_map_packet(data):
+    if len(data) < HEADER_SIZE + MAP_HEADER_SIZE:
+        raise ValueError(f"PKT_MAP too short: {len(data)} bytes")
+    width, height, tile_scale = struct.unpack_from(MAP_HEADER_FMT, data, HEADER_SIZE)
+    tile_start = HEADER_SIZE + MAP_HEADER_SIZE
+    tiles = bytearray(data[tile_start : tile_start + width * height])
+    return width, height, tile_scale, tiles
