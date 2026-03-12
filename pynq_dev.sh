@@ -21,6 +21,7 @@ EC2_IP="3.9.71.204"
 EC2="ubuntu@${EC2_IP}"
 REPO="$(cd "$(dirname "$0")" && pwd)"
 KEY="$REPO/raycastpair.pem"
+SSH_OPTS="-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3"
 
 if [ -t 1 ]; then
   CLR_RESET=$'\033[0m'
@@ -167,12 +168,16 @@ build_monitor_ui() {
   npm -C "$REPO" run build:monitor-ui
 }
 
+check_ec2_access() {
+  ssh $SSH_OPTS -i "$KEY" "$EC2" 'echo [ssh] ec2 reachable'
+}
+
 stop_remote_services() {
-  ssh -i "$KEY" "$EC2" 'printf "#!/bin/bash\npkill -f server.py 2>/dev/null; pkill -f sidecar.py 2>/dev/null; pkill -f monitor.py 2>/dev/null; fuser -k 8080/tcp 2>/dev/null; true\n" > /tmp/_stop_pynq.sh && bash /tmp/_stop_pynq.sh'
+  ssh $SSH_OPTS -i "$KEY" "$EC2" 'printf "#!/bin/bash\npkill -f server.py 2>/dev/null; pkill -f sidecar.py 2>/dev/null; pkill -f monitor.py 2>/dev/null; fuser -k 8080/tcp 2>/dev/null; true\n" > /tmp/_stop_pynq.sh && bash /tmp/_stop_pynq.sh'
 }
 
 sync_remote_repo() {
-  ssh -i "$KEY" "$EC2" 'cd ~/ServerSide_PYNQ_Raycaster && git fetch origin && git reset --hard origin/main'
+  ssh $SSH_OPTS -i "$KEY" "$EC2" 'cd ~/ServerSide_PYNQ_Raycaster && git fetch origin && git reset --hard origin/main'
 }
 
 create_tmux_session() {
@@ -197,17 +202,17 @@ build_layout() {
 
 wire_service_panes() {
   tmux select-pane -t "$SESSION:0.0" -T "pynq server"
-  tmux send-keys -t "$SESSION:0.0" "clear; printf '\033[1;38;5;201m%s\033[0m\n' 'PYNQ SERVER'; printf '\033[2m%s\033[0m\n' 'pynq_full/ec2/server/server.py'; printf '\033[36m● %s\033[0m\n\n' 'Connecting to EC2 and starting server...'; ssh -t -i '$KEY' '$EC2' 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster/pynq_full/ec2/server && python3 server.py'" Enter
+  tmux send-keys -t "$SESSION:0.0" "clear; printf '\033[1;38;5;201m%s\033[0m\n' 'PYNQ SERVER'; printf '\033[2m%s\033[0m\n' 'pynq_full/ec2/server/server.py'; printf '\033[36m● %s\033[0m\n\n' 'Connecting to EC2 and starting server...'; ssh $SSH_OPTS -t -i \"$KEY\" \"$EC2\" 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster/pynq_full/ec2/server && python3 server.py'" Enter
 
   tmux select-pane -t "$SESSION:0.1" -T "sidecar"
-  tmux send-keys -t "$SESSION:0.1" "clear; printf '\033[1;38;5;201m%s\033[0m\n' 'SIDECAR'; printf '\033[2m%s\033[0m\n' 'sidecar/sidecar.py'; printf '\033[36m● %s\033[0m\n\n' 'Connecting to EC2 and starting sidecar...'; ssh -t -i '$KEY' '$EC2' 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster/sidecar && python3 sidecar.py'" Enter
+  tmux send-keys -t "$SESSION:0.1" "clear; printf '\033[1;38;5;201m%s\033[0m\n' 'SIDECAR'; printf '\033[2m%s\033[0m\n' 'sidecar/sidecar.py'; printf '\033[36m● %s\033[0m\n\n' 'Connecting to EC2 and starting sidecar...'; ssh $SSH_OPTS -t -i \"$KEY\" \"$EC2\" 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster/sidecar && python3 sidecar.py'" Enter
 
   # Monitor: SSH tunnel + start on EC2, wait for port 8080, then tail log.
   tmux select-pane -t "$SESSION:0.2" -T "monitor :8080"
-  tmux send-keys -t "$SESSION:0.2" "clear; printf '\033[1;38;5;201m%s\033[0m\n' 'MONITOR TUNNEL'; printf '\033[2m%s\033[0m\n' 'local :8080 -> EC2 :8080'; printf '\033[36m● %s\033[0m\n\n' 'Opening SSH tunnel and waiting for monitor...'; fuser -k 8080/tcp 2>/dev/null || true; ssh -t -i '$KEY' -L 0.0.0.0:8080:localhost:8080 '$EC2' 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster/pynq_full/ec2/monitor && nohup python3 monitor.py > /tmp/monitor.log 2>&1 & until nc -z localhost 8080 2>/dev/null; do sleep 0.2; done && echo [monitor] port 8080 ready && tail -f /tmp/monitor.log'" Enter
+  tmux send-keys -t "$SESSION:0.2" "clear; printf '\033[1;38;5;201m%s\033[0m\n' 'MONITOR TUNNEL'; printf '\033[2m%s\033[0m\n' 'local :8080 -> EC2 :8080'; printf '\033[36m● %s\033[0m\n\n' 'Opening SSH tunnel and waiting for monitor...'; fuser -k 8080/tcp 2>/dev/null || true; ssh $SSH_OPTS -o ExitOnForwardFailure=yes -t -i \"$KEY\" -L 0.0.0.0:8080:localhost:8080 \"$EC2\" 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster/pynq_full/ec2/monitor && nohup python3 monitor.py > /tmp/monitor.log 2>&1 & until nc -z localhost 8080 2>/dev/null; do sleep 0.2; done && echo [monitor] port 8080 ready && tail -f /tmp/monitor.log'" Enter
 
   tmux select-pane -t "$SESSION:0.3" -T "redis stats"
-  tmux send-keys -t "$SESSION:0.3" "clear; printf '\033[1;38;5;171m%s\033[0m\n' 'REDIS STATS'; printf '\033[2m%s\033[0m\n' 'redis-cli --stat'; printf '\033[36m● %s\033[0m\n\n' 'Connecting to EC2 Redis telemetry...'; ssh -t -i '$KEY' '$EC2' 'redis-cli --stat'" Enter
+  tmux send-keys -t "$SESSION:0.3" "clear; printf '\033[1;38;5;171m%s\033[0m\n' 'REDIS STATS'; printf '\033[2m%s\033[0m\n' 'redis-cli --stat'; printf '\033[36m● %s\033[0m\n\n' 'Connecting to EC2 Redis telemetry...'; ssh $SSH_OPTS -t -i \"$KEY\" \"$EC2\" 'redis-cli --stat'" Enter
 }
 
 open_monitor_browser() {
@@ -240,6 +245,7 @@ section "Preflight"
 log_ok "SSH key found"
 require_cmds tmux ssh git fuser nc hostname awk npm
 log_ok "Dependencies available (tmux, ssh, git, fuser, nc, npm)"
+run_step "Checking EC2 SSH reachability" check_ec2_access || die "EC2 SSH check failed"
 run_step "Building shared React monitor bundle" build_monitor_ui || die "Failed building monitor_ui bundle"
 ensure_clean_git || exit 1
 log_ok "Git state is clean and pushed"
