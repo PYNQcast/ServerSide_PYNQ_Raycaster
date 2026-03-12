@@ -129,6 +129,11 @@ function requestNodeMode(nodeId, mode, force = false) {
   updateNodeLinks(latestState?.players || []);
 }
 
+function requestNodeConnection(nodeId, action) {
+  const verb = action === 'disconnect' ? 'disconnect' : 'reconnect';
+  sendControl(`node${nodeId}_${verb}`, `node ${nodeId} ${verb}`);
+}
+
 function enforceMapManualModes() {
   requestNodeMode(1, 'manual', true);
   requestNodeMode(2, 'manual', true);
