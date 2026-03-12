@@ -86,9 +86,16 @@ export default function MapToolbar({
             >
               Spawns
             </button>
+            <button
+              className={`control-btn${tool === 'bits' ? ' start' : ''}`}
+              type="button"
+              onClick={() => onToolChange('bits')}
+            >
+              Bits
+            </button>
           </div>
           <div className="metric-note">
-            Brush uses left-drag for walls and right-drag for erase. Spawns place P1 then P2 on empty tiles only.
+            Brush uses left-drag for walls and right-drag for erase. Spawns place P1 then P2 on empty tiles only. Bits toggle collectible anchors on empty tiles.
           </div>
         </div>
 

@@ -40,7 +40,7 @@ function describeValidation(grid, spawns, markers) {
   if (markers.length) {
     return {
       canPush: true,
-      message: `Ready. ${markers.length} runtime marker${markers.length === 1 ? '' : 's'} will be preserved on save.`,
+      message: `Ready. ${markers.length} bit marker${markers.length === 1 ? '' : 's'} will be preserved on save.`,
     };
   }
   return {
@@ -337,9 +337,9 @@ export default function MapEditorTab() {
           <div className="hud-sub">required before push live</div>
         </div>
         <div className="panel-raised player-overview-card">
-          <div className="hud-label">Preserved Markers</div>
+          <div className="hud-label">Bit Markers</div>
           <div className="player-overview-value">{overview.markerCount}</div>
-          <div className="hud-sub">runtime entities such as bit anchors</div>
+          <div className="hud-sub">collectible anchors in the current draft</div>
         </div>
         <div className="panel-raised player-overview-card">
           <div className="hud-label">Live Map</div>
