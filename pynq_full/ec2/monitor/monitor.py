@@ -18,6 +18,18 @@ from aiohttp import web
 from boto3.dynamodb.conditions import Key
 from decimal import Decimal
 
+REPO_ROOT    = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from monitor_map_store import (
+    MapStorageError,
+    delete_map_entry,
+    list_map_entries,
+    load_map_entry,
+    save_map_entry,
+)
+
 REDIS_HOST   = "127.0.0.1"
 REDIS_PORT   = 6379
 HTTP_PORT    = 8080
@@ -25,11 +37,12 @@ PUSH_RATE_HZ = 20   # push to browser at 20 Hz (match game tick rate)
 DDB_POLL_INTERVAL_S = 2.0
 SERVICE_POLL_INTERVAL_S = 1.0
 REDIS_STATS_POLL_INTERVAL_S = 1.0
+LOBBY_MAP_NAME = "lobby"
 
 DYNAMO_TABLE = "pynq-raycaster-seda-matches"
 PLAYER_TABLE = "pynq-raycaster-players"
+MAP_TABLE    = os.environ.get("MAP_TABLE", "pynq-raycaster-maps").strip()
 AWS_REGION   = "eu-west-2"
-REPO_ROOT    = Path(__file__).resolve().parents[3]
 MAPS_DIR     = REPO_ROOT / "pynq_full" / "ec2" / "maps"
 MONITOR_DIR  = Path(__file__).resolve().parent
 LOGO_ASSET_PATHS = {
@@ -67,6 +80,7 @@ SERVICE_SPECS = {
 r     = redislib.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 dyndb = boto3.resource("dynamodb", region_name=AWS_REGION).Table(DYNAMO_TABLE)
 player_dyndb = boto3.resource("dynamodb", region_name=AWS_REGION).Table(PLAYER_TABLE)
+map_dyndb = boto3.resource("dynamodb", region_name=AWS_REGION).Table(MAP_TABLE) if MAP_TABLE else None
 s3    = boto3.client("s3", region_name=AWS_REGION)
 
 # ── DynamoDB poll (slow — every 5s) ───────────────────────────────────────────
@@ -77,11 +91,20 @@ _service_cache  = {}
 _service_last_fetch = 0.0
 _service_message = "controls run on EC2 only; FPGA boards stay connected over UDP"
 _replay_cache = {}
-_active_map = "chase"    # tracks which map the server is using
+_active_map = LOBBY_MAP_NAME    # startup lobby uses a built-in bordered staging room
 _redis_stats_cache = {}
 _redis_stats_last_fetch = 0.0
 _state_cache = {}
 _state_cache_json = "{}"
+
+def _prime_map_state_cache(map_name: str):
+    global _state_cache, _state_cache_json
+    next_map = str(map_name or "").strip() or LOBBY_MAP_NAME
+    merged = dict(_state_cache or {})
+    merged["active_map"] = next_map
+    merged["selected_map"] = next_map
+    _state_cache = merged
+    _state_cache_json = json.dumps(merged)
 
 def _as_int(value, default=0):
     try:
@@ -95,8 +118,16 @@ def _as_float(value, default=0.0):
     except (TypeError, ValueError):
         return default
 
+def _as_optional_int(value):
+    try:
+        if value in ("", None):
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
 def _valid_map_name(value):
-    return isinstance(value, str) and bool(value) and value != "none"
+    return isinstance(value, str) and bool(value) and value not in {"none", LOBBY_MAP_NAME}
 
 
 def _plain_number(value: Decimal):
@@ -310,6 +341,11 @@ def _stop_service(name: str):
 def handle_control_command(cmd: str):
     global _service_message
 
+    def publish_node_mode(board_slot: int, mode: str):
+        payload = json.dumps({"cmd": "set_node_mode", "mode": mode, "board_slot": board_slot})
+        r.publish("game:control", payload)
+        return f"board {board_slot} {mode} mode sent"
+
     if cmd == "force_end":
         r.publish("game:control", json.dumps({"cmd": "force_end"}))
         _service_message = "force_end sent — session will return to the lobby after the end hold"
@@ -320,6 +356,14 @@ def handle_control_command(cmd: str):
         payload = json.dumps({"cmd": "restart"})
         r.publish("game:control", payload)
         _service_message = "restart signal sent to the live server"
+    elif cmd == "node1_auto":
+        _service_message = publish_node_mode(1, "auto")
+    elif cmd == "node1_manual":
+        _service_message = publish_node_mode(1, "manual")
+    elif cmd == "node2_auto":
+        _service_message = publish_node_mode(2, "auto")
+    elif cmd == "node2_manual":
+        _service_message = publish_node_mode(2, "manual")
     elif cmd == "start_server":
         _service_message = _start_service("server")
     elif cmd == "stop_server":
@@ -338,6 +382,7 @@ def handle_control_command(cmd: str):
             payload = json.dumps({"cmd": "set_map", "map": map_name})
             r.publish("game:control", payload)
             _active_map = map_name
+            _prime_map_state_cache(map_name)
             _service_message = f"map set to {map_name} — active players are returned to the lobby on the new map"
     elif cmd.startswith("set_ghosts_"):
         count = int(cmd.split("_")[-1])
@@ -482,11 +527,14 @@ def collect_state():
             "y":               float(raw.get("y", 0)),
             "angle":           float(raw.get("angle", 0)),
             "flags":           int(raw.get("flags", 0)),
+            "board_slot":      _as_optional_int(raw.get("board_slot")),
+            "control_mode":    raw.get("control_mode", "manual") or "manual",
             "username":        raw.get("username", ""),
             "display_name":    raw.get("display_name", ""),
             "profile_key":     raw.get("profile_key", ""),
             "controller_key":  raw.get("controller_key", ""),
             "identity_source": raw.get("identity_source", ""),
+            "sim_slot":        _as_optional_int(raw.get("sim_slot")),
             "is_ghost":        bool(_as_int(raw.get("is_ghost", 0), 0)),
             "queued":          False,
             "queue_slot":      None,
@@ -495,17 +543,28 @@ def collect_state():
     game_raw  = redis_rows[9]
     game_mode = int(game_raw.get("game_mode", 0)) if game_raw else 0
     bits_mask = int(game_raw.get("bits_mask", 0xFFFF)) if game_raw else 0xFFFF
+    selected_map = game_raw.get("selected_map", _active_map) if game_raw else _active_map
     match_started = bool(_as_int(game_raw.get("match_started", 0), 0)) if game_raw else False
     match_ended = bool(_as_int(game_raw.get("match_ended", 0), 0)) if game_raw else False
     match_paused = bool(_as_int(game_raw.get("match_paused", 0), 0)) if game_raw else False
     pause_reason = (game_raw.get("pause_reason") or None) if game_raw else None
     pause_remaining_s = _as_float(game_raw.get("pause_remaining_s"), 0.0) if game_raw else 0.0
     paused_player_ids = []
+    slot_modes = {1: "manual", 2: "manual"}
     if game_raw and game_raw.get("paused_player_ids"):
         try:
             paused_player_ids = json.loads(game_raw["paused_player_ids"])
         except Exception:
             paused_player_ids = []
+    if game_raw and game_raw.get("slot_modes"):
+        try:
+            decoded_slot_modes = json.loads(game_raw["slot_modes"])
+            slot_modes = {
+                1: str(decoded_slot_modes.get("1", decoded_slot_modes.get(1, "manual")) or "manual"),
+                2: str(decoded_slot_modes.get("2", decoded_slot_modes.get(2, "manual")) or "manual"),
+            }
+        except Exception:
+            slot_modes = {1: "manual", 2: "manual"}
     queued_players = []
     if game_raw and game_raw.get("queued_players"):
         try:
@@ -527,11 +586,14 @@ def collect_state():
             "y":               _as_float(raw.get("y"), 0.0),
             "angle":           _as_float(raw.get("angle"), 0.0),
             "flags":           _as_int(raw.get("flags", 0), 0),
+            "board_slot":      _as_optional_int(raw.get("board_slot")) or queue_slot,
+            "control_mode":    raw.get("control_mode", slot_modes.get(queue_slot, "manual")) or slot_modes.get(queue_slot, "manual"),
             "username":        raw.get("username", ""),
             "display_name":    raw.get("display_name", ""),
             "profile_key":     raw.get("profile_key", ""),
             "controller_key":  raw.get("controller_key", ""),
             "identity_source": raw.get("identity_source", ""),
+            "sim_slot":        _as_optional_int(raw.get("sim_slot")),
             "is_ghost":        False,
             "queued":          True,
             "queue_slot":      queue_slot,
@@ -605,6 +667,8 @@ def collect_state():
         "bits":       bits_positions,      # [[world_x, world_y], ...] from match_start
         "bits_mask":  bits_mask,           # bitmask of active bits this tick
         "active_map": active_map,
+        "selected_map": selected_map,
+        "slot_modes": slot_modes,
         "match": {
             "started": match_started,
             "ended": match_ended,
@@ -843,8 +907,16 @@ async def control_handler(request):
 
 async def maps_list_handler(request):
     """GET /api/maps — list all available map names."""
-    names = sorted(p.stem for p in MAPS_DIR.glob("*.txt"))
-    return web.json_response({"maps": names})
+    try:
+        entries = await asyncio.to_thread(list_map_entries, MAPS_DIR, map_dyndb)
+    except MapStorageError as exc:
+        raise web.HTTPBadRequest(text=str(exc))
+    return web.json_response({
+        "maps": [entry["map_id"] for entry in entries],
+        "entries": entries,
+        "active_map": (_state_cache["active_map"] if "active_map" in _state_cache else _active_map),
+        "selected_map": (_state_cache["selected_map"] if "selected_map" in _state_cache else _active_map),
+    })
 
 
 async def map_handler(request):
@@ -852,27 +924,65 @@ async def map_handler(request):
     GET /api/map/level1  → loads maps/level1.txt
     """
     name = request.match_info["name"]
-    # Sanitise: only allow [a-zA-Z0-9_-]
-    if not name.replace("-", "").replace("_", "").isalnum():
-        raise web.HTTPBadRequest(text="invalid map name")
-    path = MAPS_DIR / f"{name}.txt"
-    if not path.exists():
-        raise web.HTTPNotFound(text=f"map not found: {name}")
+    try:
+        payload = await asyncio.to_thread(load_map_entry, MAPS_DIR, name, True, map_dyndb)
+    except MapStorageError as exc:
+        message = str(exc)
+        if message.startswith("map not found:"):
+            raise web.HTTPNotFound(text=message)
+        raise web.HTTPBadRequest(text=message)
+    return web.json_response(payload)
 
-    rows = []
-    for line in path.read_text().splitlines():
-        line = line.rstrip("\r")
-        if not line:
-            continue
-        rows.append([1 if c == "#" else 0 for c in line])
+
+async def map_save_handler(request):
+    try:
+        data = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text="invalid map payload")
+
+    apply_map = bool(data.get("apply"))
+    try:
+        payload = await asyncio.to_thread(save_map_entry, MAPS_DIR, data, map_dyndb)
+        if apply_map and len(payload.get("spawns", [])) < 2:
+            raise MapStorageError("pushing live requires two spawn points")
+        if apply_map:
+            await asyncio.to_thread(handle_control_command, f"set_map:{payload['map_id']}")
+    except MapStorageError as exc:
+        raise web.HTTPBadRequest(text=str(exc))
+    except Exception as exc:
+        print(f"[monitor] map save error: {exc}")
+        raise web.HTTPInternalServerError(text="failed to save map")
 
     return web.json_response({
-        "name": name,
-        "width": len(rows[0]) if rows else 0,
-        "height": len(rows),
-        "tile_scale": 8,
-        "tiles": rows,
+        "ok": True,
+        "map": payload,
+        "applied": apply_map,
+        "message": _service_message if apply_map else f"map '{payload['map_id']}' saved",
     })
+
+
+async def map_delete_handler(request):
+    name = request.match_info["name"]
+    protected = {
+        value
+        for value in (
+            _state_cache.get("active_map"),
+            _state_cache.get("selected_map"),
+            _active_map,
+        )
+        if _valid_map_name(value)
+    }
+    try:
+        payload = await asyncio.to_thread(delete_map_entry, MAPS_DIR, name, protected, map_dyndb)
+    except MapStorageError as exc:
+        message = str(exc)
+        if message.startswith("map not found:"):
+            raise web.HTTPNotFound(text=message)
+        raise web.HTTPBadRequest(text=message)
+    except Exception as exc:
+        print(f"[monitor] map delete error for {name}: {exc}")
+        raise web.HTTPInternalServerError(text="failed to delete map")
+    return web.json_response({"ok": True, **payload})
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
@@ -893,7 +1003,9 @@ async def main():
     app.router.add_get("/api/players/{player_key}", player_handler)
     app.router.add_post("/api/control", control_handler)
     app.router.add_get("/api/maps", maps_list_handler)
+    app.router.add_post("/api/maps", map_save_handler)
     app.router.add_get("/api/map/{name}", map_handler)
+    app.router.add_delete("/api/maps/{name}", map_delete_handler)
     await asyncio.to_thread(refresh_state_cache)
     app["state_cache_task"] = asyncio.create_task(state_cache_loop())
 

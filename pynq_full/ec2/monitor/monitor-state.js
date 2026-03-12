@@ -13,11 +13,22 @@ const FLAG_MATCH_END = 0x04;
 const MAP_VIEW_PAD  = 24;
 const PLAYER_COLOURS = ['#00ff88', '#00d4ff', '#ffaa00', '#ff6688'];
 const FLAG_GHOST     = 0x08;
+const LOBBY_MAP_NAME = 'lobby';
 
 // ── Map state ──────────────────────────────────────────────────────────────
 let mapData = null;   // { width, height, tile_scale, tiles: [[0|1, ...], ...] }
 let _availableMaps = [];
-let _activeMapName = 'chase';
+let _activeMapName = LOBBY_MAP_NAME;
+let _selectedMapName = LOBBY_MAP_NAME;
+let _pendingMapName = '';
+let _pendingMapRequestedAt = 0;
+let _mapFilterText = '';
+let _lastMapButtonsSignature = '';
+const _mapPayloadCache = new Map();
+const _mapLoadPromises = new Map();
+let _mapLoadRequestId = 0;
+let _mapListPromise = null;
+let _mapListRefreshTimer = 0;
 let _activePage = 'game';
 let _archiveDrawerOpen = false;
 const frameTimeHistory = [];
@@ -27,18 +38,78 @@ const STACKED_CHART_HEIGHT = 160;
 const stackedFrameBuffer = [];
 let stackedFrameId = 0;
 let lastRenderSampleAt = performance.now();
+const MAP_SELECT_GRACE_MS = 1500;
 
 function isValidMapName(name) {
   return Boolean(name) && name !== 'none';
 }
 
-async function loadMap(name = 'chase') {
-  if (!isValidMapName(name)) return;
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function normaliseMapEntry(entry) {
+  const mapId = String(entry?.map_id || entry?.name || entry || '').trim();
+  if (!mapId) return null;
+  return {
+    map_id: mapId,
+    map_name: String(entry?.map_name || mapId).trim() || mapId,
+    source: String(entry?.source || 'system').trim() || 'system',
+    deletable: Boolean(entry?.deletable),
+  };
+}
+
+function cloneCachedMapPayload(name, payload) {
+  return { ...payload, name };
+}
+
+function invalidateMapCache(name) {
+  if (name) {
+    const targetName = String(name);
+    _mapPayloadCache.delete(targetName);
+    if (mapData?.name === targetName) {
+      mapData = null;
+    }
+    return;
+  }
+  _mapPayloadCache.clear();
+  mapData = null;
+}
+
+async function loadMap(name = _activeMapName, options = {}) {
+  const { force = false } = options;
+  if (!name || name === 'none') return;
+  const requestId = ++_mapLoadRequestId;
+  const cachedPayload = !force ? _mapPayloadCache.get(name) : null;
+  if (cachedPayload) {
+    if (requestId !== _mapLoadRequestId) return;
+    mapData = cloneCachedMapPayload(name, cachedPayload);
+    updateCanvasLabel();
+    return;
+  }
   try {
-    const resp = await fetch(`/api/map/${encodeURIComponent(name)}`);
-    if (!resp.ok) return;
-    mapData = await resp.json();
-    mapData.name = name;
+    let payloadPromise = _mapLoadPromises.get(name);
+    if (!payloadPromise || force) {
+      payloadPromise = fetch(`/api/map/${encodeURIComponent(name)}`)
+        .then(async (resp) => {
+          if (!resp.ok) throw new Error(`map load failed (${resp.status})`);
+          const payload = await resp.json();
+          _mapPayloadCache.set(name, payload);
+          return payload;
+        })
+        .finally(() => {
+          _mapLoadPromises.delete(name);
+        });
+      _mapLoadPromises.set(name, payloadPromise);
+    }
+    const payload = await payloadPromise;
+    if (requestId !== _mapLoadRequestId) return;
+    mapData = cloneCachedMapPayload(name, payload);
     updateCanvasLabel();
   } catch (e) {
     console.warn('[monitor] map load failed:', e);
@@ -46,25 +117,108 @@ async function loadMap(name = 'chase') {
 }
 
 async function loadMapList() {
+  if (_mapListPromise) return _mapListPromise;
+  _mapListPromise = (async () => {
   try {
     const resp = await fetch('/api/maps');
     if (!resp.ok) return;
     const data = await resp.json();
-    _availableMaps = data.maps || [];
+    const rawEntries = Array.isArray(data.entries) && data.entries.length
+      ? data.entries
+      : (data.maps || []);
+    _availableMaps = rawEntries.map(normaliseMapEntry).filter(Boolean);
     renderMapButtons();
+    updateMapSelector(
+      data.active_map,
+      Object.prototype.hasOwnProperty.call(data, 'selected_map')
+        ? data.selected_map
+        : data.active_map,
+    );
   } catch (e) {
     console.warn('[monitor] map list load failed:', e);
   }
+  })().finally(() => {
+    _mapListPromise = null;
+  });
+  return _mapListPromise;
+}
+
+function requestMapListRefresh(delayMs = 0) {
+  if (_mapListRefreshTimer) {
+    window.clearTimeout(_mapListRefreshTimer);
+    _mapListRefreshTimer = 0;
+  }
+  return new Promise((resolve) => {
+    _mapListRefreshTimer = window.setTimeout(() => {
+      _mapListRefreshTimer = 0;
+      loadMapList().finally(resolve);
+    }, Math.max(0, delayMs));
+  });
 }
 
 function renderMapButtons() {
   const el = document.getElementById('map-btn-list');
-  if (!_availableMaps.length) { el.innerHTML = '<span style="color:#333">no maps found</span>'; return; }
-  el.innerHTML = _availableMaps.map(name => `
-    <button id="mapbtn-${name}"
-      class="control-btn${name === _activeMapName ? ' start' : ''}"
-      onclick="selectMap('${name}')">${name}</button>
-  `).join('');
+  if (!el) return;
+  if (!_availableMaps.length) {
+    const emptySignature = 'empty:no-maps';
+    if (_lastMapButtonsSignature === emptySignature) return;
+    el.innerHTML = '<span style="color:#333">no maps found</span>';
+    _lastMapButtonsSignature = emptySignature;
+    return;
+  }
+
+  const filteredMaps = _availableMaps.filter((entry) => (
+    !_mapFilterText
+    || String(entry.map_name || '').toLowerCase().includes(_mapFilterText)
+    || String(entry.map_id || '').toLowerCase().includes(_mapFilterText)
+  ));
+
+  if (!filteredMaps.length) {
+    const emptySignature = `empty:no-filter-match:${_mapFilterText}`;
+    if (_lastMapButtonsSignature === emptySignature) return;
+    el.innerHTML = '<span style="color:#90a3c4">no maps match that filter</span>';
+    _lastMapButtonsSignature = emptySignature;
+    return;
+  }
+
+  const renderedButtons = filteredMaps.map((entry) => {
+    const mapId = entry.map_id;
+    const subtitle = `${entry.map_id} · ${entry.source === 'editor' ? 'editor' : 'system'}`;
+    const deleteAction = entry.deletable
+      ? `<button class="control-btn stop controls-map-delete" type="button" onclick="deleteMapFromControls('${mapId}')">Delete</button>`
+      : `<button class="control-btn controls-map-protected" type="button" disabled>System</button>`;
+    return `
+      <div class="controls-map-entry">
+        <button id="mapbtn-${mapId}"
+          class="control-btn controls-map-select${
+            mapId === _activeMapName
+              ? ' start'
+              : (mapId === _pendingMapName || mapId === _selectedMapName ? ' active-view' : '')
+          }"
+          type="button"
+          onclick="selectMap('${mapId}')">
+          <span class="controls-map-label">${escapeHtml(entry.map_name)}</span>
+          <span class="controls-map-subtitle">${escapeHtml(subtitle)}</span>
+        </button>
+        ${deleteAction}
+      </div>
+    `;
+  }).join('');
+  const nextSignature = [
+    _mapFilterText,
+    _activeMapName,
+    _selectedMapName,
+    _pendingMapName,
+    filteredMaps.map((entry) => `${entry.map_id}:${entry.map_name}:${entry.deletable ? 1 : 0}:${entry.source}`).join('|'),
+  ].join('::');
+  if (_lastMapButtonsSignature === nextSignature) return;
+  el.innerHTML = renderedButtons;
+  _lastMapButtonsSignature = nextSignature;
+}
+
+function setMapFilterText(value) {
+  _mapFilterText = String(value || '').trim().toLowerCase();
+  renderMapButtons();
 }
 
 function updateCanvasLabel() {
@@ -80,9 +234,9 @@ function updateCanvasLabel() {
 }
 
 function setActiveTab(tab) {
-  const target = (tab === 'server' || tab === 'controls' || tab === 'about' || tab === 'players') ? tab : 'game';
+  const target = (tab === 'server' || tab === 'controls' || tab === 'about' || tab === 'players' || tab === 'editor') ? tab : 'game';
   _activePage = target;
-  ['game', 'server', 'controls', 'about', 'players'].forEach((page) => {
+  ['game', 'server', 'controls', 'about', 'players', 'editor'].forEach((page) => {
     const panel = document.getElementById(`page-${page}`);
     const tabBtn = document.getElementById(`tab-${page}`);
     if (panel) panel.hidden = page !== target;
@@ -275,18 +429,72 @@ function updateGameHud(state) {
   setTextIfPresent('server-view-card', `fpga live · ${liveMap}`);
 }
 
-function updateMapSelector(activeMap) {
-  if (!isValidMapName(activeMap) || activeMap === _activeMapName) return;
-  _activeMapName = activeMap;
+function updateMapSelector(activeMap, selectedMap = activeMap) {
+  const incomingActiveMap = String(activeMap || '').trim();
+  const _rawSelectedMap = String(selectedMap || '').trim();
+  const incomingSelectedMap = isValidMapName(_rawSelectedMap) ? _rawSelectedMap : '';
+  const pendingAlive = Boolean(
+    _pendingMapName && (performance.now() - _pendingMapRequestedAt) < MAP_SELECT_GRACE_MS,
+  );
+  const nextActiveMap = (
+    (pendingAlive ? _pendingMapName : '')
+    || incomingActiveMap
+    || _activeMapName
+    || LOBBY_MAP_NAME
+  );
+  const nextSelectedMap = (
+    (pendingAlive ? _pendingMapName : '')
+    || incomingSelectedMap
+    || _selectedMapName
+    || nextActiveMap
+  );
+  const activeChanged = nextActiveMap !== _activeMapName;
+  _activeMapName = nextActiveMap;
+  _selectedMapName = nextSelectedMap;
+  if (_pendingMapName) {
+    const serverAcceptedPending = incomingActiveMap === _pendingMapName || incomingSelectedMap === _pendingMapName;
+    const pendingExpired = !pendingAlive;
+    if (serverAcceptedPending || pendingExpired) {
+      _pendingMapName = '';
+      _pendingMapRequestedAt = 0;
+    }
+  }
   renderMapButtons();
-  loadMap(activeMap);
+  if (!mapData || mapData.name !== _activeMapName || activeChanged) {
+    loadMap(_activeMapName);
+  }
 }
 
 function selectMap(name) {
+  _pendingMapName = name;
+  _pendingMapRequestedAt = performance.now();
   sendControl(`set_map:${name}`, `map → ${name}`);
-  _activeMapName = name;
+  _selectedMapName = name;
   renderMapButtons();
-  loadMap(name);
+}
+
+async function deleteMapFromControls(mapId) {
+  const entry = _availableMaps.find((candidate) => candidate.map_id === mapId);
+  if (!entry) return;
+  if (!entry.deletable) {
+    window.setServiceNote?.(`map '${mapId}' is protected`);
+    return;
+  }
+  const confirmed = window.confirm(`Delete '${entry.map_name}' (${entry.map_id})?`);
+  if (!confirmed) return;
+  window.setServiceNote?.(`deleting map '${entry.map_id}'...`);
+  try {
+    const response = await fetch(`/api/maps/${encodeURIComponent(entry.map_id)}`, { method: 'DELETE' });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || `HTTP ${response.status}`);
+    }
+    window.invalidateMonitorMapCache?.(entry.map_id);
+    await window.requestMapListRefresh?.(0);
+    window.setServiceNote?.(`deleted map '${entry.map_id}'`);
+  } catch (error) {
+    window.setServiceNote?.(`delete failed: ${error.message || 'request error'}`);
+  }
 }
 
 // ── State ──────────────────────────────────────────────────────────────────
@@ -322,7 +530,13 @@ function normalisePlayers(players) {
     flags: p.flags ?? 0,
     queued: Boolean(p.queued),
     queueSlot: p.queue_slot ?? p.queueSlot ?? null,
+    simSlot: p.sim_slot ?? p.simSlot ?? null,
     displayName: p.display_name ?? p.displayName ?? '',
+    profileKey: p.profile_key ?? p.profileKey ?? '',
+    username: p.username ?? '',
+    controllerKey: p.controller_key ?? p.controllerKey ?? '',
+    boardSlot: p.board_slot ?? p.boardSlot ?? null,
+    controlMode: p.control_mode ?? p.controlMode ?? 'manual',
   }));
 }
 
@@ -340,4 +554,9 @@ function countActiveBits(bitsMask, totalBits) {
 
 // Expose tab/UI functions needed by inline onclick handlers in the template HTML.
 window.setActiveTab = setActiveTab;
+window.setMapFilterText = setMapFilterText;
 window.toggleArchiveDrawer = toggleArchiveDrawer;
+window.deleteMapFromControls = deleteMapFromControls;
+window.loadMapList = loadMapList;
+window.requestMapListRefresh = requestMapListRefresh;
+window.invalidateMonitorMapCache = invalidateMapCache;

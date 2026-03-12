@@ -70,6 +70,7 @@ class RedisIO:
                     "profile_key":     p.get("profile_key", ""),
                     "controller_key":  p.get("controller_key", ""),
                     "identity_source": p.get("identity_source", ""),
+                    "sim_slot":        "" if p.get("sim_slot") is None else int(p.get("sim_slot")),
                     "is_ghost":        int(bool(p["flags"] & FLAG_GHOST)),
                 },
             })
@@ -85,12 +86,14 @@ class RedisIO:
                 "profile_key":     p.get("profile_key", ""),
                 "controller_key":  p.get("controller_key", ""),
                 "identity_source": p.get("identity_source", ""),
+                "sim_slot":        p.get("sim_slot"),
             }
             for queue_slot, p in enumerate(
                 (
                     player for player in sorted(
                         self.state.players.values(),
                         key=lambda player: (
+                            player.get("sim_slot") if player.get("sim_slot") is not None else 999,
                             player.get("controller_key", ""),
                             player.get("display_name", ""),
                             player.get("x", 0.0),
@@ -120,6 +123,10 @@ class RedisIO:
             "pause_remaining_s": "" if pause_remaining_s is None else round(pause_remaining_s, 2),
             "queued_players":    json.dumps(queued_players),
             "map":               self.map_state.get("name", ""),
+            "spawn_positions":   json.dumps([
+                [round(pos[0], 2), round(pos[1], 2)]
+                for pos in (self.map_state.get("spawn_positions") or [])
+            ]),
             "bits": json.dumps([[round(b[0], 2), round(b[1], 2)]
                                  for b in self.state.bits]),
         }

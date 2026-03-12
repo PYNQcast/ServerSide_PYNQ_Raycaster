@@ -21,8 +21,9 @@
       <button id="tab-game" class="nav-tab active" type="button" onclick="setActiveTab('game')">Game View</button>
       <button id="tab-server" class="nav-tab" type="button" onclick="setActiveTab('server')">Server Monitoring</button>
       <button id="tab-controls" class="nav-tab" type="button" onclick="setActiveTab('controls')">Controls &amp; Config</button>
-      <button id="tab-about" class="nav-tab" type="button" onclick="setActiveTab('about')">About</button>
       <button id="tab-players" class="nav-tab" type="button" onclick="setActiveTab('players')">Player Stats</button>
+      <button id="tab-editor" class="nav-tab" type="button" onclick="setActiveTab('editor')">Map Editor</button>
+      <button id="tab-about" class="nav-tab" type="button" onclick="setActiveTab('about')">About</button>
     </nav>
     <div class="top-status">
       <span id="status" class="disconnected">● DISCONNECTED</span>
@@ -409,19 +410,21 @@
       <div class="section-label">Controls &amp; Config</div>
 
       <div class="controls-grid">
-        <div class="panel-raised controls-actions">
+        <div class="panel-raised controls-actions scroll-panel">
           <div class="panel-head">
             <h2>EC2 Service Controls</h2>
             <span class="micro-chip">services</span>
           </div>
-          <div class="control-stack">
-            <button class="control-btn start" type="button" onclick="sendControl('start_server', 'start server')">Start Server</button>
-            <button class="control-btn stop" type="button" onclick="sendControl('stop_server', 'stop server')">Stop Server</button>
-            <button class="control-btn start" type="button" onclick="sendControl('start_sidecar', 'start sidecar')">Start Sidecar</button>
-            <button class="control-btn stop" type="button" onclick="sendControl('stop_sidecar', 'stop sidecar')">Stop Sidecar</button>
-            <button class="control-btn restart" type="button" onclick="sendControl('restart_stack', 'restart stack')">Restart Stack</button>
+          <div class="scroll-panel-body">
+            <div class="control-stack">
+              <button class="control-btn start" type="button" onclick="sendControl('start_server', 'start server')">Start Server</button>
+              <button class="control-btn stop" type="button" onclick="sendControl('stop_server', 'stop server')">Stop Server</button>
+              <button class="control-btn start" type="button" onclick="sendControl('start_sidecar', 'start sidecar')">Start Sidecar</button>
+              <button class="control-btn stop" type="button" onclick="sendControl('stop_sidecar', 'stop sidecar')">Stop Sidecar</button>
+              <button class="control-btn restart" type="button" onclick="sendControl('restart_stack', 'restart stack')">Restart Stack</button>
+            </div>
+            <div class="metric-note" id="svc-note">controls run on EC2 only; FPGA boards stay connected over UDP</div>
           </div>
-          <div class="metric-note" id="svc-note">controls run on EC2 only; FPGA boards stay connected over UDP</div>
         </div>
 
         <div class="panel-raised controls-sim">
@@ -429,7 +432,19 @@
             <h2>Match Config</h2>
             <span class="micro-chip">fpga live</span>
           </div>
-          <div>
+          <div class="panel-body-stack">
+            <div class="metric-note">Board Runtime Modes</div>
+            <div class="metric-note">Use auto/manual live to let one board act as the AI role during demos without restarting the client script.</div>
+            <div class="metric-note" style="margin-top:12px;">P1 Board</div>
+            <div class="control-pair">
+              <button class="control-btn start" type="button" onclick="sendControl('node1_auto', 'board 1 auto mode')">P1 Auto</button>
+              <button class="control-btn restart" type="button" onclick="sendControl('node1_manual', 'board 1 manual mode')">P1 Manual</button>
+            </div>
+            <div class="metric-note" style="margin-top:12px;">P2 Board</div>
+            <div class="control-pair">
+              <button class="control-btn start" type="button" onclick="sendControl('node2_auto', 'board 2 auto mode')">P2 Auto</button>
+              <button class="control-btn restart" type="button" onclick="sendControl('node2_manual', 'board 2 manual mode')">P2 Manual</button>
+            </div>
             <div class="metric-note">Server ghost controls add pressure on the EC2 side without changing the board firmware.</div>
             <div class="metric-note" style="margin-top:12px;">Ghost Taggers</div>
             <div class="control-stack">
@@ -438,23 +453,43 @@
               <button class="control-btn" type="button" onclick="sendControl('set_ghosts_2', 'ghost count → 2')">2 Ghosts</button>
               <button class="control-btn" type="button" onclick="sendControl('set_ghosts_3', 'ghost count → 3')">3 Ghosts</button>
             </div>
-            <div class="metric-note" style="margin-top:12px;">Map Selection</div>
-            <div class="control-stack" id="map-btn-list">
+            <div class="metric-note">Match controls stay fixed here so the admin deck does not jump around while you search long map catalogs.</div>
+          </div>
+        </div>
+
+        <div class="panel-raised controls-maps scroll-panel">
+          <div class="panel-head">
+            <h2>Hot Swap Maps</h2>
+            <span class="micro-chip">search + load</span>
+          </div>
+          <div class="scroll-panel-body">
+            <input
+              id="map-filter-input"
+              class="control-search-input"
+              type="text"
+              spellcheck="false"
+              placeholder="filter maps by name"
+              oninput="setMapFilterText(this.value)"
+            >
+            <div class="metric-note">Search runtime-safe maps, then hot-swap the selected arena onto the live server.</div>
+            <div class="control-stack controls-map-list" id="map-btn-list">
               <span style="color:#90a3c4">loading maps...</span>
             </div>
             <div class="metric-note">Map changes publish to the live server and take effect on the next match reset.</div>
           </div>
         </div>
 
-        <div class="panel-raised controls-notes">
+        <div class="panel-raised controls-notes scroll-panel">
           <div class="panel-head">
             <h2>Operator Notes</h2>
             <span class="micro-chip">quick guide</span>
           </div>
-          <div class="note-list">
-            <div class="metric-note">Game View keeps the FPGA arena, player state, replay drawer, and browser-side timing together in one place.</div>
-            <div class="metric-note">Server Monitoring is the EC2 ops deck: service health, SEDA flow, Redis, warm/cold storage, and the stacked frame profiler.</div>
-            <div class="metric-note">Controls &amp; Config only changes server-side match state. Board-side firmware and transport behavior still live in the PYNQ clients.</div>
+          <div class="scroll-panel-body">
+            <div class="note-list">
+              <div class="metric-note">Game View keeps the FPGA arena, player state, replay drawer, and browser-side timing together in one place.</div>
+              <div class="metric-note">Server Monitoring is the EC2 ops deck: service health, SEDA flow, Redis, warm/cold storage, and the stacked frame profiler.</div>
+              <div class="metric-note">Controls &amp; Config only changes server-side match state. Board-side firmware and transport behavior still live in the PYNQ clients.</div>
+            </div>
           </div>
         </div>
       </div>
@@ -488,6 +523,11 @@
     <section id="page-players" class="page player-stats-page" hidden>
       <div class="section-label">Player Stats</div>
       <div id="player-stats-react-slot"></div>
+    </section>
+
+    <section id="page-editor" class="page map-editor-page" hidden>
+      <div class="section-label">Map Editor</div>
+      <div id="map-editor-react-slot"></div>
     </section>
   </main>
 </div>
