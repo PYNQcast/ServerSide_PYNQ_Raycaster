@@ -1,5 +1,5 @@
 #!/bin/bash
-# sim_dev.sh : open a 6-pane tmux session for the sim_full ec2/ stack
+# sim_dev2.sh : open a 6-pane tmux session for the sim_full ec2/ stack
 #
 # Layout:
 #   ┌────────────────┬────────────┬────────────┐  (50% height)
@@ -9,10 +9,11 @@
 #   └────────────────┴─────────────┴───────────┘
 #
 # Monitor (sim_full/ec2/monitor/monitor.py) runs on EC2 port 8080.
-# SSH tunnel in the monitor pane forwards it to http://localhost:8080
+# Port 8080 is forwarded via a dedicated background SSH tunnel (same pattern as
+# the Redis tunnel) so the tunnel lifetime is decoupled from the log-tail session.
 # Shared React monitor bundle is built locally into monitor_ui/dist before sync.
 #
-# Usage: ./sim_dev.sh  (from repo root)
+# Usage: ./sim_dev2.sh  (from repo root)
 # Requires: tmux, SSH key at repo root raycastpair.pem
 # For pynq_full stack: ./pynq_dev.sh
 
@@ -143,7 +144,7 @@ ensure_clean_git() {
   if ! git -C "$REPO" diff --quiet || ! git -C "$REPO" diff --cached --quiet; then
     log_err "Uncommitted changes detected. Commit and push first:"
     git -C "$REPO" status --short
-    echo "    git add -p && git commit -m '...' && git push && ./sim_dev.sh"
+    echo "    git add -p && git commit -m '...' && git push && ./sim_dev2.sh"
     return 1
   fi
 
@@ -152,7 +153,7 @@ ensure_clean_git() {
   if [ "${unpushed:-0}" -gt 0 ]; then
     log_err "$unpushed unpushed commit(s) — EC2 sync would miss them:"
     git -C "$REPO" log --oneline @{u}..HEAD
-    echo "    git push && ./sim_dev.sh"
+    echo "    git push && ./sim_dev2.sh"
     return 1
   fi
 
@@ -210,20 +211,27 @@ build_layout() {
 wire_service_panes() {
   # Auto-start EC2 services (server -> sidecar -> monitor) then leave node sims ready to run manually.
   tmux select-pane -t "$SESSION:0.0" -T "seda server"
-  tmux send-keys -t "$SESSION:0.0" "clear; printf '\033[1;38;5;45m%s\033[0m\n' 'SEDA SERVER'; printf '\033[2m%s\033[0m\n' 'sim_full/ec2/server/server.py'; printf '\033[36m● %s\033[0m\n\n' 'Connecting to EC2 and starting server...'; ssh -t -i $KEY $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster/sim_full/ec2/server && python3 server.py'" Enter
+  tmux send-keys -t "$SESSION:0.0" "clear; printf '\033[1;38;5;45m%s\033[0m\n' 'SEDA SERVER'; printf '\033[2m%s\033[0m\n' 'sim_full/ec2/server/server.py'; printf '\033[36m● %s\033[0m\n\n' 'Connecting to EC2 and starting server...'; ssh -t -i \"$KEY\" $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster/sim_full/ec2/server && python3 server.py'" Enter
 
   tmux select-pane -t "$SESSION:0.1" -T "sidecar"
-  tmux send-keys -t "$SESSION:0.1" "clear; printf '\033[1;38;5;45m%s\033[0m\n' 'SIDECAR'; printf '\033[2m%s\033[0m\n' 'sidecar/sidecar.py'; printf '\033[36m● %s\033[0m\n\n' 'Connecting to EC2 and starting sidecar...'; ssh -t -i $KEY $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster/sidecar && python3 sidecar.py'" Enter
+  tmux send-keys -t "$SESSION:0.1" "clear; printf '\033[1;38;5;45m%s\033[0m\n' 'SIDECAR'; printf '\033[2m%s\033[0m\n' 'sidecar/sidecar.py'; printf '\033[36m● %s\033[0m\n\n' 'Connecting to EC2 and starting sidecar...'; ssh -t -i \"$KEY\" $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster/sidecar && python3 sidecar.py'" Enter
 
-  # Monitor: start on EC2, poll until port 8080 is bound, then tail log (tunnel via -L).
-  tmux select-pane -t "$SESSION:0.2" -T "monitor :8080"
-  tmux send-keys -t "$SESSION:0.2" "clear; printf '\033[1;38;5;45m%s\033[0m\n' 'MONITOR TUNNEL'; printf '\033[2m%s\033[0m\n' 'local :8080 -> EC2 :8080'; printf '\033[36m● %s\033[0m\n\n' 'Opening SSH tunnel and waiting for monitor...'; fuser -k 8080/tcp 2>/dev/null || true; ssh -t -i $KEY -L 0.0.0.0:8080:localhost:8080 $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster/sim_full/ec2/monitor && nohup python3 monitor.py > /tmp/monitor.log 2>&1 & until nc -z localhost 8080 2>/dev/null; do sleep 0.2; done && echo [monitor] port 8080 ready && tail -f /tmp/monitor.log'" Enter
+  # Monitor: start monitor.py on EC2 and tail its log. Port 8080 tunnel is handled
+  # separately by create_tunnels so the tunnel is not coupled to this SSH session.
+  tmux select-pane -t "$SESSION:0.2" -T "monitor log"
+  tmux send-keys -t "$SESSION:0.2" "clear; printf '\033[1;38;5;45m%s\033[0m\n' 'MONITOR'; printf '\033[2m%s\033[0m\n' 'sim_full/ec2/monitor/monitor.py'; printf '\033[36m● %s\033[0m\n\n' 'Connecting to EC2 and starting monitor...'; ssh -t -i \"$KEY\" $EC2 'source ~/venv/bin/activate && cd ~/ServerSide_PYNQ_Raycaster/sim_full/ec2/monitor && nohup python3 monitor.py > /tmp/monitor.log 2>&1 & until nc -z localhost 8080 2>/dev/null; do sleep 0.2; done && echo [monitor] port 8080 ready && tail -f /tmp/monitor.log'" Enter
 }
 
-create_redis_tunnel() {
+create_tunnels() {
   # Forward local 6380 -> EC2 6379 so node sims can read game:control signals.
+  # Forward local 8080 -> EC2 8080 for the monitor dashboard.
+  # Both use dedicated background connections (like -f -N) so the tunnel lifetime
+  # is independent of the interactive pane sessions — prevents "Broken pipe" drops
+  # caused by tunnel + log-stream contention on the same SSH connection.
   fuser -k 6380/tcp 2>/dev/null || true
-  ssh -f -N -i "$KEY" -L 127.0.0.1:6380:localhost:6379 "$EC2"
+  fuser -k 8080/tcp 2>/dev/null || true
+  ssh -f -N -i "$KEY" -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -L 127.0.0.1:6380:localhost:6379 "$EC2"
+  ssh -f -N -i "$KEY" -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -L 0.0.0.0:8080:localhost:8080 "$EC2"
 }
 
 prepare_node_sim_panes() {
@@ -235,7 +243,7 @@ prepare_node_sim_panes() {
   tmux send-keys -t "$SESSION:0.4" "clear; printf '\033[1;38;5;117m%s\033[0m\n' 'NODE SIM 2'; printf '\033[2m%s\033[0m\n' 'sim_full/interfacing_+_sim/node_simulator.py'; printf '\033[36m● %s\033[0m\n' 'Username: ${SIM2_USERNAME}'; printf '\033[36m● %s\033[0m\n\n' 'Press Enter to launch this simulator.'; cd $REPO && python3 sim_full/interfacing_+_sim/node_simulator.py $EC2_IP 9000 --nodes 1 --node-index 1 --redis-port 6380 --username '${SIM2_USERNAME}'"
 
   tmux select-pane -t "$SESSION:0.5" -T "redis stats"
-  tmux send-keys -t "$SESSION:0.5" "clear; printf '\033[1;38;5;81m%s\033[0m\n' 'REDIS STATS'; printf '\033[2m%s\033[0m\n' 'redis-cli --stat'; printf '\033[36m● %s\033[0m\n\n' 'Connecting to EC2 Redis telemetry...'; ssh -t -i $KEY $EC2 'redis-cli --stat'" Enter
+  tmux send-keys -t "$SESSION:0.5" "clear; printf '\033[1;38;5;81m%s\033[0m\n' 'REDIS STATS'; printf '\033[2m%s\033[0m\n' 'redis-cli --stat'; printf '\033[36m● %s\033[0m\n\n' 'Connecting to EC2 Redis telemetry...'; ssh -t -i \"$KEY\" $EC2 'redis-cli --stat'" Enter
 }
 
 open_monitor_browser() {
@@ -285,7 +293,7 @@ run_step "Building 6-pane layout" build_layout || die "Failed building tmux layo
 
 section "Service Wiring"
 run_step "Starting server/sidecar/monitor panes" wire_service_panes || die "Failed wiring service panes"
-run_step "Opening Redis tunnel (localhost:6380 -> EC2:6379)" create_redis_tunnel || die "Failed opening Redis tunnel"
+run_step "Opening tunnels (6380->Redis, 8080->monitor)" create_tunnels || die "Failed opening tunnels"
 run_step "Preparing node simulator panes" prepare_node_sim_panes || die "Failed preparing simulator panes"
 if ! run_step "Waiting for local monitor HTTP endpoint" wait_for_local_monitor; then
   log_warn "Local monitor endpoint did not report ready before browser launch."
