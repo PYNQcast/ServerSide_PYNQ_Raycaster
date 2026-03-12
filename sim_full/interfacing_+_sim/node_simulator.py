@@ -30,6 +30,7 @@ except ImportError:
 from protocol import (
     # constants
     HEADER_SIZE, PKT_ACK, PKT_GAME_STATE, PKT_MAP, PKT_REGISTER,
+    GAME_MODE_CHASE, GAME_MODE_CHASE_BITS,
     MOVEMENT_MODE_INTENT_WITH_PREDICTION,
     FLAG_SHOOTING, FLAG_TAGGED, FLAG_MATCH_END,
     # functions
@@ -52,6 +53,13 @@ MAP_ROTATION_SPEED_BASE = 0.05
 MAP_ROTATION_SPEED_STEP = 0.06
 MANUAL_TURN_STEP = 0.2
 MANUAL_MOVE_STEP = 4.0
+AUTO_TURN_STEP = 0.22
+AUTO_RUNNER_SPEED = 3.8
+AUTO_TAGGER_SPEED = 4.6
+AUTO_FALLBACK_SPEED = 3.4
+AUTO_RUNNER_EVADE_DISTANCE = 42.0
+AUTO_TAGGER_SHOOT_RANGE = 26.0
+AUTO_TAGGER_SHOOT_ARC = 0.4
 MAP_TILE_SCALE = 8
 PLAYER_COLLISION_RADIUS = 2.5
 SPAWN_CLEARANCE_RADIUS = 3.25
@@ -86,10 +94,13 @@ def load_local_map(name: str):
     width = len(rows[0]) if rows else 0
     height = len(rows)
     tiles = bytearray()
+    bits = []
     spawn_anchors = [None] * len(SPAWN_MARKERS)
     for row_idx, row in enumerate(rows):
         for col_idx, cell in enumerate(row):
             tiles.append(1 if cell == "#" else 0)
+            if cell == "B":
+                bits.append(cell_to_world(col_idx, row_idx, width, height, MAP_TILE_SCALE))
             if cell in SPAWN_MARKERS:
                 spawn_anchors[SPAWN_MARKERS[cell]] = (col_idx, row_idx)
     spawn_positions = build_spawn_positions(width, height, tiles, MAP_TILE_SCALE, spawn_anchors)
@@ -99,6 +110,7 @@ def load_local_map(name: str):
         "height": height,
         "tile_scale": MAP_TILE_SCALE,
         "tiles": tiles,
+        "bits": bits,
         "spawn_positions": spawn_positions,
     }
 
@@ -132,6 +144,32 @@ def parse_spawn_positions_from_game_state(game_state: dict):
     return positions
 
 
+def parse_bits_from_game_state(game_state: dict):
+    raw = game_state.get("bits")
+    if not raw:
+        return []
+    try:
+        decoded = json.loads(raw)
+    except Exception:
+        return []
+    positions = []
+    for item in decoded:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            continue
+        try:
+            positions.append((float(item[0]), float(item[1])))
+        except (TypeError, ValueError):
+            continue
+    return positions
+
+
+def parse_bits_mask_from_game_state(game_state: dict):
+    try:
+        return int(game_state.get("bits_mask", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def orbit_rotation_speed_for_player(player_id: int | None, node_index: int) -> float:
     if player_id == 1:
         return ORBIT_RUNNER_ROTATION_SPEED
@@ -153,6 +191,7 @@ def build_orbit_test_map():
         "height": height,
         "tile_scale": MAP_TILE_SCALE,
         "tiles": bytearray(width * height),
+        "bits": [],
         "spawn_positions": [
             (
                 round(ARENA_RADIUS * math.cos(angle), 2),
@@ -309,6 +348,146 @@ def resolve_move(map_state: dict, current_x: float, current_y: float, desired_x:
     return low_x, low_y
 
 
+def wrap_angle(angle: float) -> float:
+    while angle <= -math.pi:
+        angle += math.pi * 2.0
+    while angle > math.pi:
+        angle -= math.pi * 2.0
+    return angle
+
+
+def turn_towards(current_angle: float, target_angle: float, max_turn_step: float) -> float:
+    delta = wrap_angle(target_angle - current_angle)
+    if delta > max_turn_step:
+        delta = max_turn_step
+    elif delta < -max_turn_step:
+        delta = -max_turn_step
+    return wrap_angle(current_angle + delta)
+
+
+def active_bit_positions(bits, bits_mask):
+    positions = []
+    for index, bit in enumerate(bits or []):
+        if (bits_mask & (1 << index)) == 0:
+            continue
+        positions.append(bit)
+    return positions
+
+
+def compute_evade_target(x: float, y: float, threat_x: float, threat_y: float, distance: float):
+    away_x = x - threat_x
+    away_y = y - threat_y
+    length = math.hypot(away_x, away_y)
+    if length < 0.001:
+        away_x, away_y, length = 1.0, 0.0, 1.0
+    away_x /= length
+    away_y /= length
+    lateral_x = -away_y
+    lateral_y = away_x
+    return (
+        x + away_x * distance + lateral_x * (distance * 0.35),
+        y + away_y * distance + lateral_y * (distance * 0.2),
+    )
+
+
+def choose_auto_objective(x: float, y: float, assigned_player_id, game_mode: int, packet_players, bits, bits_mask: int):
+    players = [
+        player for player in (packet_players or [])
+        if not (player.get("flags", 0) & FLAG_MATCH_END)
+    ]
+    runner = next((player for player in players if player.get("player_id") == 1), None)
+    tagger = next((player for player in players if player.get("player_id") == 2), None)
+
+    if assigned_player_id == 2 and runner:
+        return {
+            "mode": "chase",
+            "target": (float(runner["x"]), float(runner["y"])),
+        }
+
+    if assigned_player_id == 1:
+        if tagger:
+            tagger_dx = float(tagger["x"]) - x
+            tagger_dy = float(tagger["y"]) - y
+            tagger_dist = math.hypot(tagger_dx, tagger_dy)
+            if tagger_dist <= AUTO_RUNNER_EVADE_DISTANCE:
+                return {
+                    "mode": "evade",
+                    "target": compute_evade_target(x, y, float(tagger["x"]), float(tagger["y"]), AUTO_RUNNER_EVADE_DISTANCE),
+                }
+        if game_mode == GAME_MODE_CHASE_BITS:
+            candidates = active_bit_positions(bits, bits_mask)
+            if candidates:
+                target = min(
+                    candidates,
+                    key=lambda bit: (float(bit[0]) - x) ** 2 + (float(bit[1]) - y) ** 2,
+                )
+                return {
+                    "mode": "collect",
+                    "target": (float(target[0]), float(target[1])),
+                }
+        if tagger:
+            return {
+                "mode": "kite",
+                "target": compute_evade_target(x, y, float(tagger["x"]), float(tagger["y"]), AUTO_RUNNER_EVADE_DISTANCE * 0.7),
+            }
+
+    return {"mode": "roam", "target": None}
+
+
+def advance_auto_player(x: float, y: float, angle: float, map_state: dict, assigned_player_id,
+                        game_mode: int, packet_players, bits, bits_mask: int, tick: int, shoot_freq: int):
+    objective = choose_auto_objective(x, y, assigned_player_id, game_mode, packet_players, bits, bits_mask)
+    mode = objective["mode"]
+    target = objective["target"]
+
+    if mode == "chase":
+        move_speed = AUTO_TAGGER_SPEED
+    elif mode in {"evade", "collect", "kite"}:
+        move_speed = AUTO_RUNNER_SPEED
+    else:
+        move_speed = AUTO_FALLBACK_SPEED
+
+    shoot_now = False
+
+    if target is None:
+        desired_x = x + move_speed * math.cos(angle)
+        desired_y = y + move_speed * math.sin(angle)
+        next_x, next_y = resolve_move(map_state, x, y, desired_x, desired_y)
+        if next_x == x and next_y == y:
+            angle = wrap_angle(angle + AUTO_TURN_STEP * 1.5)
+            desired_x = x + move_speed * math.cos(angle)
+            desired_y = y + move_speed * math.sin(angle)
+            next_x, next_y = resolve_move(map_state, x, y, desired_x, desired_y)
+        return next_x, next_y, angle, shoot_now
+
+    desired_angle = math.atan2(target[1] - y, target[0] - x)
+    angle = turn_towards(angle, desired_angle, AUTO_TURN_STEP)
+    desired_x = x + move_speed * math.cos(angle)
+    desired_y = y + move_speed * math.sin(angle)
+    next_x, next_y = resolve_move(map_state, x, y, desired_x, desired_y)
+
+    if next_x == x and next_y == y:
+        left_angle = wrap_angle(angle + AUTO_TURN_STEP * 1.75)
+        right_angle = wrap_angle(angle - AUTO_TURN_STEP * 1.75)
+        left_pos = resolve_move(map_state, x, y, x + move_speed * math.cos(left_angle), y + move_speed * math.sin(left_angle))
+        right_pos = resolve_move(map_state, x, y, x + move_speed * math.cos(right_angle), y + move_speed * math.sin(right_angle))
+        left_progress = (left_pos[0] - target[0]) ** 2 + (left_pos[1] - target[1]) ** 2
+        right_progress = (right_pos[0] - target[0]) ** 2 + (right_pos[1] - target[1]) ** 2
+        if left_pos != (x, y) and (right_pos == (x, y) or left_progress <= right_progress):
+            angle = left_angle
+            next_x, next_y = left_pos
+        elif right_pos != (x, y):
+            angle = right_angle
+            next_x, next_y = right_pos
+
+    if mode == "chase":
+        distance = math.hypot(target[0] - x, target[1] - y)
+        aligned = abs(wrap_angle(desired_angle - angle)) <= AUTO_TAGGER_SHOOT_ARC
+        shoot_now = aligned and distance <= AUTO_TAGGER_SHOOT_RANGE and (tick % shoot_freq == 0)
+
+    return next_x, next_y, angle, shoot_now
+
+
 def spawn_pose(map_state: dict, node_index: int, radius: float):
     positions = map_state.get("spawn_positions", [])
     if node_index < len(positions):
@@ -451,6 +630,10 @@ def run_node(server_ip, server_port, player_id, node_index,
     assigned_player_id = None
     have_authoritative_state = False
     last_authoritative_state_at = 0.0
+    latest_packet_players = []
+    latest_game_mode = GAME_MODE_CHASE
+    latest_bits_mask = 0
+    latest_bit_positions = list(map_state.get("bits", []))
     seq               = 0
     tick              = 0
     normalized_mode = normalize_mode(mode)
@@ -496,10 +679,12 @@ def run_node(server_ip, server_port, player_id, node_index,
         orbit_phase = math.atan2(y, x) if abs(x) > 0.01 or abs(y) > 0.01 else angle
 
     def load_selected_map(next_map: str):
-        nonlocal selected_map_name
+        nonlocal selected_map_name, latest_bit_positions, latest_bits_mask
         nonlocal have_authoritative_state, last_authoritative_state_at
         selected_map_name = next_map
         load_runtime_map()
+        latest_bit_positions = list(map_state.get("bits", []))
+        latest_bits_mask = 0
         have_authoritative_state = False
         last_authoritative_state_at = 0.0
 
@@ -538,6 +723,7 @@ def run_node(server_ip, server_port, player_id, node_index,
 
     def sync_runtime_from_redis():
         nonlocal selected_map_name, x, y, angle, orbit_phase
+        nonlocal latest_bit_positions, latest_bits_mask
         if rc is None:
             return False
         try:
@@ -563,6 +749,12 @@ def run_node(server_ip, server_port, player_id, node_index,
                     x, y, angle = spawn_pose(map_state, node_index, radius)
                     orbit_phase = math.atan2(y, x) if abs(x) > 0.01 or abs(y) > 0.01 else angle
                 changed = True
+        bit_positions = parse_bits_from_game_state(game_state)
+        if "bits" in game_state and list(map_state.get("bits", [])) != list(bit_positions):
+            map_state["bits"] = list(bit_positions)
+            latest_bit_positions = list(bit_positions)
+            changed = True
+        latest_bits_mask = parse_bits_mask_from_game_state(game_state)
         return changed
 
     try:
@@ -633,6 +825,10 @@ def run_node(server_ip, server_port, player_id, node_index,
                 assigned_player_id = None
                 have_authoritative_state = False
                 last_authoritative_state_at = 0.0
+                latest_packet_players = []
+                latest_game_mode = GAME_MODE_CHASE
+                latest_bits_mask = 0
+                latest_bit_positions = list(map_state.get("bits", []))
 
             # ── PLAYING: one tick ─────────────────────────────────────────────
             tick_start = time.time()
@@ -693,7 +889,8 @@ def run_node(server_ip, server_port, player_id, node_index,
                         print(f"{tag} loaded server map {width}x{height} tile_scale={tile_scale}")
                         continue
                     if pkt_type == PKT_GAME_STATE:
-                        _, _, _, _, players, _ = unpack_server_packet(data)
+                        _, _, _, latest_game_mode, players, latest_bits_mask = unpack_server_packet(data)
+                        latest_packet_players = players
                         active_player_id = (
                             assigned_player_id
                             if assigned_player_id is not None and assigned_player_id > 0
@@ -735,6 +932,8 @@ def run_node(server_ip, server_port, player_id, node_index,
             # send position update
             if not have_authoritative_state and assigned_player_id != 0 and normalized_mode != "manual":
                 input_flags = 0
+            elif assigned_player_id == 0 and normalized_mode != "manual":
+                input_flags = 0
             elif normalized_mode == "manual":
                 actions = manual_controller.read_actions() if manual_controller else []
                 x, y, angle, shoot_now = apply_manual_actions(x, y, angle, actions, map_state)
@@ -747,17 +946,20 @@ def run_node(server_ip, server_port, player_id, node_index,
                 angle = orbit_phase + (math.pi / 2.0)
                 input_flags = client_input_flags(shooting=(tick % shoot_freq == 0))
             else:
-                move_speed = radius * map_rotation_speed
-                desired_x = x + move_speed * math.cos(angle)
-                desired_y = y + move_speed * math.sin(angle)
-                next_x, next_y = resolve_move(map_state, x, y, desired_x, desired_y)
-                if next_x == x and next_y == y:
-                    angle += map_rotation_speed * 2.5
-                    desired_x = x + move_speed * math.cos(angle)
-                    desired_y = y + move_speed * math.sin(angle)
-                    next_x, next_y = resolve_move(map_state, x, y, desired_x, desired_y)
-                x, y = next_x, next_y
-                input_flags = client_input_flags(shooting=(tick % shoot_freq == 0))
+                x, y, angle, shoot_now = advance_auto_player(
+                    x,
+                    y,
+                    angle,
+                    map_state,
+                    assigned_player_id,
+                    latest_game_mode,
+                    latest_packet_players,
+                    latest_bit_positions,
+                    latest_bits_mask,
+                    tick,
+                    shoot_freq,
+                )
+                input_flags = client_input_flags(shooting=shoot_now)
 
             pkt = pack_node_packet(
                 0x0001, seq=seq, x=x, y=y, angle=angle, flags=input_flags,
