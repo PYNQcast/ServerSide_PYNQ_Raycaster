@@ -19,7 +19,7 @@ const FLAG_GHOST     = 0x08;
 // ── Map state ──────────────────────────────────────────────────────────────
 let mapData = null;   // { width, height, tile_scale, tiles: [[0|1, ...], ...] }
 let _availableMaps = [];
-let _activeMapName = 'chase';
+let _activeMapName = '';
 let _mapFilterText = '';
 let _showMap = true;  // map play is the default; orbit view is a sim-only test tool
 let _viewMode = 'map';
@@ -35,7 +35,16 @@ const stackedFrameBuffer = [];
 let stackedFrameId = 0;
 let lastRenderSampleAt = performance.now();
 
-async function loadMap(name = 'chase') {
+function hasSelectedMap(name) {
+  return Boolean(String(name || '').trim());
+}
+
+async function loadMap(name = _activeMapName) {
+  if (!hasSelectedMap(name)) {
+    mapData = null;
+    updateCanvasLabel();
+    return;
+  }
   try {
     const resp = await fetch(`/api/map/${encodeURIComponent(name)}`);
     if (!resp.ok) return;
@@ -120,9 +129,12 @@ function syncViewMode(mode) {
   }
   renderViewModeButtons();
   updateOrbitModeControls();
-  if (_showMap && (changed || !mapData || mapData.name !== _activeMapName)) {
+  if (_showMap && hasSelectedMap(_activeMapName) && (changed || !mapData || mapData.name !== _activeMapName)) {
     loadMap(_activeMapName);
   } else {
+    if (_showMap && !hasSelectedMap(_activeMapName)) {
+      mapData = null;
+    }
     updateCanvasLabel();
   }
   updateGameHud(latestState);
@@ -179,15 +191,17 @@ function updateOrbitModeControls() {
 
 function updateCanvasLabel() {
   const el = document.getElementById('canvas-label');
-  if (_showMap && mapData) {
+  if (_showMap && mapData && hasSelectedMap(_activeMapName)) {
     const totalBits = latestState?.bits?.length || 0;
     const remainingBits = countActiveBits(latestState?.bits_mask ?? 0, totalBits);
     const bitText = totalBits ? ` · bits ${remainingBits}/${totalBits}` : '';
     el.textContent = `map play · ${_activeMapName} · ${mapData.width}×${mapData.height} tiles · manual only${bitText}`;
+  } else if (_showMap && !hasSelectedMap(_activeMapName)) {
+    el.textContent = 'lobby staging · no map selected · choose a map, then press Start';
   } else if (_showMap) {
     el.textContent = `map play · ${_activeMapName} · loading map…`;
   } else {
-    const selectedMap = latestState?.selected_map || _activeMapName;
+    const selectedMap = latestState?.selected_map || _activeMapName || 'none';
     el.textContent = `orbit test · selected map ${selectedMap} parked · auto/manual optional · 50u radius`;
   }
 }
@@ -377,8 +391,8 @@ function estimateStateAgeText() {
 function updateGameHud(state) {
   const players = state?.players || [];
   const playerCount = players.length;
-  const parkedMap = state?.selected_map || _activeMapName;
-  const liveMap = state?.active_map || _activeMapName;
+  const parkedMap = state?.selected_map || _activeMapName || 'none';
+  const liveMap = state?.active_map || _activeMapName || 'lobby';
   const mapLabel = _viewMode === 'orbit' ? `${parkedMap} parked` : liveMap;
 
   setTextIfPresent('hud-view-mode', _viewMode === 'orbit' ? 'Orbit Test' : 'Map Play');
@@ -396,7 +410,15 @@ function updateGameHud(state) {
 }
 
 function updateMapSelector(activeMap) {
-  if (!activeMap || activeMap === 'orbit_test' || activeMap === _activeMapName) return;
+  if (activeMap === 'orbit_test') return;
+  if (!hasSelectedMap(activeMap)) {
+    _activeMapName = '';
+    mapData = null;
+    renderMapButtons();
+    updateCanvasLabel();
+    return;
+  }
+  if (activeMap === _activeMapName) return;
   _activeMapName = activeMap;
   renderMapButtons();
   if (_showMap) {
