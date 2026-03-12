@@ -447,7 +447,11 @@ function normalisePlayers(players) {
     flags: p.flags ?? 0,
     queued: Boolean(p.queued),
     queueSlot: p.queue_slot ?? p.queueSlot ?? null,
+    simSlot: p.sim_slot ?? p.simSlot ?? null,
     displayName: p.display_name ?? p.displayName ?? '',
+    profileKey: p.profile_key ?? p.profileKey ?? '',
+    username: p.username ?? '',
+    controllerKey: p.controller_key ?? p.controllerKey ?? '',
   }));
 }
 

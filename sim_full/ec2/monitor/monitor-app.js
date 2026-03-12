@@ -40,8 +40,11 @@ function updateNodeLinks(players) {
   const normalised = normalisePlayers(players);
   [1, 2].forEach((nodeId) => {
     const el = document.getElementById(`node${nodeId}-link`);
-    const activePlayer = normalised.find((player) => player.id === nodeId);
-    const queuedPlayer = normalised.find((player) => player.queued && player.queueSlot === nodeId);
+    const simSlotIndex = nodeId - 1;
+    const activePlayer = normalised.find((player) => !player.queued && player.simSlot === simSlotIndex)
+      || normalised.find((player) => !player.queued && player.id === nodeId);
+    const queuedPlayer = normalised.find((player) => player.queued && player.simSlot === simSlotIndex)
+      || normalised.find((player) => player.queued && player.queueSlot === nodeId);
     const mode = requestedNodeModes[nodeId];
     const statusText = activePlayer ? 'connected' : queuedPlayer ? 'lobby' : 'offline';
     const statusColour = activePlayer ? '#baffd8' : queuedPlayer ? '#7dc3ff' : '#665a8a';

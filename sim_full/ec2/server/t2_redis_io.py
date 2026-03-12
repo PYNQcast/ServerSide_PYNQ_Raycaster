@@ -70,6 +70,7 @@ class RedisIO:
                     "profile_key":     p.get("profile_key", ""),
                     "controller_key":  p.get("controller_key", ""),
                     "identity_source": p.get("identity_source", ""),
+                    "sim_slot":        "" if p.get("sim_slot") is None else int(p.get("sim_slot")),
                     "is_ghost":        int(bool(p["flags"] & FLAG_GHOST)),
                 },
             })
@@ -85,6 +86,7 @@ class RedisIO:
                 "profile_key":     p.get("profile_key", ""),
                 "controller_key":  p.get("controller_key", ""),
                 "identity_source": p.get("identity_source", ""),
+                "sim_slot":        p.get("sim_slot"),
             }
             for queue_slot, p in enumerate(
                 (

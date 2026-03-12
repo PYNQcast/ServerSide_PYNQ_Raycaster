@@ -106,6 +106,14 @@ def _as_float(value, default=0.0):
     except (TypeError, ValueError):
         return default
 
+def _as_optional_int(value):
+    try:
+        if value in ("", None):
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
 
 def _plain_number(value: Decimal):
     if value == value.to_integral_value():
@@ -521,6 +529,7 @@ def collect_state():
             "profile_key":     raw.get("profile_key", ""),
             "controller_key":  raw.get("controller_key", ""),
             "identity_source": raw.get("identity_source", ""),
+            "sim_slot":        _as_optional_int(raw.get("sim_slot")),
             "is_ghost":        bool(_as_int(raw.get("is_ghost", 0), 0)),
             "queued":          False,
             "queue_slot":      None,
@@ -568,6 +577,7 @@ def collect_state():
             "profile_key":     raw.get("profile_key", ""),
             "controller_key":  raw.get("controller_key", ""),
             "identity_source": raw.get("identity_source", ""),
+            "sim_slot":        _as_optional_int(raw.get("sim_slot")),
             "is_ghost":        False,
             "queued":          True,
             "queue_slot":      queue_slot,
