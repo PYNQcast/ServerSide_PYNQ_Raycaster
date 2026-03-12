@@ -18,10 +18,10 @@ function updatePlayers(players) {
     const isQueued = Boolean(p.queued);
     const colour  = isQueued ? '#4da3ff' : (isGhost ? '#555566' : PLAYER_COLOURS[i % PLAYER_COLOURS.length]);
     const tr = document.createElement('tr');
-    const role      = isQueued ? 'queued' : (isGhost ? 'ghost' : (p.id === 1) ? 'runner' : 'tagger');
+    const role      = isQueued ? 'lobby' : (isGhost ? 'ghost' : (p.id === 1) ? 'runner' : 'tagger');
     const roleDetail = isQueued && p.displayName ? ` · ${p.displayName}` : '';
     const roleColour = isQueued ? '#7dc3ff' : (isGhost ? '#666' : (p.id === 1) ? '#888' : '#ffaa00');
-    const statusText = isQueued ? 'WAITING FOR P2' : (tagged ? '★ TAGGED' : (matchEnded ? 'MATCH END' : '—'));
+    const statusText = isQueued ? 'CONNECTED' : (tagged ? '★ TAGGED' : (matchEnded ? 'MATCH END' : '—'));
     const idLabel = isQueued ? `Q${p.queueSlot ?? 0}` : `P${p.id}`;
     tr.innerHTML = `
       <td class="pid" style="color:${colour}">${idLabel}</td>
@@ -40,9 +40,12 @@ function updateNodeLinks(players) {
   const normalised = normalisePlayers(players);
   [1, 2].forEach((nodeId) => {
     const el = document.getElementById(`node${nodeId}-link`);
-    const connected = normalised.some((player) => player.id === nodeId);
-    el.textContent = `${connected ? 'connected' : 'offline'} · fpga`;
-    el.style.color = connected ? '#baffd8' : '#665a8a';
+    const activePlayer = normalised.find((player) => player.id === nodeId);
+    const queuedPlayer = normalised.find((player) => player.queued && player.queueSlot === nodeId);
+    const statusText = activePlayer ? 'connected' : queuedPlayer ? 'lobby' : 'offline';
+    const statusColour = activePlayer ? '#baffd8' : queuedPlayer ? '#7dc3ff' : '#665a8a';
+    el.textContent = `${statusText} · fpga`;
+    el.style.color = statusColour;
   });
 }
 

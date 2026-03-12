@@ -625,21 +625,25 @@ export default function PlayerStatsTab() {
         ...profile,
         live,
         currentRole: currentRoleForPlayer(live),
+        isConnected: Boolean(live),
         isOnline: Boolean(live && !live.queued),
         isQueued: Boolean(live?.queued),
       };
     })
     .sort((left, right) => (
-      Number(right.isOnline) - Number(left.isOnline)
+      Number(right.isConnected) - Number(left.isConnected)
+      || Number(right.isOnline) - Number(left.isOnline)
       || String(right.last_seen_at).localeCompare(String(left.last_seen_at))
     ));
 
   const totals = enrichedProfiles.reduce((acc, profile) => {
     acc.totalWins += profile.total_wins;
     acc.totalBits += profile.total_bits_collected;
+    acc.connectedPlayers += profile.isConnected ? 1 : 0;
     acc.onlinePlayers += profile.isOnline ? 1 : 0;
+    acc.queuedPlayers += profile.isQueued ? 1 : 0;
     return acc;
-  }, { totalWins: 0, totalBits: 0, onlinePlayers: 0 });
+  }, { totalWins: 0, totalBits: 0, connectedPlayers: 0, onlinePlayers: 0, queuedPlayers: 0 });
 
   return (
     <div className="player-stats-shell">
@@ -650,9 +654,9 @@ export default function PlayerStatsTab() {
           <div className="hud-sub">career profiles in DynamoDB</div>
         </div>
         <div className="panel-raised player-overview-card">
-          <div className="hud-label">Live Humans</div>
-          <div className="player-overview-value">{totals.onlinePlayers}</div>
-          <div className="hud-sub">joined from websocket feed</div>
+          <div className="hud-label">Connected Humans</div>
+          <div className="player-overview-value">{totals.connectedPlayers}</div>
+          <div className="hud-sub">{`${totals.onlinePlayers} live · ${totals.queuedPlayers} lobby`}</div>
         </div>
         <div className="panel-raised player-overview-card">
           <div className="hud-label">Career Wins</div>
@@ -741,12 +745,12 @@ export default function PlayerStatsTab() {
                     <div className="player-card-subtitle">{player.player_key}</div>
                   </div>
                   <span className={`player-live-pill ${liveStatus}`}>
-                    {player.isOnline ? `${roleLabel(player.currentRole)} live` : player.isQueued ? 'queued' : 'offline'}
+                    {player.isOnline ? `${roleLabel(player.currentRole)} live` : player.isQueued ? 'lobby' : 'offline'}
                   </span>
                 </button>
 
                 <div className="player-card-summary">
-                  <PlayerTrophy player={player} pageVisible={pageVisible} animated={player.isOnline || selected} />
+                  <PlayerTrophy player={player} pageVisible={pageVisible} animated={player.isConnected || selected} />
 
                   <div className="player-card-metrics">
                     <div className="metric-row"><span>career win rate</span><span>{formatPercent(player.total_wins, totalMatches)}</span></div>
@@ -760,6 +764,8 @@ export default function PlayerStatsTab() {
                     <div className="metric-note">
                       {player.isOnline && player.live
                         ? `Live @ (${formatCoordinate(asNumber(player.live.x))}, ${formatCoordinate(asNumber(player.live.y))}) · ${formatAngle(asNumber(player.live.angle))}`
+                        : player.isQueued
+                          ? 'Connected in lobby · waiting for match start.'
                         : 'No live websocket position for this player right now.'}
                     </div>
                   </div>
