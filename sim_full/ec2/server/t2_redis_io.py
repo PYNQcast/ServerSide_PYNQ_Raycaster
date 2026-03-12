@@ -123,6 +123,10 @@ class RedisIO:
             "pause_remaining_s": "" if pause_remaining_s is None else round(pause_remaining_s, 2),
             "queued_players":    json.dumps(queued_players),
             "map":               self.map_state.get("name", ""),
+            "spawn_positions":   json.dumps([
+                [round(pos[0], 2), round(pos[1], 2)]
+                for pos in (self.map_state.get("spawn_positions") or [])
+            ]),
             "bits": json.dumps([[round(b[0], 2), round(b[1], 2)]
                                  for b in self.state.bits]),
         }

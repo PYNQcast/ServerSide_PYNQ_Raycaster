@@ -144,6 +144,35 @@ def test_sim_state_snapshot_carries_bit_positions():
         assert snapshot["bits"] == [[-4.0, 8.0], [12.0, -16.0]]
 
 
+def test_sim_redis_writes_include_spawn_positions():
+    with sim_import_context():
+        protocol = importlib.import_module("protocol")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+        redis_io_mod = importlib.import_module("t2_redis_io")
+
+        state = match_state_mod.MatchState()
+        state.game_mode = protocol.GAME_MODE_CHASE
+        state.players = {}
+        map_state = {
+            "name": "custom_spawn_map",
+            "spawn_positions": [(-24.0, -24.0), (24.0, 24.0)],
+        }
+
+        write_queue = queue.SimpleQueue()
+        redis_io = redis_io_mod.RedisIO(state, map_state, None, write_queue)
+        redis_io.push_redis_writes(7, 3)
+
+        writes = []
+        while True:
+            try:
+                writes.append(write_queue.get_nowait())
+            except Exception:
+                break
+
+        game_state_write = next(msg for msg in writes if msg.get("key") == "game:state")
+        assert game_state_write["mapping"]["spawn_positions"] == '[[-24.0, -24.0], [24.0, 24.0]]'
+
+
 def test_sim_abort_match_clears_players_and_resets_ids():
     with sim_import_context():
         match_state_mod = importlib.import_module("game_logic.match_state")
