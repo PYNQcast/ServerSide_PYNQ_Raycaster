@@ -45,24 +45,11 @@ function MonitorRoot({ mode }) {
 
   useLayoutEffect(() => {
     const root = rootRef.current;
-    if (!root) return () => {};
+    if (!root) return;
 
-    let rafId = 0;
-    const syncSlots = () => {
-      setAboutSlot(root.querySelector('.about-react-board-slot') || null);
-      setPlayerSlot(root.querySelector('#player-stats-react-slot') || null);
-    };
-
-    syncSlots();
-    rafId = requestAnimationFrame(syncSlots);
-
-    const observer = new MutationObserver(syncSlots);
-    observer.observe(root, { childList: true, subtree: true });
-
-    return () => {
-      cancelAnimationFrame(rafId);
-      observer.disconnect();
-    };
+    // The slots are static — baked into the template HTML. Query once.
+    setAboutSlot(root.querySelector('.about-react-board-slot') || null);
+    setPlayerSlot(root.querySelector('#player-stats-react-slot') || null);
   }, [mode]);
 
   return (
