@@ -360,5 +360,10 @@ function BoardStage({ hostSlot }) {
 export default function PYNQBoard({ portalTarget }) {
   if (!portalTarget) return null;
 
-  return createPortal(<BoardStage hostSlot={portalTarget} />, portalTarget);
+  return createPortal(
+    <div style={{ padding: '1rem', color: 'lime', fontFamily: 'monospace', fontSize: '1.2rem' }}>
+      ✅ PYNQBoard portal working
+    </div>,
+    portalTarget,
+  );
 }
