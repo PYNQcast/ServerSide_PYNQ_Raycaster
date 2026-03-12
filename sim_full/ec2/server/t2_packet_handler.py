@@ -209,7 +209,7 @@ class PacketHandler:
         }
 
         human_count = sum(1 for a in self.state.players if not str(a).startswith("ghost:"))
-        self._send_ack(addr, 0)
+        self._refresh_lobby_queue_positions()
         print(f"[T2] player queued from {addr} (lobby humans={human_count}, ghosts={self._ghost_count()})")
 
     def _human_addrs(self):
@@ -257,6 +257,7 @@ class PacketHandler:
                     if not str(addr).startswith("ghost:") and player.get("player_id", 0) == 0
                 ),
                 key=lambda item: (
+                    item[1].get("sim_slot") if item[1].get("sim_slot") is not None else 999,
                     item[1].get("controller_key", ""),
                     item[1].get("display_name", ""),
                     item[1].get("x", 0.0),
@@ -264,6 +265,24 @@ class PacketHandler:
                 ),
             )
         ]
+
+    def _refresh_lobby_queue_positions(self):
+        self.state.set_spawn_positions(self.map_state.get("spawn_positions", []))
+        for queue_slot, addr in enumerate(self._queued_human_addrs()):
+            player = self.state.players.get(addr)
+            if not player:
+                continue
+            lobby_x, lobby_y, lobby_angle = self._spawn_pose_for_slot(queue_slot)
+            player["player_id"] = 0
+            player["x"] = lobby_x
+            player["y"] = lobby_y
+            player["angle"] = lobby_angle
+            player["flags"] = 0
+            player["last_seq"] = None
+            player["timed_out"] = False
+            player["preferred_role"] = player.get("preferred_role", ROLE_ANY)
+            self.state.pending_roles[addr] = player["preferred_role"]
+            self._send_ack(addr, 0)
 
     def _spawn_pose_for_slot(self, slot_index: int):
         positions = self.state.spawn_positions
@@ -281,19 +300,7 @@ class PacketHandler:
         self.state.reset_match_runtime(arm_lockout=False)
         self.state.set_spawn_positions(self.map_state.get("spawn_positions", []))
 
-        for queue_slot, addr in enumerate(human_addrs):
-            player = self.state.players[addr]
-            lobby_x, lobby_y, lobby_angle = self._spawn_pose_for_slot(queue_slot)
-            player["player_id"] = 0
-            player["x"] = lobby_x
-            player["y"] = lobby_y
-            player["angle"] = lobby_angle
-            player["flags"] = 0
-            player["last_seq"] = None
-            player["timed_out"] = False
-            player["preferred_role"] = player.get("preferred_role", ROLE_ANY)
-            self.state.pending_roles[addr] = player["preferred_role"]
-            self._send_ack(addr, 0)
+        self._refresh_lobby_queue_positions()
 
         for addr, player in self.state.players.items():
             if not str(addr).startswith("ghost:"):
@@ -401,6 +408,7 @@ class PacketHandler:
                 return False, f"node slot {slot_index + 1} missing"
             self.state.pending_roles.pop(addr, None)
             self.write_queue.put({"op": "del", "key": f"player:{player['player_id']}"})
+            self._refresh_lobby_queue_positions()
             print(f"[T2] removed queued lobby player from slot {slot_index + 1}: {addr}")
             return True, f"removed node slot {slot_index + 1} from lobby"
 

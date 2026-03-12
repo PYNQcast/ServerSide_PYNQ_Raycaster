@@ -36,7 +36,7 @@ _MAPS_DIR = os.path.normpath(
     os.path.join(os.path.dirname(__file__), '..', '..', '..', 'pynq_full', 'ec2', 'maps')
 )
 _ORBIT_TEST_MAP_NAME = "orbit_test"
-_LOBBY_MAP_NAME = "__lobby__"
+_LOBBY_MAP_NAME = "lobby"
 
 
 class GameTick:
