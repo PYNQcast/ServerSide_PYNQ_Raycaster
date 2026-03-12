@@ -113,6 +113,25 @@ def desired_runtime_from_game_state(game_state: dict, current_selected_map: str)
     return desired_view, (selected_map or current_selected_map)
 
 
+def parse_spawn_positions_from_game_state(game_state: dict):
+    raw = game_state.get("spawn_positions")
+    if not raw:
+        return []
+    try:
+        decoded = json.loads(raw)
+    except Exception:
+        return []
+    positions = []
+    for item in decoded:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            continue
+        try:
+            positions.append((float(item[0]), float(item[1])))
+        except (TypeError, ValueError):
+            continue
+    return positions
+
+
 def orbit_rotation_speed_for_player(player_id: int | None, node_index: int) -> float:
     if player_id == 1:
         return ORBIT_RUNNER_ROTATION_SPEED
@@ -518,7 +537,7 @@ def run_node(server_ip, server_port, player_id, node_index,
         print(f"{tag} {reason} — disconnected")
 
     def sync_runtime_from_redis():
-        nonlocal selected_map_name
+        nonlocal selected_map_name, x, y, angle, orbit_phase
         if rc is None:
             return False
         try:
@@ -535,6 +554,15 @@ def run_node(server_ip, server_port, player_id, node_index,
             changed = True
         if desired_view != sim_view_mode:
             changed = switch_sim_view(desired_view) or changed
+        spawn_positions = parse_spawn_positions_from_game_state(game_state)
+        if spawn_positions:
+            existing_positions = map_state.get("spawn_positions") or []
+            if list(existing_positions) != list(spawn_positions):
+                map_state["spawn_positions"] = list(spawn_positions)
+                if assigned_player_id in (None, 0):
+                    x, y, angle = spawn_pose(map_state, node_index, radius)
+                    orbit_phase = math.atan2(y, x) if abs(x) > 0.01 or abs(y) > 0.01 else angle
+                changed = True
         return changed
 
     try:
