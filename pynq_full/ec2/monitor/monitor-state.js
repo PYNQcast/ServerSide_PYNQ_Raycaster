@@ -251,17 +251,28 @@ function deriveMatchStateLabel(state) {
   return 'Lobby';
 }
 
+function setTextIfPresent(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
+
+function estimateStateAgeText() {
+  if (wsHz <= 0) return '— ms';
+  return `~${Math.max(1, Math.round(1000 / wsHz))} ms`;
+}
+
 function updateGameHud(state) {
   const players = state?.players || [];
   const playerCount = players.length;
   const liveMap = state?.active_map || _activeMapName;
 
-  document.getElementById('hud-view-mode').textContent = gameModeLabel(state?.game_mode ?? 0);
-  document.getElementById('hud-map-name').textContent = liveMap;
-  document.getElementById('hud-match-state').textContent = deriveMatchStateLabel(state);
-  document.getElementById('hud-player-count').textContent = `${playerCount} entities online`;
-  document.getElementById('hud-ws-rate').textContent = `${wsHz} / s`;
-  document.getElementById('server-view-card').textContent = `fpga live · ${liveMap}`;
+  setTextIfPresent('hud-view-mode', gameModeLabel(state?.game_mode ?? 0));
+  setTextIfPresent('hud-map-name', liveMap);
+  setTextIfPresent('hud-match-state', deriveMatchStateLabel(state));
+  setTextIfPresent('hud-player-count', `${playerCount} entities online`);
+  setTextIfPresent('hud-ws-rate', `${wsHz} / s`);
+  setTextIfPresent('hud-latency', estimateStateAgeText());
+  setTextIfPresent('server-view-card', `fpga live · ${liveMap}`);
 }
 
 function updateMapSelector(activeMap) {
