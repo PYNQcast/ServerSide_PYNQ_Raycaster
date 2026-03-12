@@ -22,6 +22,8 @@ EC2="ubuntu@${EC2_IP}"
 REPO="$(cd "$(dirname "$0")" && pwd)"
 KEY="$REPO/raycastpair.pem"
 SSH_OPTS="-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3"
+GIT_BRANCH=""
+GIT_UPSTREAM=""
 SIM1_USERNAME="${SIM1_USERNAME:-sim-1}"
 SIM2_USERNAME="${SIM2_USERNAME:-sim-2}"
 
@@ -139,8 +141,36 @@ require_cmds() {
   done
 }
 
+resolve_git_target() {
+  GIT_BRANCH="$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  if [ -z "$GIT_BRANCH" ] || [ "$GIT_BRANCH" = "HEAD" ]; then
+    log_err "Detached HEAD detected. Check out a branch first."
+    return 1
+  fi
+
+  GIT_UPSTREAM="$(git -C "$REPO" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+  if [ -z "$GIT_UPSTREAM" ]; then
+    log_err "Branch '$GIT_BRANCH' has no upstream. Push it first:"
+    echo "    git push -u origin $GIT_BRANCH"
+    return 1
+  fi
+
+  case "$GIT_UPSTREAM" in
+    origin/*) ;;
+    *)
+      log_err "Branch '$GIT_BRANCH' tracks '$GIT_UPSTREAM'. Dev scripts only sync from origin."
+      echo "    git branch --set-upstream-to=origin/$GIT_BRANCH $GIT_BRANCH"
+      return 1
+      ;;
+  esac
+
+  return 0
+}
+
 ensure_clean_git() {
   # Block if there are uncommitted changes or unpushed commits — EC2 must match local exactly.
+  resolve_git_target || return 1
+
   if ! git -C "$REPO" diff --quiet || ! git -C "$REPO" diff --cached --quiet; then
     log_err "Uncommitted changes detected. Commit and push first:"
     git -C "$REPO" status --short
@@ -149,10 +179,10 @@ ensure_clean_git() {
   fi
 
   local unpushed
-  unpushed="$(git -C "$REPO" log --oneline @{u}..HEAD 2>/dev/null | wc -l | tr -d ' ')"
+  unpushed="$(git -C "$REPO" rev-list --count "$GIT_UPSTREAM"..HEAD 2>/dev/null | tr -d ' ')"
   if [ "${unpushed:-0}" -gt 0 ]; then
-    log_err "$unpushed unpushed commit(s) — EC2 sync would miss them:"
-    git -C "$REPO" log --oneline @{u}..HEAD
+    log_err "$unpushed unpushed commit(s) on '$GIT_BRANCH' - EC2 sync would miss them:"
+    git -C "$REPO" log --oneline "$GIT_UPSTREAM"..HEAD
     echo "    git push && ./sim_dev.sh"
     return 1
   fi
@@ -179,7 +209,7 @@ stop_remote_services() {
 }
 
 sync_remote_repo() {
-  ssh $SSH_OPTS -i "$KEY" "$EC2" 'cd ~/ServerSide_PYNQ_Raycaster && git fetch origin && git reset --hard origin/main'
+  ssh $SSH_OPTS -i "$KEY" "$EC2" "cd ~/ServerSide_PYNQ_Raycaster && git fetch origin && git checkout -B '$GIT_BRANCH' '$GIT_UPSTREAM' && git branch --set-upstream-to='$GIT_UPSTREAM' '$GIT_BRANCH' && git reset --hard '$GIT_UPSTREAM'"
 }
 
 create_tmux_session() {
@@ -276,13 +306,13 @@ log_ok "Dependencies available (tmux, ssh, git, fuser, nc, npm)"
 run_step "Checking EC2 SSH reachability" check_ec2_access || die "EC2 SSH check failed"
 run_step "Building shared React monitor bundle" build_monitor_ui || die "Failed building monitor_ui bundle"
 ensure_clean_git || exit 1
-log_ok "Git state is clean and pushed"
+log_ok "Git state is clean and pushed ($GIT_BRANCH -> $GIT_UPSTREAM)"
 
 section "Remote Sync"
 run_step "Clearing stale local tmux/port state" cleanup_local || die "Failed local cleanup"
 run_step "Stopping stale EC2 services" stop_remote_services || die "Failed stopping remote services"
 sleep 1
-run_step "Syncing EC2 repo to origin/main" sync_remote_repo || die "EC2 git sync failed"
+run_step "Syncing EC2 repo to $GIT_UPSTREAM" sync_remote_repo || die "EC2 git sync failed"
 
 section "Tmux Session"
 run_step "Creating tmux session '$SESSION'" create_tmux_session || die "Failed creating tmux session"
