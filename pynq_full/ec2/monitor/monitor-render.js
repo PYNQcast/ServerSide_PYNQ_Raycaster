@@ -2,7 +2,7 @@
 function worldToCanvas(wx, wy) {
   const pad = MAP_VIEW_PAD;
   const limit = (mapData && mapData.width > 0)
-    ? (mapData.width / 2) * (mapData.tile_scale || TILE_SCALE)
+    ? ((mapData.width / 2) + 1) * (mapData.tile_scale || TILE_SCALE)
     : WORLD_LIMIT;
   const minX = -limit, maxX = limit;
   const minY = -limit, maxY = limit;
