@@ -12,6 +12,8 @@ import {
   simSlotForValue,
 } from './player-stats/utils.js';
 
+const MONITOR_STATE_EVENT = 'monitor:state';
+
 function buildGhostSlots(ghosts) {
   return Array.from({ length: 3 }, (_, index) => {
     const slotNumber = index + 1;
@@ -151,14 +153,17 @@ export default function PlayerStatsTab() {
 
   useEffect(() => {
     if (!pageVisible) return () => {};
-    const syncLivePlayers = () => {
-      const snapshot = Array.isArray(window.latestState?.players) ? window.latestState.players.slice() : [];
+    const syncLivePlayers = (state = window.latestState) => {
+      const snapshot = Array.isArray(state?.players) ? state.players.slice() : [];
       startTransition(() => setLivePlayers(snapshot));
+    };
+    const handleState = (event) => {
+      syncLivePlayers(event.detail);
     };
 
     syncLivePlayers();
-    const intervalId = setInterval(syncLivePlayers, 500);
-    return () => clearInterval(intervalId);
+    window.addEventListener(MONITOR_STATE_EVENT, handleState);
+    return () => window.removeEventListener(MONITOR_STATE_EVENT, handleState);
   }, [pageVisible]);
 
   const liveByProfileKey = new Map();

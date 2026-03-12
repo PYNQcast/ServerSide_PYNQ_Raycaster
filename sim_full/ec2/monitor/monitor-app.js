@@ -330,6 +330,7 @@ function updateEvents(events) {
 // ── WebSocket ──────────────────────────────────────────────────────────────
 const statusEl = document.getElementById('status');
 let ws = null;
+const MONITOR_STATE_EVENT = 'monitor:state';
 
 function scheduleMapRefresh(cmd) {
   if (!String(cmd || '').startsWith('set_map:')) return;
@@ -337,8 +338,11 @@ function scheduleMapRefresh(cmd) {
   if (mapName) {
     updateMapSelector(mapName, mapName);
   }
-  window.setTimeout(() => { loadMapList(); }, 150);
-  window.setTimeout(() => { loadMapList(); }, 500);
+  if (typeof window.requestMapListRefresh === 'function') {
+    window.requestMapListRefresh(250);
+    return;
+  }
+  window.setTimeout(() => { loadMapList(); }, 250);
 }
 
 async function sendControl(cmd, label) {
@@ -376,7 +380,11 @@ function connect() {
   ws.onopen = () => {
     statusEl.textContent = '● LIVE';
     statusEl.className   = 'connected';
-    loadMapList();
+    if (typeof window.requestMapListRefresh === 'function') {
+      window.requestMapListRefresh(0);
+    } else {
+      loadMapList();
+    }
     renderViewModeButtons();
     updateOrbitModeControls();
   };
@@ -397,6 +405,7 @@ function connect() {
     }
     latestState = state;
     window.latestState = state;
+    window.dispatchEvent(new CustomEvent(MONITOR_STATE_EVENT, { detail: state }));
     syncViewMode(state.sim_view_mode || 'map');
     updateGameHud(state);
     maybeEnforceMapManual(state.players || []);
