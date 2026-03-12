@@ -11,6 +11,7 @@ import {
 
 const MIN_CANVAS_SIZE = 384;
 const MAX_CANVAS_SIZE = 768;
+const BIT_MARKER = Object.freeze({ marker: 'B', type: 'bit_spawn' });
 
 function cellFromPointer(event, canvasSize) {
   const rect = event.currentTarget.getBoundingClientRect();
@@ -76,11 +77,22 @@ export default function MapCanvas({
     (nextMarkers || []).forEach((marker) => {
       const x = marker.x * cellSize;
       const y = marker.y * cellSize;
-      ctx.fillStyle = 'rgba(255, 209, 102, 0.82)';
-      ctx.fillRect(x + (cellSize * 0.25), y + (cellSize * 0.25), cellSize * 0.5, cellSize * 0.5);
+      const cx = x + (cellSize * 0.5);
+      const cy = y + (cellSize * 0.5);
+      const radius = Math.max(8, cellSize * 0.26);
+      const markerLabel = String(marker.marker || 'B').slice(0, 1).toUpperCase();
+      ctx.fillStyle = 'rgba(255, 209, 102, 0.92)';
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.fill();
       ctx.strokeStyle = '#fff0c2';
       ctx.lineWidth = 1.5;
-      ctx.strokeRect(x + (cellSize * 0.25), y + (cellSize * 0.25), cellSize * 0.5, cellSize * 0.5);
+      ctx.stroke();
+      ctx.fillStyle = '#22170a';
+      ctx.font = `${Math.max(10, cellSize * 0.3)}px "Press Start 2P"`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(markerLabel, cx, cy + 1);
     });
 
     (nextSpawns || []).slice(0, 2).forEach((spawn, index) => {
@@ -108,6 +120,8 @@ export default function MapCanvas({
       const y = hover.y * cellSize;
       ctx.strokeStyle = tool === 'spawn'
         ? '#ffcf6c'
+        : tool === 'bits'
+          ? '#ffd166'
         : tool === 'fill'
           ? '#9bffbc'
           : '#00d4ff';
@@ -175,6 +189,29 @@ export default function MapCanvas({
     commitBulkGrid(filledGrid);
   }
 
+  function handleBitPlacement(x, y) {
+    if (gridRef.current[gridIndex(x, y)] === 1) return;
+    if (spawns.some((spawn) => spawn.x === x && spawn.y === y)) return;
+
+    const existingIndex = markers.findIndex((marker) => marker.x === x && marker.y === y);
+    pushUndo();
+
+    if (existingIndex >= 0) {
+      const nextMarkers = markers.filter((_, index) => index !== existingIndex);
+      onMarkersChange(nextMarkers);
+      redrawOverlay(spawns, nextMarkers);
+      onDirty();
+      return;
+    }
+
+    const nextMarkers = [...markers, { ...BIT_MARKER, x, y }];
+    const { spawns: safeSpawns, markers: safeMarkers } = sanitiseDraft(gridRef.current, spawns, nextMarkers);
+    onSpawnsChange(safeSpawns);
+    onMarkersChange(safeMarkers);
+    redrawOverlay(safeSpawns, safeMarkers);
+    onDirty();
+  }
+
   useLayoutEffect(() => {
     const shell = shellRef.current;
     if (!shell) return () => {};
@@ -234,6 +271,10 @@ export default function MapCanvas({
               handleSpawnPlacement(x, y);
               return;
             }
+            if (tool === 'bits') {
+              handleBitPlacement(x, y);
+              return;
+            }
             if (tool === 'fill') {
               handleFill(x, y, event.button === 2 ? 0 : 1);
               return;
@@ -278,7 +319,15 @@ export default function MapCanvas({
         />
       </div>
       <div className="map-editor-canvas-meta">
-        <span>{tool === 'spawn' ? 'Spawn Placement' : tool === 'fill' ? 'Flood Fill' : 'Brush'}</span>
+        <span>{
+          tool === 'spawn'
+            ? 'Spawn Placement'
+            : tool === 'bits'
+              ? 'Bit Placement'
+              : tool === 'fill'
+                ? 'Flood Fill'
+                : 'Brush'
+        }</span>
         <span>{GRID_WIDTH}x{GRID_HEIGHT} runtime-safe arena grid</span>
       </div>
     </div>

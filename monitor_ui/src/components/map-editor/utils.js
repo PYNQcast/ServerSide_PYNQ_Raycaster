@@ -77,6 +77,7 @@ export function sanitiseMarkers(markers, grid, spawns) {
       && isInsideGrid(marker.x, marker.y)
       && grid[gridIndex(marker.x, marker.y)] === 0
       && !occupied.has(`${marker.x}:${marker.y}`)
+      && occupied.add(`${marker.x}:${marker.y}`) === occupied
     ));
 }
 
