@@ -1,9 +1,11 @@
 from pathlib import Path
+from decimal import Decimal
 
 import pytest
 
 from monitor_map_store import (
     MapStorageError,
+    _entry_from_table_item,
     delete_map_entry,
     list_map_entries,
     load_map_entry,
@@ -164,3 +166,28 @@ def test_delete_removes_table_entry_and_runtime_mirror(tmp_path: Path):
     assert result["deleted"] is True
     assert "arena_epsilon" not in table.items
     assert not (maps_dir / "arena_epsilon.txt").exists()
+
+
+def test_table_entries_normalise_decimal_fields_for_json():
+    item = {
+        "map_id": "arena_zeta",
+        "record_type": "META",
+        "map_name": "Arena Zeta",
+        "runtime_text": ("#" * 32 + "\n") * 32,
+        "schema_version": Decimal("1"),
+        "tile_scale": Decimal("8"),
+        "supported_modes": ["tag"],
+        "entity_budget": {
+            "human_spawns": Decimal("2"),
+            "ghost_slots": Decimal("3"),
+        },
+        "deletable": True,
+        "tags": ["editor"],
+    }
+
+    entry = _entry_from_table_item(item, include_grid=False)
+
+    assert isinstance(entry["schema_version"], int)
+    assert isinstance(entry["tile_scale"], int)
+    assert isinstance(entry["entity_budget"]["human_spawns"], int)
+    assert isinstance(entry["entity_budget"]["ghost_slots"], int)

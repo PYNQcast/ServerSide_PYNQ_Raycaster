@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 try:
@@ -240,6 +241,22 @@ def _metadata_defaults(map_id: str, map_name: str, created_at: str | None = None
     }
 
 
+def _plain_number(value: Decimal):
+    if value == value.to_integral_value():
+        return int(value)
+    return float(value)
+
+
+def _normalise_dynamo_value(value):
+    if isinstance(value, Decimal):
+        return _plain_number(value)
+    if isinstance(value, dict):
+        return {key: _normalise_dynamo_value(inner) for key, inner in value.items()}
+    if isinstance(value, list):
+        return [_normalise_dynamo_value(inner) for inner in value]
+    return value
+
+
 def _is_missing_table_error(exc: Exception):
     if ClientError is None or not isinstance(exc, ClientError):
         return False
@@ -313,16 +330,18 @@ def _table_delete_item(map_table, map_id: str):
 def _metadata_from_table_item(item: dict):
     if not item:
         return None
+    grid_size = _normalise_dynamo_value(item.get("grid_size")) or {"width": GRID_WIDTH, "height": GRID_HEIGHT}
+    entity_budget = _normalise_dynamo_value(item.get("entity_budget")) or {"human_spawns": 2, "ghost_slots": 3}
     return {
-        "schema_version": item.get("schema_version", MAP_SCHEMA_VERSION),
+        "schema_version": _normalise_dynamo_value(item.get("schema_version", MAP_SCHEMA_VERSION)),
         "map_id": item.get("map_id"),
         "map_name": item.get("map_name") or item.get("map_id"),
         "source": item.get("source") or "editor",
         "layout_type": item.get("layout_type") or "binary-grid",
-        "grid_size": item.get("grid_size") or {"width": GRID_WIDTH, "height": GRID_HEIGHT},
-        "tile_scale": item.get("tile_scale") or TILE_SCALE,
-        "supported_modes": list(item.get("supported_modes") or DEFAULT_SUPPORTED_MODES),
-        "entity_budget": item.get("entity_budget") or {"human_spawns": 2, "ghost_slots": 3},
+        "grid_size": grid_size,
+        "tile_scale": _normalise_dynamo_value(item.get("tile_scale")) or TILE_SCALE,
+        "supported_modes": list(_normalise_dynamo_value(item.get("supported_modes")) or DEFAULT_SUPPORTED_MODES),
+        "entity_budget": entity_budget,
         "deletable": bool(item.get("deletable", False)),
         "created_at": item.get("created_at"),
         "updated_at": item.get("updated_at"),
