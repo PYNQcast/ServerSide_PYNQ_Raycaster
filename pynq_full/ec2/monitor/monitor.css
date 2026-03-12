@@ -1888,41 +1888,42 @@
     align-items: flex-start;
   }
 
-  .ghost-summary-panel,
+  .entity-section-panel,
   .player-status-panel {
     display: flex;
     flex-direction: column;
     gap: 12px;
   }
 
-  .ghost-summary-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-    gap: 10px;
+  .entity-section-note {
+    max-width: 92ch;
   }
 
-  .ghost-summary-card {
+  .entity-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 14px;
+  }
+
+  .entity-stat-card {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 14px;
+    padding: 16px;
     border: 1px solid rgba(0, 212, 255, 0.14);
     background: linear-gradient(180deg, rgba(19, 33, 62, 0.78), rgba(9, 17, 31, 0.82));
   }
 
-  .ghost-summary-name {
-    font-family: 'Silkscreen', cursive;
-    font-size: 14px;
-    color: var(--cyan);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+  .entity-stat-card.is-empty {
+    opacity: 0.84;
   }
 
-  .ghost-summary-meta {
-    display: flex;
-    justify-content: space-between;
-    gap: 8px;
-    color: #9db6d9;
-    font-size: 18px;
+  .entity-card-head {
+    align-items: center;
+  }
+
+  .entity-stat-card .player-card-summary {
+    align-items: center;
   }
 
   .player-stats-grid {
@@ -2224,7 +2225,7 @@
     color: var(--coral-light);
   }
 
-  [data-theme="light"] .ghost-summary-card,
+  [data-theme="light"] .entity-stat-card,
   [data-theme="light"] .player-history-table-wrap,
   [data-theme="light"] .player-live-pill,
   [data-theme="light"] .player-trophy-shell,
@@ -2234,13 +2235,11 @@
   }
 
   [data-theme="light"] .player-card-subtitle,
-  [data-theme="light"] .ghost-summary-meta,
   [data-theme="light"] .player-detail-status {
     color: #4d5f76;
   }
 
   [data-theme="light"] .player-overview-value,
-  [data-theme="light"] .ghost-summary-name,
   [data-theme="light"] .player-breakdown-label,
   [data-theme="light"] .player-history-table th,
   [data-theme="light"] .player-trophy-role {
@@ -2324,6 +2323,10 @@
     }
 
     .player-stats-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .entity-stats-grid {
       grid-template-columns: 1fr;
     }
   }
