@@ -24,6 +24,7 @@ let _selectedMapName = LOBBY_MAP_NAME;
 let _pendingMapName = '';
 let _pendingMapRequestedAt = 0;
 let _mapFilterText = '';
+let _lastMapButtonsSignature = '';
 let _showMap = true;  // map play is the default; orbit view is a sim-only test tool
 let _viewMode = 'map';
 const requestedNodeModes = { 1: 'manual', 2: 'manual' };
@@ -82,7 +83,10 @@ function renderMapButtons() {
   const el = document.getElementById('map-btn-list');
   if (!el) return;
   if (!_availableMaps.length) {
+    const emptySignature = 'empty:no-maps';
+    if (_lastMapButtonsSignature === emptySignature) return;
     el.innerHTML = '<span style="color:#333">no maps found</span>';
+    _lastMapButtonsSignature = emptySignature;
     return;
   }
 
@@ -91,11 +95,14 @@ function renderMapButtons() {
   ));
 
   if (!filteredMaps.length) {
+    const emptySignature = `empty:no-filter-match:${_mapFilterText}`;
+    if (_lastMapButtonsSignature === emptySignature) return;
     el.innerHTML = '<span style="color:#90a3c4">no maps match that filter</span>';
+    _lastMapButtonsSignature = emptySignature;
     return;
   }
 
-  el.innerHTML = filteredMaps.map(name => `
+  const renderedButtons = filteredMaps.map(name => `
     <button id="mapbtn-${name}"
       class="control-btn${
         name === _activeMapName
@@ -104,6 +111,16 @@ function renderMapButtons() {
       }"
       onclick="selectMap('${name}')">${name}</button>
   `).join('');
+  const nextSignature = [
+    _mapFilterText,
+    _activeMapName,
+    _selectedMapName,
+    _pendingMapName,
+    filteredMaps.join('|'),
+  ].join('::');
+  if (_lastMapButtonsSignature === nextSignature) return;
+  el.innerHTML = renderedButtons;
+  _lastMapButtonsSignature = nextSignature;
 }
 
 function setMapFilterText(value) {
