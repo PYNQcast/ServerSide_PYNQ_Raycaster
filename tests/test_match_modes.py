@@ -488,6 +488,17 @@ def test_sim_match_start_sends_map_packet_to_human_nodes():
         assert packet_types.count(protocol.PKT_MAP) >= 2
 
 
+def test_sim_map_packet_fits_node_receive_buffer():
+    with sim_import_context():
+        protocol = importlib.import_module("protocol")
+        node_sim_mod = importlib.import_module("node_simulator")
+
+        packet = protocol.pack_map_packet(0, 32, 32, 8, bytearray([0] * (32 * 32)))
+
+        assert len(packet) == 1036
+        assert len(packet) < node_sim_mod.SOCKET_RECV_SIZE
+
+
 def test_sim_packet_handler_requires_register_for_unknown_addr():
     with sim_import_context():
         protocol = importlib.import_module("protocol")

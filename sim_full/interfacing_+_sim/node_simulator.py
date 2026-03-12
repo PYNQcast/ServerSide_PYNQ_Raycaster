@@ -61,6 +61,7 @@ LOBBY_MAP_NAME = "lobby"
 MAPS_DIR = Path(__file__).resolve().parents[2] / "pynq_full" / "ec2" / "maps"
 SPAWN_ANGLES = [0.0, math.pi, math.pi / 2, 3 * math.pi / 2, math.pi / 4]
 AUTHORITATIVE_STATE_TIMEOUT_S = 0.4
+SOCKET_RECV_SIZE = 4096
 SPAWN_MARKERS = {str(index): index - 1 for index in range(1, 6)}
 
 
@@ -79,6 +80,7 @@ def load_local_map(name: str):
                     rows.append(line)
     except OSError as exc:
         print(f"[node-map] failed to load {path}: {exc}")
+        print(f"[node-map] waiting for server PKT_MAP for '{name}'")
         return {"name": name, "width": 0, "height": 0, "tile_scale": MAP_TILE_SCALE, "tiles": bytearray()}
 
     width = len(rows[0]) if rows else 0
@@ -634,7 +636,7 @@ def run_node(server_ip, server_port, player_id, node_index,
             # receive all queued broadcasts
             while playing:
                 try:
-                    data, _ = sock.recvfrom(1024)
+                    data, _ = sock.recvfrom(SOCKET_RECV_SIZE)
                     pkt_type, _, _ = unpack_header(data)
                     if pkt_type == PKT_ACK and len(data) >= HEADER_SIZE + 1:
                         assigned_player_id = struct.unpack_from('<B', data, HEADER_SIZE)[0]
