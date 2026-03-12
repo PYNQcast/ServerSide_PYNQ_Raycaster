@@ -88,7 +88,7 @@ _service_cache  = {}
 _service_last_fetch = 0.0
 _service_message = "controls run on EC2 only; local node simulators join the lobby after launch"
 _replay_cache = {}
-_active_map = "chase"    # tracks which map the server is using
+_active_map = ""    # sim starts in an empty-space lobby until an operator selects a map
 _redis_stats_cache = {}
 _redis_stats_last_fetch = 0.0
 _state_cache = {}
@@ -539,7 +539,7 @@ def collect_state():
     game_mode = int(game_raw.get("game_mode", 0)) if game_raw else 0
     bits_mask = int(game_raw.get("bits_mask", 0xFFFF)) if game_raw else 0xFFFF
     sim_view_mode = (game_raw.get("sim_view_mode") or "map") if game_raw else "map"
-    selected_map = (game_raw.get("selected_map") or _active_map) if game_raw else _active_map
+    selected_map = game_raw.get("selected_map", _active_map) if game_raw else _active_map
     match_started = bool(_as_int(game_raw.get("match_started", 0), 0)) if game_raw else False
     match_ended = bool(_as_int(game_raw.get("match_ended", 0), 0)) if game_raw else False
     match_paused = bool(_as_int(game_raw.get("match_paused", 0), 0)) if game_raw else False
@@ -609,10 +609,8 @@ def collect_state():
                 bits_positions = ev["bits"]
                 break
 
-    active_map = _active_map
-    if game_raw and game_raw.get("map"):
-        active_map = game_raw["map"]
-    else:
+    active_map = game_raw.get("map", _active_map) if game_raw else _active_map
+    if not active_map:
         for ev in match_events:
             if ev.get("event") == "match_start" and ev.get("map"):
                 active_map = ev["map"]
@@ -900,8 +898,8 @@ async def maps_list_handler(request):
     return web.json_response({
         "maps": [entry["map_id"] for entry in entries],
         "entries": entries,
-        "active_map": (_state_cache.get("active_map") or _active_map),
-        "selected_map": (_state_cache.get("selected_map") or _active_map),
+        "active_map": (_state_cache["active_map"] if "active_map" in _state_cache else _active_map),
+        "selected_map": (_state_cache["selected_map"] if "selected_map" in _state_cache else _active_map),
     })
 
 

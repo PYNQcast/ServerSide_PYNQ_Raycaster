@@ -331,6 +331,10 @@ function updateEvents(events) {
 const statusEl = document.getElementById('status');
 let ws = null;
 async function sendControl(cmd, label) {
+  if (cmd === 'start_match' && !(latestState?.selected_map || _activeMapName)) {
+    setServiceNote('select a map before starting the match');
+    return;
+  }
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({cmd}));
     setServiceNote(`${label} requested...`);
@@ -357,7 +361,6 @@ function connect() {
   ws.onopen = () => {
     statusEl.textContent = '● LIVE';
     statusEl.className   = 'connected';
-    if (!mapData) loadMap('chase');
     loadMapList();
     renderViewModeButtons();
     updateOrbitModeControls();
@@ -391,9 +394,11 @@ function connect() {
     updateMatches(state.matches);
     updateMatchState(state.match);
     updateEvents(state.events);
-    if (state.selected_map || state.active_map) {
-      updateMapSelector(state.selected_map || state.active_map);
-    }
+    updateMapSelector(
+      Object.prototype.hasOwnProperty.call(state, 'selected_map')
+        ? state.selected_map
+        : state.active_map,
+    );
     wsUpdateCount++;
     const now = performance.now();
     if (now - wsLastTime >= 1000) {

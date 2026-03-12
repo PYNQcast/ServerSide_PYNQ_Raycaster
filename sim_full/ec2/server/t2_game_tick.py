@@ -47,7 +47,7 @@ class GameTick:
         self.tick_count      = 0
         self.control_queue   = queue.SimpleQueue()
 
-        self.map_state = load_map(DEFAULT_MAP_PATH)  # mutable dict; hot-swappable
+        self.map_state = self._build_lobby_map()  # mutable dict; starts as empty-space lobby
         self._selected_map = copy.deepcopy(self.map_state)
         self._sim_view_mode = "map"
         self.state     = MatchState()
@@ -127,6 +127,9 @@ class GameTick:
         if cmd == "force_end":
             self.logic._force_end_flag = True
         elif cmd == "start_match":
+            if not self._selected_map.get("name"):
+                print("[T2] start_match blocked: select a map before starting")
+                return
             started, message = self.packets.start_match_from_lobby()
             print(f"[T2] start_match: {message}")
         elif cmd == "disconnect":
@@ -170,6 +173,23 @@ class GameTick:
             "tiles": bytearray(width * height),
             "bits": [],
             "spawn_positions": spawn_positions,
+        }
+
+    def _build_lobby_map(self) -> dict:
+        return {
+            "name": "",
+            "width": 0,
+            "height": 0,
+            "tile_scale": MAP_TILE_SCALE,
+            "tiles": bytearray(),
+            "bits": [],
+            "spawn_positions": [
+                (
+                    round(ORBIT_RADIUS * math.cos(angle), 2),
+                    round(ORBIT_RADIUS * math.sin(angle), 2),
+                )
+                for angle in SPAWN_ANGLES
+            ],
         }
 
     def _set_sim_view(self, view: str):

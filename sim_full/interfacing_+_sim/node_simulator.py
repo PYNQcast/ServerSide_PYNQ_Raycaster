@@ -55,7 +55,7 @@ MANUAL_MOVE_STEP = 4.0
 MAP_TILE_SCALE = 8
 PLAYER_COLLISION_RADIUS = 2.5
 SPAWN_CLEARANCE_RADIUS = 3.25
-DEFAULT_MAP_NAME = "chase"
+DEFAULT_MAP_NAME = ""
 ORBIT_TEST_MAP_NAME = "orbit_test"
 MAPS_DIR = Path(__file__).resolve().parents[2] / "pynq_full" / "ec2" / "maps"
 SPAWN_ANGLES = [0.0, math.pi, math.pi / 2, 3 * math.pi / 2, math.pi / 4]
@@ -64,6 +64,15 @@ SPAWN_MARKERS = {str(index): index - 1 for index in range(1, 6)}
 
 
 def load_local_map(name: str):
+    if not name:
+        return {
+            "name": "",
+            "width": 0,
+            "height": 0,
+            "tile_scale": MAP_TILE_SCALE,
+            "tiles": bytearray(),
+            "spawn_positions": [],
+        }
     if name == ORBIT_TEST_MAP_NAME:
         return build_orbit_test_map()
     path = MAPS_DIR / f"{name}.txt"
