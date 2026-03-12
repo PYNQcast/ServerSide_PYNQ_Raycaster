@@ -326,13 +326,26 @@ function updateEvents(events) {
 // ── WebSocket ──────────────────────────────────────────────────────────────
 const statusEl = document.getElementById('status');
 let ws = null;
-function sendControl(cmd, label) {
+async function sendControl(cmd, label) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({cmd}));
     setServiceNote(`${label} requested...`);
     return;
   }
-  setServiceNote('websocket disconnected');
+  setServiceNote(`${label} requested via HTTP...`);
+  try {
+    const resp = await fetch('/api/control', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cmd }),
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(text || `HTTP ${resp.status}`);
+    }
+  } catch (error) {
+    setServiceNote(`control failed: ${error.message || 'request error'}`);
+  }
 }
 function connect() {
   const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
