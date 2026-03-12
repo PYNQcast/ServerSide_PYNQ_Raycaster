@@ -823,6 +823,24 @@ async def player_handler(request):
     return web.json_response(payload)
 
 
+async def control_handler(request):
+    try:
+        data = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text="invalid control payload")
+
+    cmd = str(data.get("cmd", "") or "").strip()
+    if not cmd:
+        raise web.HTTPBadRequest(text="missing cmd")
+
+    try:
+        await asyncio.to_thread(handle_control_command, cmd)
+    except Exception as exc:
+        print(f"[monitor] control error for {cmd}: {exc}")
+        raise web.HTTPInternalServerError(text="failed to apply control")
+    return web.json_response({"ok": True, "cmd": cmd})
+
+
 async def maps_list_handler(request):
     """GET /api/maps — list all available map names."""
     names = sorted(p.stem for p in MAPS_DIR.glob("*.txt"))
@@ -873,6 +891,7 @@ async def main():
     app.router.add_get("/api/replay/{match_id}", replay_handler)
     app.router.add_get("/api/players", players_handler)
     app.router.add_get("/api/players/{player_key}", player_handler)
+    app.router.add_post("/api/control", control_handler)
     app.router.add_get("/api/maps", maps_list_handler)
     app.router.add_get("/api/map/{name}", map_handler)
     await asyncio.to_thread(refresh_state_cache)
