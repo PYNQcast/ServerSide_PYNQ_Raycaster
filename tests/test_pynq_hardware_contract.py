@@ -8,15 +8,16 @@ ROOT = Path(__file__).resolve().parents[1]
 PYNQ_EC2 = ROOT / "pynq_full" / "ec2"
 PYNQ_SERVER = PYNQ_EC2 / "server"
 PYNQ_INTERFACING = ROOT / "pynq_full" / "interfacing"
+JUPYTER_SIDE = ROOT / "jupyter_side"
 
 
 @contextmanager
 def pynq_import_context():
     original_path = list(sys.path)
-    sys.path[:0] = [str(PYNQ_INTERFACING), str(PYNQ_SERVER), str(PYNQ_EC2)]
+    sys.path[:0] = [str(JUPYTER_SIDE), str(PYNQ_INTERFACING), str(PYNQ_SERVER), str(PYNQ_EC2)]
     for name in list(sys.modules):
         if name in {
-            "t2_constants", "t2_map_loader", "pynq_client", "protocol",
+            "t2_constants", "t2_map_loader", "pynq_client", "protocol", "test_package",
             "player_profiles", "t2_packet_handler", "t2_redis_io",
         }:
             sys.modules.pop(name, None)
@@ -26,7 +27,7 @@ def pynq_import_context():
         sys.path[:] = original_path
         for name in list(sys.modules):
             if name in {
-                "t2_constants", "t2_map_loader", "pynq_client", "protocol",
+                "t2_constants", "t2_map_loader", "pynq_client", "protocol", "test_package",
                 "player_profiles", "t2_packet_handler", "t2_redis_io",
             }:
                 sys.modules.pop(name, None)
@@ -138,6 +139,96 @@ def test_pynq_client_decodes_button_gpio_bits():
             "turn_left": False,
             "turn_right": True,
         }
+
+
+def test_test_package_auto_runner_prefers_nearest_active_bit_in_bits_mode():
+    with pynq_import_context():
+        protocol = importlib.import_module("protocol")
+        test_package = importlib.import_module("test_package")
+
+        state = {
+            "registered": True,
+            "player_id": 1,
+            "x": 0.0,
+            "y": 0.0,
+            "angle": 0.0,
+            "angle_raw": 0,
+            "input_flags": 0,
+            "match_ended": False,
+            "map_w": 32,
+            "map_h": 32,
+            "tile_scale": 8,
+            "tiles": bytearray(32 * 32),
+            "game_mode": protocol.GAME_MODE_CHASE_BITS,
+            "bits_mask": 0b11,
+            "bits": [(-8.0, 0.0), (24.0, 0.0)],
+            "players": [{"player_id": 1, "x": 0.0, "y": 0.0, "flags": 0}],
+            "tick": 1,
+        }
+
+        test_package._apply_auto_input(state)
+
+        assert state["x"] < 0.0
+        assert (state["input_flags"] & protocol.FLAG_SHOOTING) == 0
+
+
+def test_test_package_auto_tagger_chases_runner_and_shoots_when_aligned():
+    with pynq_import_context():
+        protocol = importlib.import_module("protocol")
+        test_package = importlib.import_module("test_package")
+
+        state = {
+            "registered": True,
+            "player_id": 2,
+            "x": 0.0,
+            "y": 0.0,
+            "angle": 0.0,
+            "angle_raw": 0,
+            "input_flags": 0,
+            "match_ended": False,
+            "map_w": 32,
+            "map_h": 32,
+            "tile_scale": 8,
+            "tiles": bytearray(32 * 32),
+            "game_mode": protocol.GAME_MODE_CHASE,
+            "bits_mask": 0,
+            "bits": [],
+            "players": [
+                {"player_id": 1, "x": 16.0, "y": 0.0, "flags": 0},
+                {"player_id": 2, "x": 0.0, "y": 0.0, "flags": 0},
+            ],
+            "tick": 0,
+        }
+
+        test_package._apply_auto_input(state)
+
+        assert state["x"] > 0.0
+        assert state["input_flags"] & protocol.FLAG_SHOOTING
+
+
+def test_test_package_pathfinder_routes_through_gap():
+    with pynq_import_context():
+        test_package = importlib.import_module("test_package")
+
+        width = 8
+        height = 8
+        tiles = bytearray(width * height)
+        for row in range(height):
+            tiles[row * width + 4] = 1
+        tiles[4 * width + 4] = 0
+
+        state = {"map_w": width, "map_h": height, "tile_scale": 8, "tiles": tiles}
+        start = test_package._nearest_open_cell(state, -12.0, -12.0)
+        goal = test_package._nearest_open_cell(state, 12.0, -12.0)
+        path = test_package._build_cell_path(
+            state,
+            start,
+            goal,
+        )
+
+        assert path[0] == start
+        assert path[-1] == goal
+        assert (4, 4) in path
 
 
 def test_pynq_client_drop_to_registration_clears_live_state():

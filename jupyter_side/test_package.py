@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 
+import argparse
+import heapq
 import math
+import os
 import socket
 import struct
 import time
@@ -8,10 +11,9 @@ import time
 try:
     from pynq import Overlay
     from pynq.ps import Clocks
-except ImportError as exc:
-    raise SystemExit(
-        "test_package.py must run on the PYNQ board with the pynq package installed"
-    ) from exc
+except ImportError:
+    Overlay = None
+    Clocks = None
 
 import protocol
 
@@ -24,13 +26,14 @@ import protocol
 #
 # Run on board:
 #   cd /home/xilinx/jupyter_notebooks
-#   python3 test_package.py
+#   python3 test_package.py --mode auto
 
 
 # --- Network configuration ---
 SERVER_IP = "3.9.71.204"
 SERVER_PORT = 9000
 USERNAME = ""
+MODE = "manual"
 PREFERRED_ROLE = protocol.ROLE_ANY
 TICK_RATE = 20
 TICK_INTERVAL = 1.0 / TICK_RATE
@@ -59,12 +62,20 @@ INITIAL_ANGLE_RAW = 0
 MOVE_SPEED = 0.2
 TURN_STEP = 64
 PLAYER_COLLISION_RADIUS = 2.5
+AUTO_RUNNER_SPEED = 0.2
+AUTO_TAGGER_SPEED = 0.26
+AUTO_FALLBACK_SPEED = 0.18
+AUTO_RUNNER_EVADE_DISTANCE = 42.0
+AUTO_TAGGER_SHOOT_RANGE = 26.0
+AUTO_TAGGER_SHOOT_ARC = 0.4
+AUTO_TAGGER_SHOOT_PERIOD_TICKS = 4
 BUTTON_TURN_RIGHT_MASK = 1 << 0
 BUTTON_BACKWARD_MASK = 1 << 1
 BUTTON_FORWARD_MASK = 1 << 2
 BUTTON_TURN_LEFT_MASK = 1 << 3
 
 
+# Convert a server player id into a readable role label for logs.
 def _role_name(player_id: int) -> str:
     if player_id == 0:
         return "LOBBY"
@@ -75,6 +86,7 @@ def _role_name(player_id: int) -> str:
     return f"PLAYER_{player_id}"
 
 
+# Summarise a raw UDP packet header for debug output.
 def _describe_packet(data: bytes) -> str:
     if len(data) < protocol.HEADER_SIZE:
         return f"short packet ({len(data)} bytes)"
@@ -82,6 +94,7 @@ def _describe_packet(data: bytes) -> str:
     return f"type=0x{pkt_type:04x} seq={seq} ts={timestamp} len={len(data)}"
 
 
+# Pack a flat 32x32 tile map into BRAM row words for the FPGA.
 def _encode_map_rows_for_bram(width: int, height: int, tiles: bytes):
     if width != HW_MAP_COLS or height != HW_MAP_ROWS:
         raise ValueError(
@@ -101,6 +114,7 @@ def _encode_map_rows_for_bram(width: int, height: int, tiles: bytes):
     return rows
 
 
+# Convert world-space into the unsigned Q6.10 coordinate format used by hardware.
 def _world_to_hw_q6_10(value: float, tile_scale: int, map_dim: int) -> int:
     tile_units = (value / tile_scale) + (map_dim / 2.0)
     raw = int(round(tile_units * (1 << HW_COORD_FRAC_BITS)))
@@ -108,14 +122,20 @@ def _world_to_hw_q6_10(value: float, tile_scale: int, map_dim: int) -> int:
     return max(0, min(max_raw, raw))
 
 
+# Convert a radians angle into the 12-bit turn value used by hardware.
 def _radians_to_hw_angle(angle_radians: float) -> int:
     turn = angle_radians % (2.0 * math.pi)
     return int(round(turn * HW_ANGLE_STEPS / (2.0 * math.pi))) & HW_ANGLE_MASK
 
 
-def _load_overlay():
-    print(f"[HW] loading overlay {OVERLAY_PATH}")
-    overlay = Overlay(OVERLAY_PATH)
+# Load the bitstream and expose BRAM and button GPIO handles.
+def _load_overlay(overlay_path: str):
+    if Overlay is None or Clocks is None:
+        raise SystemExit(
+            "test_package.py must run on the PYNQ board with the pynq package installed"
+        )
+    print(f"[HW] loading overlay {overlay_path}")
+    overlay = Overlay(overlay_path)
     bram = overlay.axi_bram_ctrl_0
     buttons = overlay.axi_gpio_0.channel1
     Clocks.fclk0_mhz = CLOCK_MHZ
@@ -124,6 +144,7 @@ def _load_overlay():
     return overlay, bram, buttons
 
 
+# Write the current map tiles into the FPGA-visible BRAM rows.
 def _write_map_to_bram(bram, width: int, height: int, tiles: bytes):
     rows = _encode_map_rows_for_bram(width, height, tiles)
     for row_index, word in enumerate(rows):
@@ -131,6 +152,7 @@ def _write_map_to_bram(bram, width: int, height: int, tiles: bytes):
     print(f"[HW] wrote {len(rows)} map rows to BRAM ({width}x{height})")
 
 
+# Mirror the local player pose into the BRAM control registers.
 def _write_pose_to_bram(bram, state: dict):
     x_q = _world_to_hw_q6_10(state["x"], state["tile_scale"], state["map_w"])
     y_q = _world_to_hw_q6_10(state["y"], state["tile_scale"], state["map_h"])
@@ -138,6 +160,7 @@ def _write_pose_to_bram(bram, state: dict):
     bram.write(HW_PLAYER_ANGLE_OFFSET, state["angle_raw"] & HW_ANGLE_MASK)
 
 
+# Check whether a world-space point and collision radius are clear of walls.
 def _is_walkable(state: dict, x: float, y: float, radius: float = PLAYER_COLLISION_RADIUS) -> bool:
     tiles = state["tiles"]
     map_w = state["map_w"]
@@ -165,6 +188,7 @@ def _is_walkable(state: dict, x: float, y: float, radius: float = PLAYER_COLLISI
     return True
 
 
+# Clamp a desired move back to the nearest safe walkable position.
 def _resolve_move(state: dict, desired_x: float, desired_y: float):
     if _is_walkable(state, desired_x, desired_y):
         return desired_x, desired_y
@@ -187,8 +211,293 @@ def _resolve_move(state: dict, desired_x: float, desired_y: float):
     return low_x, low_y
 
 
+# Convert a tile cell back into the world-space centre of that cell.
+def _cell_to_world(col: int, row: int, width: int, height: int, tile_scale: int):
+    return (
+        (col - width / 2.0 + 0.5) * tile_scale,
+        (row - height / 2.0 + 0.5) * tile_scale,
+    )
+
+
+# Convert a world-space position into a tile-grid cell.
+def _world_to_cell(state: dict, x: float, y: float):
+    map_w = state["map_w"]
+    map_h = state["map_h"]
+    tile_scale = state["tile_scale"]
+    if map_w <= 0 or map_h <= 0 or tile_scale <= 0:
+        return None
+    col = int(math.floor((x / tile_scale) + (map_w / 2.0)))
+    row = int(math.floor((y / tile_scale) + (map_h / 2.0)))
+    if col < 0 or row < 0 or col >= map_w or row >= map_h:
+        return None
+    return (col, row)
+
+
+# Test whether a given grid cell is inside the map and not a wall.
+def _cell_is_open(state: dict, col: int, row: int) -> bool:
+    map_w = state["map_w"]
+    map_h = state["map_h"]
+    tiles = state["tiles"]
+    if col < 0 or row < 0 or col >= map_w or row >= map_h:
+        return False
+    if not tiles:
+        return True
+    return tiles[row * map_w + col] == 0
+
+
+# Find the nearest open cell to a world-space position for pathfinding start/goal snapping.
+def _nearest_open_cell(state: dict, x: float, y: float):
+    origin = _world_to_cell(state, x, y)
+    map_w = state["map_w"]
+    map_h = state["map_h"]
+    tile_scale = state["tile_scale"]
+    if map_w <= 0 or map_h <= 0:
+        return None
+
+    if origin and _cell_is_open(state, origin[0], origin[1]):
+        return origin
+
+    if origin is None:
+        guess_col = min(map_w - 1, max(0, int(round((x / tile_scale) + (map_w / 2.0) - 0.5))))
+        guess_row = min(map_h - 1, max(0, int(round((y / tile_scale) + (map_h / 2.0) - 0.5))))
+        origin = (guess_col, guess_row)
+
+    max_radius = max(map_w, map_h)
+    for radius in range(1, max_radius + 1):
+        row_min = max(0, origin[1] - radius)
+        row_max = min(map_h - 1, origin[1] + radius)
+        col_min = max(0, origin[0] - radius)
+        col_max = min(map_w - 1, origin[0] + radius)
+        for row in range(row_min, row_max + 1):
+            for col in range(col_min, col_max + 1):
+                if abs(col - origin[0]) != radius and abs(row - origin[1]) != radius:
+                    continue
+                if _cell_is_open(state, col, row):
+                    return (col, row)
+    return None
+
+
+# Run a small 4-way A* search across the 32x32 grid.
+def _build_cell_path(state: dict, start_cell, goal_cell):
+    if start_cell is None or goal_cell is None:
+        return []
+    if start_cell == goal_cell:
+        return [start_cell]
+
+    map_w = state["map_w"]
+    map_h = state["map_h"]
+    if map_w <= 0 or map_h <= 0:
+        return []
+
+    open_heap = []
+    heapq.heappush(open_heap, (0, 0, start_cell))
+    came_from = {}
+    g_score = {start_cell: 0}
+    closed = set()
+
+    while open_heap:
+        _, cost_so_far, current = heapq.heappop(open_heap)
+        if current in closed:
+            continue
+        if current == goal_cell:
+            path = [current]
+            while current in came_from:
+                current = came_from[current]
+                path.append(current)
+            path.reverse()
+            return path
+
+        closed.add(current)
+        col, row = current
+        for next_col, next_row in (
+            (col + 1, row),
+            (col - 1, row),
+            (col, row + 1),
+            (col, row - 1),
+        ):
+            if not _cell_is_open(state, next_col, next_row):
+                continue
+            neighbour = (next_col, next_row)
+            next_cost = cost_so_far + 1
+            if next_cost >= g_score.get(neighbour, 1_000_000):
+                continue
+            came_from[neighbour] = current
+            g_score[neighbour] = next_cost
+            heuristic = abs(goal_cell[0] - next_col) + abs(goal_cell[1] - next_row)
+            heapq.heappush(open_heap, (next_cost + heuristic, next_cost, neighbour))
+
+    return []
+
+
+# Reduce a distant target to the next cell-centre waypoint along the path.
+def _path_step_target(state: dict, current_x: float, current_y: float,
+                      target_x: float, target_y: float):
+    if state["map_w"] <= 0 or not state["tiles"]:
+        return (target_x, target_y)
+
+    start_cell = _nearest_open_cell(state, current_x, current_y)
+    goal_cell = _nearest_open_cell(state, target_x, target_y)
+    path = _build_cell_path(state, start_cell, goal_cell)
+    if len(path) >= 2:
+        return _cell_to_world(path[1][0], path[1][1], state["map_w"], state["map_h"], state["tile_scale"])
+    if len(path) == 1:
+        return _cell_to_world(path[0][0], path[0][1], state["map_w"], state["map_h"], state["tile_scale"])
+    return (target_x, target_y)
+
+
+# Normalise an angle onto the [-pi, pi] range.
+def _wrap_angle(angle: float) -> float:
+    while angle <= -math.pi:
+        angle += math.pi * 2.0
+    while angle > math.pi:
+        angle -= math.pi * 2.0
+    return angle
+
+
+# Sample a few steering offsets and keep the least-blocked step toward a target.
+def _choose_best_step_towards(state: dict, x: float, y: float, angle: float, target, move_speed: float):
+    desired_angle = math.atan2(target[1] - y, target[0] - x)
+    best = None
+    offsets = (0.0, 0.35, -0.35, 0.7, -0.7, 1.05, -1.05, math.pi)
+    for offset in offsets:
+        candidate_angle = _wrap_angle(desired_angle + offset)
+        desired_x = x + move_speed * math.cos(candidate_angle)
+        desired_y = y + move_speed * math.sin(candidate_angle)
+        next_x, next_y = _resolve_move(state, desired_x, desired_y)
+        blocked = next_x == x and next_y == y
+        score = ((next_x - target[0]) ** 2 + (next_y - target[1]) ** 2) + (abs(offset) * 3.0)
+        if blocked:
+            score += 1_000_000
+        candidate = (score, next_x, next_y, candidate_angle)
+        if best is None or candidate < best:
+            best = candidate
+    if best is None:
+        return x, y, angle, desired_angle
+    return best[1], best[2], best[3], desired_angle
+
+
+# Return only the bit positions that are still active in the current mask.
+def _active_bit_positions(state: dict):
+    positions = []
+    for index, bit in enumerate(state["bits"]):
+        if bit is None:
+            continue
+        if (state["bits_mask"] & (1 << index)) == 0:
+            continue
+        positions.append(bit)
+    return positions
+
+
+# Build a retreat target that moves away from a threat with a slight lateral bias.
+def _compute_evade_target(x: float, y: float, threat_x: float, threat_y: float, distance: float):
+    away_x = x - threat_x
+    away_y = y - threat_y
+    length = math.hypot(away_x, away_y)
+    if length < 0.001:
+        away_x, away_y, length = 1.0, 0.0, 1.0
+    away_x /= length
+    away_y /= length
+    lateral_x = -away_y
+    lateral_y = away_x
+    return (
+        x + away_x * distance + lateral_x * (distance * 0.35),
+        y + away_y * distance + lateral_y * (distance * 0.2),
+    )
+
+
+# Choose the current auto objective based on role, mode, bits, and opponent state.
+def _choose_auto_objective(state: dict):
+    player_id = state["player_id"]
+    players = [
+        player for player in state["players"]
+        if not (player.get("flags", 0) & protocol.FLAG_MATCH_END)
+    ]
+    runner = next((player for player in players if player.get("player_id") == 1), None)
+    tagger = next((player for player in players if player.get("player_id") == 2), None)
+    x = state["x"]
+    y = state["y"]
+
+    if player_id == 2 and runner:
+        return {"mode": "chase", "target": (float(runner["x"]), float(runner["y"]))}
+
+    if player_id == 1:
+        if tagger:
+            tagger_dx = float(tagger["x"]) - x
+            tagger_dy = float(tagger["y"]) - y
+            tagger_dist = math.hypot(tagger_dx, tagger_dy)
+            if tagger_dist <= AUTO_RUNNER_EVADE_DISTANCE:
+                return {
+                    "mode": "evade",
+                    "target": _compute_evade_target(
+                        x, y, float(tagger["x"]), float(tagger["y"]), AUTO_RUNNER_EVADE_DISTANCE,
+                    ),
+                }
+        if state["game_mode"] == protocol.GAME_MODE_CHASE_BITS:
+            candidates = _active_bit_positions(state)
+            if candidates:
+                target = min(
+                    candidates,
+                    key=lambda bit: (float(bit[0]) - x) ** 2 + (float(bit[1]) - y) ** 2,
+                )
+                return {"mode": "collect", "target": (float(target[0]), float(target[1]))}
+        if tagger:
+            return {
+                "mode": "kite",
+                "target": _compute_evade_target(
+                    x, y, float(tagger["x"]), float(tagger["y"]), AUTO_RUNNER_EVADE_DISTANCE * 0.7,
+                ),
+            }
+
+    return {"mode": "roam", "target": None}
+
+
+# Advance one auto-controlled tick for the board client.
+def _apply_auto_input(state: dict) -> None:
+    state["input_flags"] = 0
+    if not state["registered"] or state["match_ended"] or state["player_id"] in (None, 0):
+        return
+
+    objective = _choose_auto_objective(state)
+    mode = objective["mode"]
+    target = objective["target"]
+
+    if mode == "chase":
+        move_speed = AUTO_TAGGER_SPEED
+    elif mode in {"evade", "collect", "kite"}:
+        move_speed = AUTO_RUNNER_SPEED
+    else:
+        move_speed = AUTO_FALLBACK_SPEED
+
+    if target is None:
+        roam_target = (
+            state["x"] + move_speed * 3.0 * math.cos(state["angle"]),
+            state["y"] + move_speed * 3.0 * math.sin(state["angle"]),
+        )
+        next_x, next_y, next_angle, _ = _choose_best_step_towards(
+            state, state["x"], state["y"], state["angle"], roam_target, move_speed,
+        )
+        state["x"], state["y"], state["angle"] = next_x, next_y, next_angle
+        state["angle_raw"] = _radians_to_hw_angle(next_angle)
+        return
+
+    nav_target = _path_step_target(state, state["x"], state["y"], target[0], target[1])
+    next_x, next_y, next_angle, desired_angle = _choose_best_step_towards(
+        state, state["x"], state["y"], state["angle"], nav_target, move_speed,
+    )
+    state["x"], state["y"], state["angle"] = next_x, next_y, next_angle
+    state["angle_raw"] = _radians_to_hw_angle(next_angle)
+
+    if mode == "chase":
+        distance = math.hypot(target[0] - state["x"], target[1] - state["y"])
+        aligned = abs(_wrap_angle(desired_angle - next_angle)) <= AUTO_TAGGER_SHOOT_ARC
+        if aligned and distance <= AUTO_TAGGER_SHOOT_RANGE and (state["tick"] % AUTO_TAGGER_SHOOT_PERIOD_TICKS == 0):
+            state["input_flags"] = protocol.FLAG_SHOOTING
+
+
+# Poll the FPGA buttons and apply one manual movement tick.
 def _apply_manual_input(state: dict, buttons) -> None:
     raw = buttons.read() & 0xF
+    state["input_flags"] = 0
     if raw & BUTTON_TURN_LEFT_MASK:
         state["angle_raw"] = (state["angle_raw"] + TURN_STEP) % HW_ANGLE_STEPS
     if raw & BUTTON_TURN_RIGHT_MASK:
@@ -209,6 +518,7 @@ def _apply_manual_input(state: dict, buttons) -> None:
     state["x"], state["y"] = _resolve_move(state, desired_x, desired_y)
 
 
+# Send a registration packet so the server can place this board in the lobby.
 def _send_register(sock: socket.socket, server_address, state: dict):
     pkt = protocol.pack_register_packet(
         seq=state["seq"],
@@ -228,6 +538,7 @@ def _send_register(sock: socket.socket, server_address, state: dict):
     state["last_register_tx_at"] = time.monotonic()
 
 
+# Send either a live state update or a heartbeat when the match has ended.
 def _send_state(sock: socket.socket, server_address, state: dict):
     pkt_type = protocol.PKT_HEARTBEAT if state["match_ended"] else protocol.PKT_STATE_UPDATE
     pkt = protocol.pack_node_packet(
@@ -236,13 +547,14 @@ def _send_state(sock: socket.socket, server_address, state: dict):
         x=state["x"],
         y=state["y"],
         angle=state["angle"],
-        flags=0,
+        flags=state.get("input_flags", 0),
         movement_mode=protocol.MOVEMENT_MODE_POSE,
     )
     sock.sendto(pkt, server_address)
     state["seq"] = (state["seq"] + 1) & 0xFFFF
 
 
+# Snap the local authoritative pose from the latest server player snapshot.
 def _update_local_pose_from_server(state: dict, players) -> None:
     player_id = state["player_id"]
     if player_id is None:
@@ -258,6 +570,7 @@ def _update_local_pose_from_server(state: dict, players) -> None:
         return
 
 
+# Decode one server packet and update local board/runtime state from it.
 def _handle_packet(data: bytes, state: dict, bram) -> None:
     pkt_type, seq, timestamp = protocol.unpack_header(data)
     state["last_rx_at"] = time.monotonic()
@@ -285,14 +598,23 @@ def _handle_packet(data: bytes, state: dict, bram) -> None:
         return
 
     if pkt_type == protocol.PKT_BITS_INIT:
-        bits = protocol.unpack_bits_init_packet(data)
-        print(f"[BITS_INIT] count={len(bits)}")
+        raw_bits = protocol.unpack_bits_init_packet(data)
+        if raw_bits:
+            max_id = max(bit_id for bit_id, _, _ in raw_bits)
+            bits = [None] * (max_id + 1)
+            for bit_id, bit_x, bit_y in raw_bits:
+                bits[bit_id] = (bit_x, bit_y)
+            state["bits"] = bits
+        else:
+            state["bits"] = []
+        print(f"[BITS_INIT] count={len(raw_bits)}")
         return
 
     if pkt_type == protocol.PKT_GAME_STATE:
         _, rx_seq, rx_ts, game_mode, players, bits_mask = protocol.unpack_server_packet(data)
         state["game_mode"] = game_mode
         state["bits_mask"] = bits_mask
+        state["players"] = players
         _update_local_pose_from_server(state, players)
 
         now = time.monotonic()
@@ -307,6 +629,7 @@ def _handle_packet(data: bytes, state: dict, bram) -> None:
     print(f"[RX] {_describe_packet(data)}")
 
 
+# Drain all queued UDP packets for this tick without blocking the main loop.
 def _drain_packets(sock: socket.socket, state: dict, bram) -> None:
     while True:
         try:
@@ -323,28 +646,44 @@ def _drain_packets(sock: socket.socket, state: dict, bram) -> None:
             print(f"[RX_ERR] {exc} from {addr} {_describe_packet(data)}")
 
 
+# Run the standalone PYNQ board loop in either manual or auto mode.
 def main():
-    print(f"[NET] EC2 target {SERVER_IP}:{SERVER_PORT}")
+    global USERNAME
+    parser = argparse.ArgumentParser(description="Standalone PYNQ board client")
+    parser.add_argument("--server", default=SERVER_IP)
+    parser.add_argument("--port", type=int, default=SERVER_PORT)
+    parser.add_argument("--overlay", default=OVERLAY_PATH)
+    parser.add_argument("--username", default=os.environ.get("PYNQ_USERNAME", USERNAME))
+    parser.add_argument("--mode", choices=["manual", "auto"],
+                        default=os.environ.get("PYNQ_MODE", MODE))
+    args = parser.parse_args()
+
+    print(f"[NET] EC2 target {args.server}:{args.port}")
     print(
-        f"[CFG] username={USERNAME or '<none>'} role={PREFERRED_ROLE} "
-        f"tick_rate={TICK_RATE} overlay={OVERLAY_PATH}"
+        f"[CFG] username={args.username or '<none>'} role={PREFERRED_ROLE} "
+        f"tick_rate={TICK_RATE} overlay={args.overlay} mode={args.mode}"
     )
 
-    overlay, bram, buttons = _load_overlay()
+    USERNAME = args.username
+
+    overlay, bram, buttons = _load_overlay(args.overlay)
     _ = overlay
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setblocking(False)
-    server_address = (SERVER_IP, SERVER_PORT)
+    server_address = (args.server, args.port)
 
     state = {
+        "mode": args.mode,
         "registered": False,
         "player_id": None,
         "seq": 0,
+        "tick": 0,
         "x": INITIAL_X,
         "y": INITIAL_Y,
         "angle_raw": INITIAL_ANGLE_RAW & HW_ANGLE_MASK,
         "angle": (INITIAL_ANGLE_RAW & HW_ANGLE_MASK) * (2.0 * math.pi / HW_ANGLE_STEPS),
+        "input_flags": 0,
         "match_ended": False,
         "last_rx_at": None,
         "last_register_tx_at": 0.0,
@@ -355,6 +694,8 @@ def main():
         "tiles": bytearray(),
         "game_mode": protocol.GAME_MODE_CHASE,
         "bits_mask": 0xFFFF,
+        "bits": [],
+        "players": [],
     }
 
     print("[NET] starting lobby/register loop")
@@ -376,7 +717,10 @@ def main():
                     state["player_id"] = None
                     state["match_ended"] = False
 
-            _apply_manual_input(state, buttons)
+            if state["mode"] == "auto":
+                _apply_auto_input(state)
+            else:
+                _apply_manual_input(state, buttons)
             _write_pose_to_bram(bram, state)
 
             if not state["registered"]:
@@ -384,6 +728,7 @@ def main():
                     _send_register(sock, server_address, state)
             else:
                 _send_state(sock, server_address, state)
+                state["tick"] += 1
 
             elapsed = time.monotonic() - tick_start
             sleep_time = TICK_INTERVAL - elapsed

@@ -5,6 +5,7 @@ This repo currently uses a small set of movement and routing algorithms rather t
 The important split is:
 
 - `sim_full` auto-test nodes now use real grid pathfinding on the loaded map
+- the real PYNQ board launch path in `jupyter_side/test_package.py` now uses the same style of grid pathfinding when started in `--mode auto`
 - server-side ghosts do not use full pathfinding; they use reactive steering toward the runner
 - both paths rely on the same map walkability and collision-resolution ideas
 
@@ -75,6 +76,35 @@ So the full stack is:
 1. choose objective
 2. compute next path waypoint on the tile grid
 3. attempt one collision-safe world-space step toward that waypoint
+
+## 1b. PYNQ Board Auto Mode: Same Grid Pathing In `test_package.py`
+
+Files:
+
+- `jupyter_side/test_package.py`
+- `pynq_full/interfacing/pynq_client.py`
+
+Used for:
+
+- real-board demo mode when the PYNQ client is launched with `--mode auto`
+- runner auto-collecting bits on the live FPGA board path
+- tagger auto-chasing and shooting without manual button input
+
+### Core approach
+
+The board client now mirrors the simulator navigation stack:
+
+- `_nearest_open_cell(...)`
+- `_build_cell_path(...)`
+- `_path_step_target(...)`
+- `_choose_auto_objective(...)`
+- `_apply_auto_input(...)`
+
+So the board path is no longer "move straight at target and get stuck". It uses the same 4-way grid search through the loaded `32x32` map, then takes one collision-safe step toward the next waypoint each tick.
+
+### Important note
+
+For the real PYNQ path, `test_package.py` is the current source of truth. That is the script used on the board during bring-up and demos.
 
 ## 2. Server Ghosts: Reactive Steering, Not Full Pathfinding
 
