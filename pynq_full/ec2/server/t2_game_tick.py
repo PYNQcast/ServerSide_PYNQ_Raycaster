@@ -129,6 +129,12 @@ class GameTick:
         elif cmd == "set_ghost_count":
             count = int(data.get("count", 0))
             self.packets.set_ghost_count(count)
+        elif cmd == "set_node_mode":
+            board_slot = int(data.get("board_slot", 0) or 0)
+            mode = str(data.get("mode", "manual"))
+            if board_slot in (1, 2):
+                started, message = self.packets.set_node_mode(board_slot, mode)
+                print(f"[T2] set_node_mode: {message}")
         elif cmd == "set_map":
             name = data.get("map", "chase")
             new_map = load_map(os.path.join(_MAPS_DIR, f"{name}.txt"))

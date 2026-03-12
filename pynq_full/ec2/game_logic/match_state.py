@@ -22,6 +22,7 @@ class MatchState:
 
     def reset_all(self):
         self.spawn_positions = list(SPAWN_POSITIONS)
+        self.slot_modes = {1: "manual", 2: "manual"}
         self.clear_match(arm_lockout=False)
 
     # ── Player position helpers ───────────────────────────────────────────────

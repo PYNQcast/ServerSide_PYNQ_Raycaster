@@ -22,7 +22,7 @@ from protocol import (
     GAME_MODE_CHASE, GAME_MODE_CHASE_BITS, FLAG_GHOST,
     # functions
     decode_movement_mode, unpack_node_packet, unpack_register_packet,
-    pack_map_packet, pack_bits_init_packet,
+    pack_map_packet, pack_bits_init_packet, pack_node_mode_packet,
 )
 from game_logic.anticheat import Anticheat, DEFAULT_MAX_SPEED_PER_TICK
 from t2_constants import (
@@ -57,6 +57,43 @@ class PacketHandler:
         self._on_match_resume = on_match_resume
         self._on_event       = on_event
         self.anticheat       = Anticheat()
+
+    # Return the first unused stable board slot for a newly connected human node.
+    def _allocate_board_slot(self) -> int | None:
+        used = {
+            int(player.get("board_slot"))
+            for addr, player in self.state.players.items()
+            if not str(addr).startswith("ghost:") and player.get("board_slot") is not None
+        }
+        for slot in range(1, MATCH_PLAYERS + 1):
+            if slot not in used:
+                return slot
+        return None
+
+    # Look up a live human node by its stable board slot.
+    def _addr_for_board_slot(self, board_slot: int):
+        for addr, player in self.state.players.items():
+            if str(addr).startswith("ghost:"):
+                continue
+            if int(player.get("board_slot") or 0) == int(board_slot):
+                return addr
+        return None
+
+    # Send the runtime control mode packet to one connected board.
+    def _send_control_mode(self, addr):
+        if self.udp_transport is None:
+            return
+        player = self.state.players.get(addr)
+        if not player or str(addr).startswith("ghost:"):
+            return
+        control_mode = str(player.get("control_mode") or "manual").lower()
+        mode_value = 1 if control_mode == "auto" else 0
+        pkt = pack_node_mode_packet(0, mode_value)
+        try:
+            self.udp_transport.sendto(pkt, addr)
+            print(f"[T2] sent PKT_NODE_MODE ({control_mode}) to {addr}")
+        except Exception as e:
+            print(f"[T2] failed to send PKT_NODE_MODE to {addr}: {e}")
 
     # Derive world-space AABB from current map dimensions for position validation
     def _world_bounds(self):
@@ -186,6 +223,11 @@ class PacketHandler:
             print(f"[T2] rejected {addr} — already at {MATCH_PLAYERS} human players")
             return
 
+        board_slot = self._allocate_board_slot()
+        if board_slot is None:
+            print(f"[T2] rejected {addr} — no board slots available")
+            return
+
         self.state.clear_lockout()
         self.state.pending_roles[addr] = preferred_role
 
@@ -201,12 +243,15 @@ class PacketHandler:
             "protocol_version": 0,
             "timed_out":        False,
             "preferred_role":   preferred_role,
+            "board_slot":       board_slot,
+            "control_mode":     self.state.slot_modes.get(board_slot, "manual"),
             **identity,
         }
 
         human_count = sum(1 for a in self.state.players if not str(a).startswith("ghost:"))
         self._send_ack(addr, 0)
         self._send_map(addr)
+        self._send_control_mode(addr)
         print(f"[T2] player queued from {addr} (lobby humans={human_count}, ghosts={self._ghost_count()})")
 
     def _human_addrs(self):
@@ -243,9 +288,11 @@ class PacketHandler:
             player["last_seq"] = None
             player["timed_out"] = False
             player["preferred_role"] = player.get("preferred_role", ROLE_ANY)
+            player["control_mode"] = self.state.slot_modes.get(player.get("board_slot", queue_slot + 1), "manual")
             self.state.pending_roles[addr] = player["preferred_role"]
             self._send_ack(addr, 0)
             self._send_map(addr)
+            self._send_control_mode(addr)
 
         for addr, player in self.state.players.items():
             if not str(addr).startswith("ghost:"):
@@ -306,12 +353,14 @@ class PacketHandler:
         self.state.players[runner_addr]["player_id"] = 1
         self._send_ack(runner_addr, 1)
         self._send_map(runner_addr)
+        self._send_control_mode(runner_addr)
         print(f"[T2] assigned RUNNER(1) to {runner_addr}")
 
         if tagger_addr:
             self.state.players[tagger_addr]["player_id"] = 2
             self._send_ack(tagger_addr, 2)
             self._send_map(tagger_addr)
+            self._send_control_mode(tagger_addr)
             print(f"[T2] assigned TAGGER(2) to {tagger_addr}")
 
         self.state.pending_roles = {}
@@ -353,6 +402,20 @@ class PacketHandler:
                 self.write_queue.put({"op": "del", "key": f"player:{p['player_id']}"})
                 print(f"[T2] removed ghost {addr}")
 
+    # Update the desired runtime mode for one stable board slot and notify it if connected.
+    def set_node_mode(self, board_slot: int, mode: str):
+        target_slot = int(board_slot)
+        target_mode = "auto" if str(mode).lower() == "auto" else "manual"
+        self.state.slot_modes[target_slot] = target_mode
+        addr = self._addr_for_board_slot(target_slot)
+        if addr is None:
+            print(f"[T2] node mode stored for board slot {target_slot} -> {target_mode} (offline)")
+            return False, f"board {target_slot} {target_mode} stored for next reconnect"
+        self.state.players[addr]["control_mode"] = target_mode
+        self._send_control_mode(addr)
+        print(f"[T2] node mode set for board slot {target_slot} -> {target_mode}")
+        return True, f"board {target_slot} -> {target_mode}"
+
     # Create a ghost tagger entry in players — driven by CoreLogic, not UDP packets
     def _spawn_ghost(self):
         ghost_count = sum(1 for a in self.state.players if str(a).startswith("ghost:"))
@@ -376,6 +439,8 @@ class PacketHandler:
             "movement_mode":    0,
             "protocol_version": 0,
             "timed_out":        False,
+            "board_slot":       None,
+            "control_mode":     "",
             "username":         "",
             "display_name":     f"ghost-{ghost_id}",
             "profile_key":      "",
