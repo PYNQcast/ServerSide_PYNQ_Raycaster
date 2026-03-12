@@ -106,6 +106,29 @@ export function currentRoleForPlayer(player) {
   return null;
 }
 
+export function normaliseIdentityText(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+export function simSlotForValue(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+export function inferSimSlotFromProfile(profile = {}) {
+  for (const raw of [
+    profile.player_key,
+    profile.username,
+    profile.display_name,
+  ]) {
+    const text = normaliseIdentityText(raw);
+    const match = text.match(/(?:^|[^a-z0-9])sim[-_ ]*([1-9][0-9]*)$/);
+    if (match) return Number.parseInt(match[1], 10) - 1;
+  }
+  return null;
+}
+
 export function stableColourForKey(key) {
   const text = String(key || 'player');
   let hash = 0;
