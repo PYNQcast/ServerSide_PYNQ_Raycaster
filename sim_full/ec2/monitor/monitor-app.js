@@ -154,7 +154,7 @@ function updateRedis(redis) {
 
   let note = `monitor polls Redis at ${redis.monitor_push_hz} Hz (~${redis.monitor_cmds_per_sec} commands/sec from this page). `;
   note += `Clients ${redis.connected_clients} = ${breakdown}. `;
-  note += `Blocked is usually the sidecar on BRPOP; pub/sub clients are usually node simulators waiting for restart.`;
+  note += `Blocked is usually the sidecar on BRPOP; pub/sub clients are usually local node simulators listening for mode/lobby commands.`;
   document.getElementById('redis-note').textContent = note;
 }
 
@@ -189,7 +189,7 @@ function updateServices(services) {
   applyState('svc-server', services.server);
   applyState('svc-sidecar', services.sidecar);
   applyState('svc-monitor', services.monitor);
-  setServiceNote(services.last_action || 'controls run on EC2 only; node simulators still start locally');
+  setServiceNote(services.last_action || 'controls run on EC2 only; local node simulators join the lobby after launch');
 }
 
 function describePausedPlayers(playerIds) {

@@ -75,7 +75,7 @@ _ddb_cache      = []
 _ddb_last_fetch = 0.0
 _service_cache  = {}
 _service_last_fetch = 0.0
-_service_message = "controls run on EC2 only; node simulators still start locally"
+_service_message = "controls run on EC2 only; local node simulators join the lobby after launch"
 _replay_cache = {}
 _active_map = "chase"    # tracks which map the server is using
 _redis_stats_cache = {}
@@ -314,15 +314,30 @@ def handle_control_command(cmd: str):
 
     if cmd == "force_end":
         r.publish("game:control", json.dumps({"cmd": "force_end"}))
-        _service_message = "force_end sent — match will end this tick"
+        _service_message = "force_end sent — session will return to the lobby after the end hold"
+    elif cmd == "start_match":
+        r.publish("game:control", json.dumps({"cmd": "start_match"}))
+        _service_message = "start_match sent — queued lobby players will be promoted if enough participants exist"
     elif cmd == "restart":
         payload = json.dumps({"cmd": "restart"})
         r.publish("game:control", payload)
         _service_message = "restart signal sent to node simulators"
+    elif cmd == "node1_disconnect":
+        r.publish("game:control", json.dumps({"cmd": "disconnect", "node_index": 0}))
+        _service_message = "disconnect sent to node 1"
+    elif cmd == "node1_reconnect":
+        r.publish("game:control", json.dumps({"cmd": "reconnect", "node_index": 0}))
+        _service_message = "reconnect sent to node 1"
     elif cmd == "node1_auto":
         _service_message = publish_node_mode(0, "auto")
     elif cmd == "node1_manual":
         _service_message = publish_node_mode(0, "manual")
+    elif cmd == "node2_disconnect":
+        r.publish("game:control", json.dumps({"cmd": "disconnect", "node_index": 1}))
+        _service_message = "disconnect sent to node 2"
+    elif cmd == "node2_reconnect":
+        r.publish("game:control", json.dumps({"cmd": "reconnect", "node_index": 1}))
+        _service_message = "reconnect sent to node 2"
     elif cmd == "node2_auto":
         _service_message = publish_node_mode(1, "auto")
     elif cmd == "node2_manual":

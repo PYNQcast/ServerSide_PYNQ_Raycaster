@@ -38,6 +38,7 @@ from t2_constants import (
     PAUSE_ABORT_S,
     MAX_GHOSTS,
     PLAYER_COLLISION_RADIUS,
+    SPAWN_ANGLES,
 )
 from t2_map_loader import resolve_walkable_world
 
@@ -120,6 +121,8 @@ class PacketHandler:
         if pkt_type == PKT_REGISTER:
             if pkt.get("username", ""):
                 p.update(build_player_identity(pkt["username"], addr))
+            p["preferred_role"] = pkt.get("preferred_role", ROLE_ANY)
+            self.state.pending_roles[addr] = p["preferred_role"]
             if not self.state.match_started or p["player_id"] == 0:
                 p["x"], p["y"], p["angle"] = x, y, angle
             p["last_seq"] = seq
@@ -170,12 +173,15 @@ class PacketHandler:
         self._maybe_resume_match()
 
     # ── Player registration ───────────────────────────────────────────────────
-    # Record preferred role, then assign roles once two humans are present.
-    # Queued humans get ACK(0) so simulator clients can move in the lobby.
+    # Record preferred role and keep humans in the lobby until the monitor sends Start.
+    # Queued humans get ACK(0) so simulator clients can move before the match begins.
 
     def _register_player(self, addr, x=0.0, y=0.0, angle=0.0,
                          preferred_role=ROLE_ANY, username=""):
         if self.state.is_in_lockout():
+            return
+        if self.state.match_started:
+            print(f"[T2] rejected {addr} — match already started")
             return
 
         human_count = sum(1 for a in self.state.players if not str(a).startswith("ghost:"))
@@ -194,33 +200,104 @@ class PacketHandler:
             "movement_mode":    0,
             "protocol_version": 0,
             "timed_out":        False,
+            "preferred_role":   preferred_role,
             **identity,
         }
 
         human_count = sum(1 for a in self.state.players if not str(a).startswith("ghost:"))
-        if human_count < MATCH_PLAYERS:
+        self._send_ack(addr, 0)
+        print(f"[T2] player queued from {addr} (lobby humans={human_count}, ghosts={self._ghost_count()})")
+
+    def _human_addrs(self):
+        return [addr for addr in self.state.players if not str(addr).startswith("ghost:")]
+
+    def _ghost_count(self):
+        return sum(1 for addr in self.state.players if str(addr).startswith("ghost:"))
+
+    def _spawn_pose_for_slot(self, slot_index: int):
+        positions = self.state.spawn_positions
+        x, y = positions[slot_index] if slot_index < len(positions) else (0.0, 0.0)
+        angle = SPAWN_ANGLES[slot_index] if slot_index < len(SPAWN_ANGLES) else 0.0
+        return x, y, angle
+
+    def return_players_to_lobby(self):
+        human_addrs = self._human_addrs()
+        existing_players = list(self.state.players.items())
+        for _, player in existing_players:
+            if player["player_id"] > 0:
+                self.write_queue.put({"op": "del", "key": f"player:{player['player_id']}"})
+
+        self.state.reset_match_runtime(arm_lockout=False)
+        self.state.set_spawn_positions(self.map_state.get("spawn_positions", []))
+
+        for queue_slot, addr in enumerate(human_addrs):
+            player = self.state.players[addr]
+            lobby_x, lobby_y, lobby_angle = self._spawn_pose_for_slot(queue_slot)
+            player["player_id"] = 0
+            player["x"] = lobby_x
+            player["y"] = lobby_y
+            player["angle"] = lobby_angle
+            player["flags"] = 0
+            player["last_seq"] = None
+            player["timed_out"] = False
+            player["preferred_role"] = player.get("preferred_role", ROLE_ANY)
+            self.state.pending_roles[addr] = player["preferred_role"]
             self._send_ack(addr, 0)
-            print(f"[T2] player queued from {addr} (waiting for {MATCH_PLAYERS - human_count} more)")
-            return
 
-        self._assign_roles_and_start()
+        for addr, player in self.state.players.items():
+            if not str(addr).startswith("ghost:"):
+                continue
+            ghost_x, ghost_y, ghost_angle = self._spawn_pose_for_slot(player["player_id"] - 1)
+            player["x"] = ghost_x
+            player["y"] = ghost_y
+            player["angle"] = ghost_angle
+            player["flags"] = FLAG_GHOST
+            player["last_seq"] = None
+            player["timed_out"] = False
 
-    def _assign_roles_and_start(self):
-        addrs = [a for a in self.state.players if not str(a).startswith("ghost:")]
-        roles = {a: self.state.pending_roles.get(a, ROLE_ANY) for a in addrs}
+        self.state.next_id = max(
+            (player["player_id"] for player in self.state.players.values()),
+            default=0,
+        ) + 1
 
-        runners = [a for a, role in roles.items() if role == ROLE_RUNNER]
-        taggers = [a for a, role in roles.items() if role == ROLE_TAGGER]
+    def start_match_from_lobby(self):
+        if self.state.match_started and not self.state.match_ended:
+            return False, "match already live"
 
-        if runners and taggers:
-            runner_addr = runners[0]
-            tagger_addr = taggers[0]
-        elif len(runners) == 2:
+        addrs = self._human_addrs()
+        ghost_count = self._ghost_count()
+        participant_count = len(addrs) + ghost_count
+        if not addrs:
+            return False, "no human players in the lobby"
+        if participant_count < 2:
+            return False, "need 2 participants to start (two humans or one human plus a ghost)"
+
+        roles = {
+            addr: self.state.pending_roles.get(
+                addr,
+                self.state.players[addr].get("preferred_role", ROLE_ANY),
+            )
+            for addr in addrs
+        }
+        if len(addrs) == 1:
             runner_addr = addrs[0]
             tagger_addr = None
         else:
-            runner_addr = addrs[0]
-            tagger_addr = addrs[1] if len(addrs) > 1 else None
+            runners = [addr for addr, role in roles.items() if role == ROLE_RUNNER]
+            taggers = [addr for addr, role in roles.items() if role == ROLE_TAGGER]
+            if runners and taggers:
+                runner_addr = runners[0]
+                tagger_addr = taggers[0]
+            else:
+                runner_addr = addrs[0]
+                tagger_addr = addrs[1]
+
+        for addr in addrs:
+            player = self.state.players[addr]
+            player["player_id"] = 0
+            player["flags"] = 0
+            player["last_seq"] = None
+            player["timed_out"] = False
 
         self.state.players[runner_addr]["player_id"] = 1
         self._send_ack(runner_addr, 1)
@@ -230,16 +307,12 @@ class PacketHandler:
             self.state.players[tagger_addr]["player_id"] = 2
             self._send_ack(tagger_addr, 2)
             print(f"[T2] assigned TAGGER(2) to {tagger_addr}")
-        else:
-            second_addr = addrs[1] if len(addrs) > 1 else None
-            if second_addr:
-                self.state.players[second_addr]["player_id"] = 2
-                self._send_ack(second_addr, 2)
-                print(f"[T2] assigned TAGGER(2) to {second_addr}")
-            self._spawn_ghost()
 
         self.state.pending_roles = {}
-        self.state.next_id = len(self.state.players) + 1
+        self.state.next_id = max(
+            (player["player_id"] for player in self.state.players.values()),
+            default=0,
+        ) + 1
         self.state.set_spawn_positions(self.map_state.get("spawn_positions", []))
 
         bits = self.map_state.get("bits", [])
@@ -256,6 +329,7 @@ class PacketHandler:
         self.state.match_tick = 0
         self.state.reset_positions()
         self._on_match_start()
+        return True, "match started"
 
     def _send_ack(self, addr, player_id: int):
         if self.udp_transport is None:

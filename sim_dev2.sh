@@ -340,6 +340,6 @@ fi
 
 section "Ready"
 log_ok "Session '$SESSION' is live."
-log_info "Press Enter in both node sim panes when the server is ready."
+log_info "Press Enter in both node sim panes to launch them; they should appear in the lobby immediately."
 tmux select-pane -t "$SESSION:0.0"
 tmux attach-session -t "$SESSION"
