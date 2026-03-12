@@ -10,6 +10,7 @@ import socket
 import struct
 import time
 import math
+import heapq
 import argparse
 import threading
 import json
@@ -348,6 +349,154 @@ def resolve_move(map_state: dict, current_x: float, current_y: float, desired_x:
     return low_x, low_y
 
 
+def world_to_cell(map_state: dict, x: float, y: float):
+    width = map_state.get("width", 0)
+    height = map_state.get("height", 0)
+    tile_scale = map_state.get("tile_scale", MAP_TILE_SCALE)
+    if width <= 0 or height <= 0 or tile_scale <= 0:
+        return None
+    col = int(math.floor((x / tile_scale) + (width / 2.0)))
+    row = int(math.floor((y / tile_scale) + (height / 2.0)))
+    if col < 0 or row < 0 or col >= width or row >= height:
+        return None
+    return (col, row)
+
+
+def cell_is_open(map_state: dict, col: int, row: int) -> bool:
+    width = map_state.get("width", 0)
+    height = map_state.get("height", 0)
+    tiles = map_state.get("tiles", bytearray())
+    if col < 0 or row < 0 or col >= width or row >= height:
+        return False
+    if not tiles:
+        return True
+    return tiles[row * width + col] == 0
+
+
+def cell_center_world(map_state: dict, col: int, row: int):
+    width = map_state.get("width", 0)
+    height = map_state.get("height", 0)
+    tile_scale = map_state.get("tile_scale", MAP_TILE_SCALE)
+    return cell_to_world(col, row, width, height, tile_scale)
+
+
+def nearest_open_cell(map_state: dict, x: float, y: float):
+    origin = world_to_cell(map_state, x, y)
+    width = map_state.get("width", 0)
+    height = map_state.get("height", 0)
+    if width <= 0 or height <= 0:
+        return None
+
+    if origin and cell_is_open(map_state, origin[0], origin[1]):
+        return origin
+
+    if origin is None:
+        tile_scale = map_state.get("tile_scale", MAP_TILE_SCALE)
+        guess_col = min(width - 1, max(0, int(round((x / tile_scale) + (width / 2.0) - 0.5))))
+        guess_row = min(height - 1, max(0, int(round((y / tile_scale) + (height / 2.0) - 0.5))))
+        origin = (guess_col, guess_row)
+
+    max_radius = max(width, height)
+    for radius in range(1, max_radius + 1):
+        row_min = max(0, origin[1] - radius)
+        row_max = min(height - 1, origin[1] + radius)
+        col_min = max(0, origin[0] - radius)
+        col_max = min(width - 1, origin[0] + radius)
+        for row in range(row_min, row_max + 1):
+            for col in range(col_min, col_max + 1):
+                if abs(col - origin[0]) != radius and abs(row - origin[1]) != radius:
+                    continue
+                if cell_is_open(map_state, col, row):
+                    return (col, row)
+    return None
+
+
+def build_cell_path(map_state: dict, start_cell, goal_cell):
+    if start_cell is None or goal_cell is None:
+        return []
+    if start_cell == goal_cell:
+        return [start_cell]
+
+    width = map_state.get("width", 0)
+    height = map_state.get("height", 0)
+    if width <= 0 or height <= 0:
+        return []
+
+    open_heap = []
+    heapq.heappush(open_heap, (0, 0, start_cell))
+    came_from = {}
+    g_score = {start_cell: 0}
+    closed = set()
+
+    while open_heap:
+        _, cost_so_far, current = heapq.heappop(open_heap)
+        if current in closed:
+            continue
+        if current == goal_cell:
+            path = [current]
+            while current in came_from:
+                current = came_from[current]
+                path.append(current)
+            path.reverse()
+            return path
+
+        closed.add(current)
+        col, row = current
+        for next_col, next_row in (
+            (col + 1, row),
+            (col - 1, row),
+            (col, row + 1),
+            (col, row - 1),
+        ):
+            if not cell_is_open(map_state, next_col, next_row):
+                continue
+            neighbour = (next_col, next_row)
+            next_cost = cost_so_far + 1
+            if next_cost >= g_score.get(neighbour, 1_000_000):
+                continue
+            came_from[neighbour] = current
+            g_score[neighbour] = next_cost
+            heuristic = abs(goal_cell[0] - next_col) + abs(goal_cell[1] - next_row)
+            heapq.heappush(open_heap, (next_cost + heuristic, next_cost, neighbour))
+
+    return []
+
+
+def path_step_target(map_state: dict, current_x: float, current_y: float, target_x: float, target_y: float):
+    if map_state.get("width", 0) <= 0 or not map_state.get("tiles"):
+        return (target_x, target_y)
+
+    start_cell = nearest_open_cell(map_state, current_x, current_y)
+    goal_cell = nearest_open_cell(map_state, target_x, target_y)
+    path = build_cell_path(map_state, start_cell, goal_cell)
+    if len(path) >= 2:
+        return cell_center_world(map_state, path[1][0], path[1][1])
+    if len(path) == 1:
+        return cell_center_world(map_state, path[0][0], path[0][1])
+    return (target_x, target_y)
+
+
+def choose_best_step_towards(x: float, y: float, angle: float, map_state: dict, target, move_speed: float):
+    desired_angle = math.atan2(target[1] - y, target[0] - x)
+    best = None
+    offsets = (0.0, 0.35, -0.35, 0.7, -0.7, 1.05, -1.05, math.pi)
+    for offset in offsets:
+        candidate_angle = wrap_angle(desired_angle + offset)
+        desired_x = x + move_speed * math.cos(candidate_angle)
+        desired_y = y + move_speed * math.sin(candidate_angle)
+        next_x, next_y = resolve_move(map_state, x, y, desired_x, desired_y)
+        blocked = next_x == x and next_y == y
+        score = ((next_x - target[0]) ** 2 + (next_y - target[1]) ** 2) + (abs(offset) * 3.0)
+        if blocked:
+            score += 1_000_000
+        candidate = (score, next_x, next_y, candidate_angle)
+        if best is None or candidate < best:
+            best = candidate
+    if best is None:
+        return x, y, angle, desired_angle
+    return best[1], best[2], best[3], desired_angle
+
+
 def wrap_angle(angle: float) -> float:
     while angle <= -math.pi:
         angle += math.pi * 2.0
@@ -450,35 +599,17 @@ def advance_auto_player(x: float, y: float, angle: float, map_state: dict, assig
     shoot_now = False
 
     if target is None:
-        desired_x = x + move_speed * math.cos(angle)
-        desired_y = y + move_speed * math.sin(angle)
-        next_x, next_y = resolve_move(map_state, x, y, desired_x, desired_y)
-        if next_x == x and next_y == y:
-            angle = wrap_angle(angle + AUTO_TURN_STEP * 1.5)
-            desired_x = x + move_speed * math.cos(angle)
-            desired_y = y + move_speed * math.sin(angle)
-            next_x, next_y = resolve_move(map_state, x, y, desired_x, desired_y)
+        roam_target = (
+            x + move_speed * 3.0 * math.cos(angle),
+            y + move_speed * 3.0 * math.sin(angle),
+        )
+        next_x, next_y, angle, _ = choose_best_step_towards(x, y, angle, map_state, roam_target, move_speed)
         return next_x, next_y, angle, shoot_now
 
-    desired_angle = math.atan2(target[1] - y, target[0] - x)
-    angle = turn_towards(angle, desired_angle, AUTO_TURN_STEP)
-    desired_x = x + move_speed * math.cos(angle)
-    desired_y = y + move_speed * math.sin(angle)
-    next_x, next_y = resolve_move(map_state, x, y, desired_x, desired_y)
-
-    if next_x == x and next_y == y:
-        left_angle = wrap_angle(angle + AUTO_TURN_STEP * 1.75)
-        right_angle = wrap_angle(angle - AUTO_TURN_STEP * 1.75)
-        left_pos = resolve_move(map_state, x, y, x + move_speed * math.cos(left_angle), y + move_speed * math.sin(left_angle))
-        right_pos = resolve_move(map_state, x, y, x + move_speed * math.cos(right_angle), y + move_speed * math.sin(right_angle))
-        left_progress = (left_pos[0] - target[0]) ** 2 + (left_pos[1] - target[1]) ** 2
-        right_progress = (right_pos[0] - target[0]) ** 2 + (right_pos[1] - target[1]) ** 2
-        if left_pos != (x, y) and (right_pos == (x, y) or left_progress <= right_progress):
-            angle = left_angle
-            next_x, next_y = left_pos
-        elif right_pos != (x, y):
-            angle = right_angle
-            next_x, next_y = right_pos
+    nav_target = path_step_target(map_state, x, y, target[0], target[1])
+    next_x, next_y, angle, desired_angle = choose_best_step_towards(
+        x, y, angle, map_state, nav_target, move_speed,
+    )
 
     if mode == "chase":
         distance = math.hypot(target[0] - x, target[1] - y)

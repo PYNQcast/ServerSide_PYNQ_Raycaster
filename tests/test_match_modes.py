@@ -837,6 +837,38 @@ def test_sim_auto_tagger_chases_runner():
         assert objective["target"] == (-10.0, 5.0)
 
 
+def test_sim_path_step_target_routes_through_gap():
+    with sim_import_context():
+        node_sim = importlib.import_module("node_simulator")
+
+        width = 5
+        height = 5
+        tiles = bytearray([
+            0, 0, 1, 0, 0,
+            0, 0, 1, 0, 0,
+            0, 0, 0, 0, 0,
+            0, 0, 1, 0, 0,
+            0, 0, 1, 0, 0,
+        ])
+        map_state = {
+            "width": width,
+            "height": height,
+            "tile_scale": 8,
+            "tiles": tiles,
+        }
+
+        waypoint = node_sim.path_step_target(
+            map_state,
+            current_x=-12.0,
+            current_y=-12.0,
+            target_x=12.0,
+            target_y=-12.0,
+        )
+
+        assert waypoint != (12.0, -12.0)
+        assert waypoint[1] > -12.0
+
+
 def test_sim_orbit_tagger_speed_exceeds_runner_speed():
     with sim_import_context():
         node_sim = importlib.import_module("node_simulator")
