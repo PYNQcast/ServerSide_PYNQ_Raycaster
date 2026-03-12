@@ -236,19 +236,46 @@ function buildGhostModel(group, pColor) {
   }
 }
 
-function PlayerTrophy({ player }) {
+function PlayerTrophy({ player, pageVisible }) {
+  const shellRef = useRef(null);
   const mountRef = useRef(null);
+  const [inView, setInView] = useState(false);
+  const [renderError, setRenderError] = useState('');
   const role = player.currentRole || 'runner';
   const isGhost = role === 'ghost';
 
   useEffect(() => {
+    const shell = shellRef.current;
+    if (!shell || !pageVisible) {
+      setInView(false);
+      return () => {};
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        setInView(entries.some((entry) => entry.isIntersecting));
+      },
+      { root: null, rootMargin: '220px 0px', threshold: 0.01 },
+    );
+    observer.observe(shell);
+    return () => observer.disconnect();
+  }, [pageVisible, player.player_key]);
+
+  useEffect(() => {
     const mount = mountRef.current;
-    if (!mount) return () => {};
+    if (!mount || !pageVisible || !inView) return () => {};
 
     const W = 200;
     const H = 220;
     const pColor = new THREE.Color(stableColourForKey(player.player_key || player.profile_key));
-    const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true });
+    let renderer = null;
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true });
+    } catch (error) {
+      setRenderError('WEBGL UNAVAILABLE');
+      return () => {};
+    }
+    setRenderError('');
     renderer.setSize(W / 3, H / 3);
     renderer.domElement.style.width = `${W}px`;
     renderer.domElement.style.height = `${H}px`;
@@ -305,11 +332,12 @@ function PlayerTrophy({ player }) {
       particles.push({ mesh: particle, baseAngle: angle });
     }
 
-    const clock = new THREE.Clock();
+    const timer = new THREE.Timer();
     let rafId = 0;
 
     const animate = () => {
-      const t = clock.getElapsedTime();
+      timer.update();
+      const t = timer.getElapsed();
       charGroup.rotation.y = Math.sin(t * 0.7) * 0.45;
 
       if (isGhost) {
@@ -357,12 +385,14 @@ function PlayerTrophy({ player }) {
       renderer.dispose();
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
     };
-  }, [player.player_key, player.profile_key, player.currentRole]);
+  }, [inView, pageVisible, player.player_key, player.profile_key, player.currentRole]);
 
   return (
-    <div className={`player-trophy-shell${player.isOnline ? '' : ' offline'}`}>
+    <div ref={shellRef} className={`player-trophy-shell${player.isOnline ? '' : ' offline'}`}>
       <div ref={mountRef} className="player-trophy-canvas" />
-      {!player.isOnline ? <div className="player-trophy-overlay">OFFLINE</div> : null}
+      {!pageVisible || !inView ? <div className="player-trophy-overlay">STAND BY</div> : null}
+      {renderError ? <div className="player-trophy-overlay">{renderError}</div> : null}
+      {!renderError && player.isOnline ? null : !pageVisible || !inView ? null : !player.isOnline ? <div className="player-trophy-overlay">OFFLINE</div> : null}
       <div className="player-trophy-role">{roleLabel(role)}</div>
     </div>
   );
@@ -471,6 +501,7 @@ export default function PlayerStatsTab() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState('');
   const [detailError, setDetailError] = useState('');
+  const [pageVisible, setPageVisible] = useState(false);
   const detailCacheRef = useRef(new Map());
   const selectedKeyRef = useRef(null);
 
@@ -547,9 +578,12 @@ export default function PlayerStatsTab() {
 
     const section = document.getElementById('page-players');
     if (!section) return () => {};
+    setPageVisible(!section.hidden);
 
     const observer = new MutationObserver(() => {
-      if (!section.hidden) fetchProfiles({ silent: true });
+      const visible = !section.hidden;
+      setPageVisible(visible);
+      if (visible) fetchProfiles({ silent: true });
     });
     observer.observe(section, { attributes: true, attributeFilter: ['hidden'] });
     return () => observer.disconnect();
@@ -704,7 +738,7 @@ export default function PlayerStatsTab() {
                 </button>
 
                 <div className="player-card-summary">
-                  <PlayerTrophy player={player} />
+                  <PlayerTrophy player={player} pageVisible={pageVisible} />
 
                   <div className="player-card-metrics">
                     <div className="metric-row"><span>career win rate</span><span>{formatPercent(player.total_wins, totalMatches)}</span></div>

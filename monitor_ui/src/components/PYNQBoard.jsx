@@ -279,10 +279,11 @@ function BoardStage({ hostSlot }) {
 
     // ── Animation ──
     let rafId = 0;
-    const clock = new THREE.Clock();
+    const timer = new THREE.Timer();
 
     const render = () => {
-      const t = clock.getElapsedTime();
+      timer.update();
+      const t = timer.getElapsed();
       const bob = Math.sin(t * 1.4);
       const bobPhase = (bob + 1) / 2;
 
