@@ -292,6 +292,71 @@ def test_sim_match_end_hold_clears_runtime_state():
         assert state.lockout_until is not None
 
 
+def test_sim_final_tag_ends_match_without_teleporting_back_to_spawn():
+    with sim_import_context():
+        protocol = importlib.import_module("protocol")
+        constants = importlib.import_module("t2_constants")
+        core_logic_mod = importlib.import_module("game_logic.core_logic")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+
+        state = match_state_mod.MatchState()
+        state.match_started = True
+        state.match_tick = constants.GRACE_TICKS
+        state.spawn_positions = [(-24.0, -24.0), (24.0, 24.0)]
+        state.tag_count = constants.TAGS_TO_WIN - 1
+        state.players = {
+            ("runner", 1): {
+                "player_id": 1,
+                "x": 6.0,
+                "y": 4.0,
+                "angle": 0.0,
+                "flags": 0,
+                "last_seen": 0.0,
+                "last_seq": 1,
+                "movement_mode": 0,
+                "protocol_version": 1,
+            },
+            ("tagger", 2): {
+                "player_id": 2,
+                "x": 6.5,
+                "y": 4.0,
+                "angle": 0.0,
+                "flags": 0,
+                "last_seen": 0.0,
+                "last_seq": 1,
+                "movement_mode": 0,
+                "protocol_version": 1,
+            },
+        }
+
+        events = []
+
+        async def on_event(event):
+            events.append(event)
+
+        logic = core_logic_mod.CoreLogic(
+            state,
+            queue.SimpleQueue(),
+            on_event=on_event,
+            on_force_end_consumed=lambda: None,
+            map_state={},
+        )
+
+        asyncio.run(logic.tick())
+
+        assert state.match_ended is True
+        assert state.tag_count == constants.TAGS_TO_WIN
+        assert state.players[("runner", 1)]["x"] == 6.0
+        assert state.players[("runner", 1)]["y"] == 4.0
+        assert state.players[("tagger", 2)]["x"] == 6.5
+        assert state.players[("tagger", 2)]["y"] == 4.0
+        assert state.players[("runner", 1)]["flags"] & protocol.FLAG_TAGGED
+        assert state.players[("runner", 1)]["flags"] & protocol.FLAG_MATCH_END
+        assert state.players[("tagger", 2)]["flags"] & protocol.FLAG_MATCH_END
+        assert [event["event"] for event in events] == ["player_tagged", "match_end"]
+        assert events[0]["final_tag"] is True
+
+
 def test_sim_packet_handler_requires_register_for_unknown_addr():
     with sim_import_context():
         protocol = importlib.import_module("protocol")
