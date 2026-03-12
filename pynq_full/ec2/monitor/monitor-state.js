@@ -13,7 +13,7 @@ const FLAG_MATCH_END = 0x04;
 const MAP_VIEW_PAD  = 24;
 const PLAYER_COLOURS = ['#00ff88', '#00d4ff', '#ffaa00', '#ff6688'];
 const FLAG_GHOST     = 0x08;
-const LOBBY_MAP_NAME = '__lobby__';
+const LOBBY_MAP_NAME = 'lobby';
 
 // ── Map state ──────────────────────────────────────────────────────────────
 let mapData = null;   // { width, height, tile_scale, tiles: [[0|1, ...], ...] }

@@ -33,7 +33,7 @@ from t2_redis_io import RedisIO
 _MAPS_DIR = os.path.normpath(
     os.path.join(os.path.dirname(__file__), '..', 'maps')
 )
-_LOBBY_MAP_NAME = "__lobby__"
+_LOBBY_MAP_NAME = "lobby"
 
 class GameTick:
     def __init__(self, packet_queue, broadcast_queue, write_queue, tick_rate=20,

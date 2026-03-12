@@ -93,6 +93,7 @@ class RedisIO:
                     player for player in sorted(
                         self.state.players.values(),
                         key=lambda player: (
+                            player.get("sim_slot") if player.get("sim_slot") is not None else 999,
                             player.get("controller_key", ""),
                             player.get("display_name", ""),
                             player.get("x", 0.0),

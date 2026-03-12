@@ -37,7 +37,7 @@ PUSH_RATE_HZ = 20   # push to browser at 20 Hz (match game tick rate)
 DDB_POLL_INTERVAL_S = 2.0
 SERVICE_POLL_INTERVAL_S = 1.0
 REDIS_STATS_POLL_INTERVAL_S = 1.0
-LOBBY_MAP_NAME = "__lobby__"
+LOBBY_MAP_NAME = "lobby"
 
 DYNAMO_TABLE = "pynq-raycaster-seda-matches"
 PLAYER_TABLE = "pynq-raycaster-players"
