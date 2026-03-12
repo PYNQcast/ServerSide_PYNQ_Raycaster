@@ -437,6 +437,57 @@ def test_sim_return_players_to_lobby_clears_match_end_flags_and_requeues_humans(
         assert state.players[("tagger", 2)]["last_seq"] is None
 
 
+def test_sim_match_start_sends_map_packet_to_human_nodes():
+    with sim_import_context():
+        protocol = importlib.import_module("protocol")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+        packet_handler_mod = importlib.import_module("t2_packet_handler")
+
+        class DummyTransport:
+            def __init__(self):
+                self.sent = []
+
+            def sendto(self, data, addr):
+                self.sent.append((data, addr))
+
+        transport = DummyTransport()
+        state = match_state_mod.MatchState()
+        handler = packet_handler_mod.PacketHandler(
+            state,
+            asyncio.Queue(),
+            queue.SimpleQueue(),
+            {
+                "name": "editor_test",
+                "width": 32,
+                "height": 32,
+                "tile_scale": 8,
+                "tiles": bytearray([0] * (32 * 32)),
+                "bits": [],
+                "spawn_positions": [(-24.0, -24.0), (24.0, 24.0)],
+            },
+            on_match_start=lambda: None,
+            on_match_abort=lambda event=None: None,
+            on_match_pause=lambda event=None: None,
+            on_match_resume=lambda event=None: None,
+            on_event=lambda event: None,
+            udp_transport=transport,
+        )
+
+        handler._process_packet({
+            "data": protocol.pack_register_packet(0, 0.0, 0.0, 0.0),
+            "addr": ("runner", 1),
+        })
+        handler._process_packet({
+            "data": protocol.pack_register_packet(0, 0.0, 0.0, 0.0),
+            "addr": ("tagger", 2),
+        })
+
+        started, _ = handler.start_match_from_lobby()
+        assert started is True
+        packet_types = [protocol.unpack_header(data)[0] for data, _ in transport.sent]
+        assert packet_types.count(protocol.PKT_MAP) >= 2
+
+
 def test_sim_packet_handler_requires_register_for_unknown_addr():
     with sim_import_context():
         protocol = importlib.import_module("protocol")

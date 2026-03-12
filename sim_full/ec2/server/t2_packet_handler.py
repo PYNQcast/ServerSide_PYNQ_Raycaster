@@ -26,6 +26,8 @@ from protocol import (
     ROLE_TAGGER,
     SERVER_STATE_FLAGS,
     FLAG_GHOST,
+    pack_bits_init_packet,
+    pack_map_packet,
     decode_movement_mode,
     unpack_node_packet,
     unpack_register_packet,
@@ -310,6 +312,8 @@ class PacketHandler:
             player["timed_out"] = False
 
         self._refresh_lobby_queue_positions()
+        for addr in human_addrs:
+            self._send_map(addr)
 
         for addr, player in self.state.players.items():
             if not str(addr).startswith("ghost:"):
@@ -368,11 +372,13 @@ class PacketHandler:
 
         self.state.players[runner_addr]["player_id"] = 1
         self._send_ack(runner_addr, 1)
+        self._send_map(runner_addr)
         print(f"[T2] assigned RUNNER(1) to {runner_addr}")
 
         if tagger_addr:
             self.state.players[tagger_addr]["player_id"] = 2
             self._send_ack(tagger_addr, 2)
+            self._send_map(tagger_addr)
             print(f"[T2] assigned TAGGER(2) to {tagger_addr}")
 
         self.state.pending_roles = {}
@@ -454,6 +460,30 @@ class PacketHandler:
             self.udp_transport.sendto(packet, addr)
         except Exception as exc:
             print(f"[T2] failed sending ACK to {addr}: {exc}")
+
+    def _send_map(self, addr):
+        if self.udp_transport is None or not self.map_state.get("tiles"):
+            return
+        ms = self.map_state
+        packet = pack_map_packet(0, ms["width"], ms["height"], ms["tile_scale"], ms["tiles"])
+        try:
+            self.udp_transport.sendto(packet, addr)
+            print(f"[T2] sent PKT_MAP ({ms['name']}) to {addr} ({len(packet)} bytes)")
+        except Exception as exc:
+            print(f"[T2] failed sending PKT_MAP to {addr}: {exc}")
+
+    def _send_bits_init(self, addr):
+        if self.udp_transport is None:
+            return
+        bits = self.map_state.get("bits", [])
+        if not bits:
+            return
+        packet = pack_bits_init_packet(0, bits)
+        try:
+            self.udp_transport.sendto(packet, addr)
+            print(f"[T2] sent PKT_BITS_INIT ({len(bits)} bits) to {addr}")
+        except Exception as exc:
+            print(f"[T2] failed sending PKT_BITS_INIT to {addr}: {exc}")
 
     # ── Ghost management ──────────────────────────────────────────────────────
 
