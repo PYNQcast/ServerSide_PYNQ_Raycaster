@@ -8,15 +8,16 @@ ROOT = Path(__file__).resolve().parents[1]
 PYNQ_EC2 = ROOT / "pynq_full" / "ec2"
 PYNQ_SERVER = PYNQ_EC2 / "server"
 PYNQ_INTERFACING = ROOT / "pynq_full" / "interfacing"
+JUPYTER_SIDE = ROOT / "jupyter_side"
 
 
 @contextmanager
 def pynq_import_context():
     original_path = list(sys.path)
-    sys.path[:0] = [str(PYNQ_INTERFACING), str(PYNQ_SERVER), str(PYNQ_EC2)]
+    sys.path[:0] = [str(JUPYTER_SIDE), str(PYNQ_INTERFACING), str(PYNQ_SERVER), str(PYNQ_EC2)]
     for name in list(sys.modules):
         if name in {
-            "t2_constants", "t2_map_loader", "pynq_client", "protocol",
+            "t2_constants", "t2_map_loader", "pynq_client", "protocol", "test_package_v2",
             "player_profiles", "t2_packet_handler", "t2_redis_io",
         }:
             sys.modules.pop(name, None)
@@ -26,7 +27,7 @@ def pynq_import_context():
         sys.path[:] = original_path
         for name in list(sys.modules):
             if name in {
-                "t2_constants", "t2_map_loader", "pynq_client", "protocol",
+                "t2_constants", "t2_map_loader", "pynq_client", "protocol", "test_package_v2",
                 "player_profiles", "t2_packet_handler", "t2_redis_io",
             }:
                 sys.modules.pop(name, None)
@@ -140,6 +141,123 @@ def test_pynq_client_decodes_button_gpio_bits():
         }
 
 
+def test_test_package_auto_runner_prefers_nearest_active_bit_in_bits_mode():
+    with pynq_import_context():
+        protocol = importlib.import_module("protocol")
+        test_package = importlib.import_module("test_package_v2")
+
+        state = {
+            "registered": True,
+            "player_id": 1,
+            "x": 0.0,
+            "y": 0.0,
+            "angle": 0.0,
+            "angle_raw": 0,
+            "input_flags": 0,
+            "match_ended": False,
+            "map_w": 32,
+            "map_h": 32,
+            "tile_scale": 8,
+            "tiles": bytearray(32 * 32),
+            "game_mode": protocol.GAME_MODE_CHASE_BITS,
+            "bits_mask": 0b11,
+            "bits": [(-8.0, 0.0), (24.0, 0.0)],
+            "players": [{"player_id": 1, "x": 0.0, "y": 0.0, "flags": 0}],
+            "tick": 1,
+        }
+
+        test_package._apply_auto_input(state)
+
+        assert state["x"] < 0.0
+        assert (state["input_flags"] & protocol.FLAG_SHOOTING) == 0
+
+
+def test_test_package_auto_tagger_chases_runner_and_shoots_when_aligned():
+    with pynq_import_context():
+        protocol = importlib.import_module("protocol")
+        test_package = importlib.import_module("test_package_v2")
+
+        state = {
+            "registered": True,
+            "player_id": 2,
+            "x": 0.0,
+            "y": 0.0,
+            "angle": 0.0,
+            "angle_raw": 0,
+            "input_flags": 0,
+            "match_ended": False,
+            "map_w": 32,
+            "map_h": 32,
+            "tile_scale": 8,
+            "tiles": bytearray(32 * 32),
+            "game_mode": protocol.GAME_MODE_CHASE,
+            "bits_mask": 0,
+            "bits": [],
+            "players": [
+                {"player_id": 1, "x": 16.0, "y": 0.0, "flags": 0},
+                {"player_id": 2, "x": 0.0, "y": 0.0, "flags": 0},
+            ],
+            "tick": 0,
+        }
+
+        test_package._apply_auto_input(state)
+
+        assert state["x"] > 0.0
+        assert state["input_flags"] & protocol.FLAG_SHOOTING
+
+
+def test_test_package_pathfinder_routes_through_gap():
+    with pynq_import_context():
+        test_package = importlib.import_module("test_package_v2")
+
+        width = 8
+        height = 8
+        tiles = bytearray(width * height)
+        for row in range(height):
+            tiles[row * width + 4] = 1
+        tiles[4 * width + 4] = 0
+
+        state = {"map_w": width, "map_h": height, "tile_scale": 8, "tiles": tiles}
+        start = test_package._nearest_open_cell(state, -12.0, -12.0)
+        goal = test_package._nearest_open_cell(state, 12.0, -12.0)
+        path = test_package._build_cell_path(
+            state,
+            start,
+            goal,
+        )
+
+        assert path[0] == start
+        assert path[-1] == goal
+        assert (4, 4) in path
+
+
+def test_test_package_runtime_mode_packet_switches_live_mode():
+    with pynq_import_context():
+        protocol = importlib.import_module("protocol")
+        test_package = importlib.import_module("test_package_v2")
+
+        state = {
+            "mode": "manual",
+            "registered": True,
+            "player_id": 1,
+            "x": 0.0,
+            "y": 0.0,
+            "angle": 0.0,
+            "angle_raw": 0,
+            "input_flags": 0,
+            "game_mode": protocol.GAME_MODE_CHASE,
+            "bits_mask": 0,
+            "bits": [],
+            "players": [],
+            "last_state_log_at": 0.0,
+        }
+
+        packet = protocol.pack_node_mode_packet(seq=9, mode=protocol.NODE_CONTROL_MODE_AUTO)
+        test_package._handle_packet(packet, state, bram=None)
+
+        assert state["mode"] == "auto"
+
+
 def test_pynq_client_drop_to_registration_clears_live_state():
     with pynq_import_context():
         pynq_client = importlib.import_module("pynq_client")
@@ -184,6 +302,22 @@ def test_register_packet_round_trips_username_trailer():
         assert unpacked["preferred_role"] == protocol.ROLE_RUNNER
         assert unpacked["username"] == "louis"
         assert unpacked["movement_mode"] == protocol.MOVEMENT_MODE_POSE
+
+
+def test_node_mode_packet_round_trips_auto_control():
+    with pynq_import_context():
+        protocol = importlib.import_module("protocol")
+
+        packet = protocol.pack_node_mode_packet(
+            seq=7,
+            mode=protocol.NODE_CONTROL_MODE_AUTO,
+        )
+        pkt_type, seq, _ = protocol.unpack_header(packet)
+
+        assert pkt_type == protocol.PKT_NODE_MODE
+        assert seq == 7
+        assert protocol.unpack_node_mode_packet(packet) == protocol.NODE_CONTROL_MODE_AUTO
+        assert protocol.decode_node_control_mode(protocol.unpack_node_mode_packet(packet)) == "auto"
 
 
 def test_player_identity_falls_back_to_controller_key_without_username():
@@ -275,6 +409,7 @@ def test_pynq_packet_handler_queues_single_player_lobby_session():
             write_queue=[],
             udp_transport=transport,
             map_state={
+                "name": "lobby",
                 "width": 32,
                 "height": 32,
                 "tile_scale": 8,
@@ -303,12 +438,17 @@ def test_pynq_packet_handler_queues_single_player_lobby_session():
 
         assert state.match_started is False
         assert state.players[addr]["player_id"] == 0
-        assert len(transport.sent) == 2
+        assert state.players[addr]["board_slot"] == 1
+        assert state.players[addr]["control_mode"] == "manual"
+        assert len(transport.sent) == 3
         ack_type, _, _ = protocol.unpack_header(transport.sent[0][0])
         assert ack_type == protocol.PKT_ACK
         assert transport.sent[0][0][protocol.HEADER_SIZE] == 0
         map_width, map_height, _, _ = protocol.unpack_map_packet(transport.sent[1][0])
         assert (map_width, map_height) == (32, 32)
+        mode_type, _, _ = protocol.unpack_header(transport.sent[2][0])
+        assert mode_type == protocol.PKT_NODE_MODE
+        assert protocol.unpack_node_mode_packet(transport.sent[2][0]) == protocol.NODE_CONTROL_MODE_MANUAL
         assert not any(str(player_addr).startswith("ghost:") for player_addr in state.players)
 
 
@@ -368,6 +508,70 @@ def test_pynq_packet_handler_keeps_two_humans_in_lobby_until_manual_start():
         assert state.match_started is True
         assert match_started == [True]
         assert sorted(player["player_id"] for player in state.players.values()) == [1, 2]
+
+
+def test_pynq_packet_handler_runtime_mode_switch_targets_connected_board_slot():
+    with pynq_import_context():
+        import asyncio
+
+        protocol = importlib.import_module("protocol")
+        packet_handler_mod = importlib.import_module("t2_packet_handler")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+
+        class DummyTransport:
+            def __init__(self):
+                self.sent = []
+
+            def sendto(self, data, addr):
+                self.sent.append((data, addr))
+
+        state = match_state_mod.MatchState()
+        transport = DummyTransport()
+        handler = packet_handler_mod.PacketHandler(
+            state=state,
+            packet_queue=asyncio.Queue(),
+            write_queue=[],
+            udp_transport=transport,
+            map_state={
+                "name": "lobby",
+                "width": 32,
+                "height": 32,
+                "tile_scale": 8,
+                "tiles": bytearray(32 * 32),
+                "bits": [],
+                "spawn_positions": [(0.0, 0.0), (8.0, 0.0)],
+            },
+            on_match_start=lambda: None,
+            on_match_abort=lambda event=None: None,
+            on_match_pause=lambda event=None: None,
+            on_match_resume=lambda event=None: None,
+            on_event=lambda event=None: None,
+        )
+
+        addr = ("192.168.2.10", 40000)
+        packet = protocol.pack_register_packet(
+            seq=1,
+            x=0.0,
+            y=0.0,
+            angle=0.0,
+            preferred_role=protocol.ROLE_ANY,
+            username="solo",
+            movement_mode=protocol.MOVEMENT_MODE_POSE,
+        )
+        handler._process_packet({"data": packet, "addr": addr})
+        sent_before = len(transport.sent)
+
+        updated, message = handler.set_node_mode(1, "auto")
+
+        assert updated is True
+        assert message == "board 1 -> auto"
+        assert state.slot_modes[1] == "auto"
+        assert state.players[addr]["control_mode"] == "auto"
+        assert len(transport.sent) == sent_before + 1
+        mode_type, _, _ = protocol.unpack_header(transport.sent[-1][0])
+        assert mode_type == protocol.PKT_NODE_MODE
+        assert protocol.unpack_node_mode_packet(transport.sent[-1][0]) == protocol.NODE_CONTROL_MODE_AUTO
+        assert transport.sent[-1][1] == addr
 
 
 def test_pynq_packet_handler_start_match_supports_one_human_plus_ghost():

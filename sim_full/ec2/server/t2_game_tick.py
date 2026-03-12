@@ -24,8 +24,8 @@ import threading
 
 import redis as redislib
 
-from t2_constants import CONTROL_CHANNEL, MAP_TILE_SCALE, ORBIT_RADIUS, SPAWN_ANGLES
-from t2_map_loader import load_map, DEFAULT_MAP_PATH
+from t2_constants import CONTROL_CHANNEL, MAP_TILE_SCALE, ORBIT_RADIUS, SPAWN_ANGLES, SPAWN_POSITIONS
+from t2_map_loader import load_map
 from game_logic.match_state import MatchState
 from t2_packet_handler import PacketHandler
 from game_logic.core_logic import CoreLogic
@@ -36,6 +36,7 @@ _MAPS_DIR = os.path.normpath(
     os.path.join(os.path.dirname(__file__), '..', '..', '..', 'pynq_full', 'ec2', 'maps')
 )
 _ORBIT_TEST_MAP_NAME = "orbit_test"
+_LOBBY_MAP_NAME = "lobby"
 
 
 class GameTick:
@@ -47,7 +48,7 @@ class GameTick:
         self.tick_count      = 0
         self.control_queue   = queue.SimpleQueue()
 
-        self.map_state = load_map(DEFAULT_MAP_PATH)  # mutable dict; hot-swappable
+        self.map_state = self._build_lobby_map()  # mutable dict; starts on the shared lobby map
         self._selected_map = copy.deepcopy(self.map_state)
         self._sim_view_mode = "map"
         self.state     = MatchState()
@@ -127,6 +128,8 @@ class GameTick:
         if cmd == "force_end":
             self.logic._force_end_flag = True
         elif cmd == "start_match":
+            if self.map_state.get("name") in {_LOBBY_MAP_NAME, _ORBIT_TEST_MAP_NAME}:
+                self._return_players_to_lobby("start_match_map_sync", next_map=copy.deepcopy(self._selected_map))
             started, message = self.packets.start_match_from_lobby()
             print(f"[T2] start_match: {message}")
         elif cmd == "disconnect":
@@ -136,7 +139,7 @@ class GameTick:
         elif cmd == "restart":
             self._reset_session("restart", arm_lockout=False)
         elif cmd == "set_sim_view":
-            self._set_sim_view(str(data.get("view", "map")).lower())
+            self._set_sim_view("map")
         elif cmd == "set_ghost_count":
             count = int(data.get("count", 0))
             self.packets.set_ghost_count(count)
@@ -146,8 +149,7 @@ class GameTick:
             if new_map["width"] > 0:
                 self._selected_map = copy.deepcopy(new_map)
                 self.state.selected_map_name = self._selected_map.get("name", "")
-                if self._sim_view_mode == "map":
-                    self._swap_map(new_map)
+                self._swap_map(new_map)
 
     def _swap_map(self, new_map: dict):
         self._return_players_to_lobby("map_changed", next_map=new_map)
@@ -172,16 +174,17 @@ class GameTick:
             "spawn_positions": spawn_positions,
         }
 
+    def _build_lobby_map(self) -> dict:
+        return load_map(os.path.join(_MAPS_DIR, f"{_LOBBY_MAP_NAME}.txt"))
+
     def _set_sim_view(self, view: str):
-        target = "orbit" if view == "orbit" else "map"
-        if target == self._sim_view_mode:
-            return
-        self._sim_view_mode = target
-        self.state.sim_view_mode = target
-        if target == "orbit":
-            self._return_players_to_lobby("sim_view_changed", next_map=self._build_orbit_test_map())
-        else:
-            self._return_players_to_lobby("sim_view_changed", next_map=copy.deepcopy(self._selected_map))
+        target = "map"
+        if self._sim_view_mode != target:
+            self._sim_view_mode = target
+            self.state.sim_view_mode = target
+        if self.map_state.get("name") == _ORBIT_TEST_MAP_NAME:
+            next_map = copy.deepcopy(self._selected_map) if self._selected_map.get("name") else self._build_lobby_map()
+            self._return_players_to_lobby("sim_view_changed", next_map=next_map)
 
     def _drain_asyncio_queue(self, q: asyncio.Queue) -> int:
         drained = 0

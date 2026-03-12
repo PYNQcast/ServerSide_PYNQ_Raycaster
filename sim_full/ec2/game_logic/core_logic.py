@@ -36,6 +36,8 @@ class CoreLogic:
 
     async def tick(self):
         await self._check_match_end_hold()
+        if self.state.match_ended:
+            return
         if self.state.match_paused:
             return
         self._move_ghosts()
@@ -206,7 +208,7 @@ class CoreLogic:
 
     async def _check_proximity(self):
         players = list(self.state.players.values())
-        if len(players) < 2 or self.state.in_grace_period():
+        if len(players) < 2 or self.state.match_ended or self.state.in_grace_period():
             return
 
         for i in range(len(players)):
@@ -229,15 +231,18 @@ class CoreLogic:
                 print(f"[T2] P{tagged['player_id']} tagged (dist={dist:.2f}) "
                       f"— tag {self.state.tag_count}/{TAGS_TO_WIN}")
 
-                # Teleport both to spawn so they aren't still overlapping after
-                # the flash clears, which would cause an immediate second tag.
-                self.state.reset_positions()
+                final_tag = self.state.tag_count >= TAGS_TO_WIN
+                if not final_tag:
+                    # Teleport both to spawn so they aren't still overlapping after
+                    # the flash clears, which would cause an immediate second tag.
+                    self.state.reset_positions()
                 await self._on_event({
                     "event":      "player_tagged",
                     "player_id":  tagged["player_id"],
                     "dist":       round(dist, 2),
                     "tag_count":  self.state.tag_count,
                     "tags_to_win": TAGS_TO_WIN,
+                    "final_tag":  final_tag,
                 })
 
     # ── Match end trigger ─────────────────────────────────────────────────────

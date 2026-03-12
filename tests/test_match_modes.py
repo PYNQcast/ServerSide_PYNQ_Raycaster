@@ -144,6 +144,35 @@ def test_sim_state_snapshot_carries_bit_positions():
         assert snapshot["bits"] == [[-4.0, 8.0], [12.0, -16.0]]
 
 
+def test_sim_redis_writes_include_spawn_positions():
+    with sim_import_context():
+        protocol = importlib.import_module("protocol")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+        redis_io_mod = importlib.import_module("t2_redis_io")
+
+        state = match_state_mod.MatchState()
+        state.game_mode = protocol.GAME_MODE_CHASE
+        state.players = {}
+        map_state = {
+            "name": "custom_spawn_map",
+            "spawn_positions": [(-24.0, -24.0), (24.0, 24.0)],
+        }
+
+        write_queue = queue.SimpleQueue()
+        redis_io = redis_io_mod.RedisIO(state, map_state, None, write_queue)
+        redis_io.push_redis_writes(7, 3)
+
+        writes = []
+        while True:
+            try:
+                writes.append(write_queue.get_nowait())
+            except Exception:
+                break
+
+        game_state_write = next(msg for msg in writes if msg.get("key") == "game:state")
+        assert game_state_write["mapping"]["spawn_positions"] == '[[-24.0, -24.0], [24.0, 24.0]]'
+
+
 def test_sim_abort_match_clears_players_and_resets_ids():
     with sim_import_context():
         match_state_mod = importlib.import_module("game_logic.match_state")
@@ -290,6 +319,213 @@ def test_sim_match_end_hold_clears_runtime_state():
         assert state.pending_roles == {}
         assert state.game_mode == protocol.GAME_MODE_CHASE
         assert state.lockout_until is not None
+
+
+def test_sim_final_tag_ends_match_without_teleporting_back_to_spawn():
+    with sim_import_context():
+        protocol = importlib.import_module("protocol")
+        constants = importlib.import_module("t2_constants")
+        core_logic_mod = importlib.import_module("game_logic.core_logic")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+
+        state = match_state_mod.MatchState()
+        state.match_started = True
+        state.match_tick = constants.GRACE_TICKS
+        state.spawn_positions = [(-24.0, -24.0), (24.0, 24.0)]
+        state.tag_count = constants.TAGS_TO_WIN - 1
+        state.players = {
+            ("runner", 1): {
+                "player_id": 1,
+                "x": 6.0,
+                "y": 4.0,
+                "angle": 0.0,
+                "flags": 0,
+                "last_seen": 0.0,
+                "last_seq": 1,
+                "movement_mode": 0,
+                "protocol_version": 1,
+            },
+            ("tagger", 2): {
+                "player_id": 2,
+                "x": 6.5,
+                "y": 4.0,
+                "angle": 0.0,
+                "flags": 0,
+                "last_seen": 0.0,
+                "last_seq": 1,
+                "movement_mode": 0,
+                "protocol_version": 1,
+            },
+        }
+
+        events = []
+
+        async def on_event(event):
+            events.append(event)
+
+        logic = core_logic_mod.CoreLogic(
+            state,
+            queue.SimpleQueue(),
+            on_event=on_event,
+            on_force_end_consumed=lambda: None,
+            map_state={},
+        )
+
+        asyncio.run(logic.tick())
+
+        assert state.match_ended is True
+        assert state.tag_count == constants.TAGS_TO_WIN
+        assert state.players[("runner", 1)]["x"] == 6.0
+        assert state.players[("runner", 1)]["y"] == 4.0
+        assert state.players[("tagger", 2)]["x"] == 6.5
+        assert state.players[("tagger", 2)]["y"] == 4.0
+        assert state.players[("runner", 1)]["flags"] & protocol.FLAG_TAGGED
+        assert state.players[("runner", 1)]["flags"] & protocol.FLAG_MATCH_END
+        assert state.players[("tagger", 2)]["flags"] & protocol.FLAG_MATCH_END
+        assert [event["event"] for event in events] == ["player_tagged", "match_end"]
+        assert events[0]["final_tag"] is True
+
+
+def test_sim_return_players_to_lobby_clears_match_end_flags_and_requeues_humans():
+    with sim_import_context():
+        protocol = importlib.import_module("protocol")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+        packet_handler_mod = importlib.import_module("t2_packet_handler")
+
+        state = match_state_mod.MatchState()
+        state.match_started = True
+        state.match_ended = True
+        state.players = {
+            ("runner", 1): {
+                "player_id": 1,
+                "x": 0.0,
+                "y": 0.0,
+                "angle": 0.0,
+                "flags": protocol.FLAG_TAGGED | protocol.FLAG_MATCH_END,
+                "last_seen": 0.0,
+                "last_seq": 4,
+                "movement_mode": 0,
+                "protocol_version": 1,
+                "timed_out": False,
+                "preferred_role": protocol.ROLE_ANY,
+                "username": "sim-1",
+                "display_name": "sim-1",
+                "profile_key": "sim-1",
+                "controller_key": "controller-1",
+                "identity_source": "username",
+                "sim_slot": 0,
+            },
+            ("tagger", 2): {
+                "player_id": 2,
+                "x": 8.0,
+                "y": 0.0,
+                "angle": 0.0,
+                "flags": protocol.FLAG_MATCH_END,
+                "last_seen": 0.0,
+                "last_seq": 5,
+                "movement_mode": 0,
+                "protocol_version": 1,
+                "timed_out": False,
+                "preferred_role": protocol.ROLE_ANY,
+                "username": "sim-2",
+                "display_name": "sim-2",
+                "profile_key": "sim-2",
+                "controller_key": "controller-2",
+                "identity_source": "username",
+                "sim_slot": 1,
+            },
+        }
+        handler = packet_handler_mod.PacketHandler(
+            state,
+            asyncio.Queue(),
+            queue.SimpleQueue(),
+            {
+                "width": 0,
+                "height": 0,
+                "tile_scale": 8,
+                "tiles": bytearray(),
+                "bits": [],
+                "spawn_positions": [(-24.0, -24.0), (24.0, 24.0)],
+            },
+            on_match_start=lambda: None,
+            on_match_abort=lambda event=None: None,
+            on_match_pause=lambda event=None: None,
+            on_match_resume=lambda event=None: None,
+            on_event=lambda event: None,
+        )
+
+        handler.return_players_to_lobby()
+
+        assert state.match_started is False
+        assert state.match_ended is False
+        assert state.players[("runner", 1)]["player_id"] == 0
+        assert state.players[("tagger", 2)]["player_id"] == 0
+        assert state.players[("runner", 1)]["flags"] == 0
+        assert state.players[("tagger", 2)]["flags"] == 0
+        assert state.players[("runner", 1)]["last_seq"] is None
+        assert state.players[("tagger", 2)]["last_seq"] is None
+
+
+def test_sim_match_start_sends_map_packet_to_human_nodes():
+    with sim_import_context():
+        protocol = importlib.import_module("protocol")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+        packet_handler_mod = importlib.import_module("t2_packet_handler")
+
+        class DummyTransport:
+            def __init__(self):
+                self.sent = []
+
+            def sendto(self, data, addr):
+                self.sent.append((data, addr))
+
+        transport = DummyTransport()
+        state = match_state_mod.MatchState()
+        handler = packet_handler_mod.PacketHandler(
+            state,
+            asyncio.Queue(),
+            queue.SimpleQueue(),
+            {
+                "name": "editor_test",
+                "width": 32,
+                "height": 32,
+                "tile_scale": 8,
+                "tiles": bytearray([0] * (32 * 32)),
+                "bits": [],
+                "spawn_positions": [(-24.0, -24.0), (24.0, 24.0)],
+            },
+            on_match_start=lambda: None,
+            on_match_abort=lambda event=None: None,
+            on_match_pause=lambda event=None: None,
+            on_match_resume=lambda event=None: None,
+            on_event=lambda event: None,
+            udp_transport=transport,
+        )
+
+        handler._process_packet({
+            "data": protocol.pack_register_packet(0, 0.0, 0.0, 0.0),
+            "addr": ("runner", 1),
+        })
+        handler._process_packet({
+            "data": protocol.pack_register_packet(0, 0.0, 0.0, 0.0),
+            "addr": ("tagger", 2),
+        })
+
+        started, _ = handler.start_match_from_lobby()
+        assert started is True
+        packet_types = [protocol.unpack_header(data)[0] for data, _ in transport.sent]
+        assert packet_types.count(protocol.PKT_MAP) >= 2
+
+
+def test_sim_map_packet_fits_node_receive_buffer():
+    with sim_import_context():
+        protocol = importlib.import_module("protocol")
+        node_sim_mod = importlib.import_module("node_simulator")
+
+        packet = protocol.pack_map_packet(0, 32, 32, 8, bytearray([0] * (32 * 32)))
+
+        assert len(packet) == 1036
+        assert len(packet) < node_sim_mod.SOCKET_RECV_SIZE
 
 
 def test_sim_packet_handler_requires_register_for_unknown_addr():
@@ -533,6 +769,104 @@ def test_sim_node_runtime_prefers_selected_map_over_orbit_runtime_map():
 
         assert desired_view == "orbit"
         assert selected_map == "ghost_bits"
+
+
+def test_sim_auto_runner_prefers_nearest_active_bit_in_bits_mode():
+    with sim_import_context():
+        protocol = importlib.import_module("protocol")
+        node_sim = importlib.import_module("node_simulator")
+
+        objective = node_sim.choose_auto_objective(
+            x=0.0,
+            y=0.0,
+            assigned_player_id=1,
+            game_mode=protocol.GAME_MODE_CHASE_BITS,
+            packet_players=[
+                {"player_id": 1, "x": 0.0, "y": 0.0, "flags": 0},
+                {"player_id": 2, "x": 80.0, "y": 80.0, "flags": 0},
+            ],
+            bits=[(24.0, 0.0), (6.0, 0.0), (40.0, 0.0)],
+            bits_mask=0b011,
+        )
+
+        assert objective["mode"] == "collect"
+        assert objective["target"] == (6.0, 0.0)
+
+
+def test_sim_auto_runner_evades_close_tagger():
+    with sim_import_context():
+        protocol = importlib.import_module("protocol")
+        node_sim = importlib.import_module("node_simulator")
+
+        objective = node_sim.choose_auto_objective(
+            x=0.0,
+            y=0.0,
+            assigned_player_id=1,
+            game_mode=protocol.GAME_MODE_CHASE_BITS,
+            packet_players=[
+                {"player_id": 1, "x": 0.0, "y": 0.0, "flags": 0},
+                {"player_id": 2, "x": 12.0, "y": 0.0, "flags": 0},
+            ],
+            bits=[(4.0, 0.0)],
+            bits_mask=0b1,
+        )
+
+        assert objective["mode"] == "evade"
+        assert objective["target"][0] < 0.0
+
+
+def test_sim_auto_tagger_chases_runner():
+    with sim_import_context():
+        protocol = importlib.import_module("protocol")
+        node_sim = importlib.import_module("node_simulator")
+
+        objective = node_sim.choose_auto_objective(
+            x=24.0,
+            y=24.0,
+            assigned_player_id=2,
+            game_mode=protocol.GAME_MODE_CHASE,
+            packet_players=[
+                {"player_id": 1, "x": -10.0, "y": 5.0, "flags": 0},
+                {"player_id": 2, "x": 24.0, "y": 24.0, "flags": 0},
+            ],
+            bits=[],
+            bits_mask=0,
+        )
+
+        assert objective["mode"] == "chase"
+        assert objective["target"] == (-10.0, 5.0)
+
+
+def test_sim_path_step_target_routes_through_gap():
+    with sim_import_context():
+        node_sim = importlib.import_module("node_simulator")
+
+        width = 5
+        height = 5
+        tiles = bytearray([
+            0, 0, 1, 0, 0,
+            0, 0, 1, 0, 0,
+            0, 0, 0, 0, 0,
+            0, 0, 1, 0, 0,
+            0, 0, 1, 0, 0,
+        ])
+        map_state = {
+            "width": width,
+            "height": height,
+            "tile_scale": 8,
+            "tiles": tiles,
+        }
+
+        waypoint = node_sim.path_step_target(
+            map_state,
+            current_x=-12.0,
+            current_y=-12.0,
+            target_x=12.0,
+            target_y=-12.0,
+        )
+
+        assert waypoint != (12.0, -12.0)
+        assert waypoint[1] > -12.0
 
 
 def test_sim_orbit_tagger_speed_exceeds_runner_speed():

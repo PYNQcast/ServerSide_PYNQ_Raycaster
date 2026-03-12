@@ -36,15 +36,20 @@ function updatePlayers(players) {
   });
 }
 
-function updateNodeLinks(players) {
-  const normalised = normalisePlayers(players);
+function updateNodeLinks(stateOrPlayers) {
+  const state = Array.isArray(stateOrPlayers)
+    ? { players: stateOrPlayers, slot_modes: latestState?.slot_modes || { 1: 'manual', 2: 'manual' } }
+    : (stateOrPlayers || { players: [], slot_modes: { 1: 'manual', 2: 'manual' } });
+  const normalised = normalisePlayers(state.players);
+  const slotModes = state.slot_modes || { 1: 'manual', 2: 'manual' };
   [1, 2].forEach((nodeId) => {
     const el = document.getElementById(`node${nodeId}-link`);
-    const activePlayer = normalised.find((player) => player.id === nodeId);
-    const queuedPlayer = normalised.find((player) => player.queued && player.queueSlot === nodeId);
+    const activePlayer = normalised.find((player) => !player.queued && player.boardSlot === nodeId);
+    const queuedPlayer = normalised.find((player) => player.queued && player.boardSlot === nodeId);
     const statusText = activePlayer ? 'connected' : queuedPlayer ? 'lobby' : 'offline';
     const statusColour = activePlayer ? '#baffd8' : queuedPlayer ? '#7dc3ff' : '#665a8a';
-    el.textContent = `${statusText} · fpga`;
+    const modeText = String((activePlayer || queuedPlayer)?.controlMode || slotModes[nodeId] || 'manual').toLowerCase();
+    el.textContent = `${statusText} · ${modeText}`;
     el.style.color = statusColour;
   });
 }
@@ -326,10 +331,31 @@ function updateEvents(events) {
 // ── WebSocket ──────────────────────────────────────────────────────────────
 const statusEl = document.getElementById('status');
 let ws = null;
+const MONITOR_STATE_EVENT = 'monitor:state';
+
+function scheduleMapRefresh(cmd) {
+  if (!String(cmd || '').startsWith('set_map:')) return;
+  const mapName = String(cmd).split(':', 2)[1] || '';
+  if (mapName) {
+    updateMapSelector(mapName, mapName);
+  }
+  if (typeof window.requestMapListRefresh === 'function') {
+    window.requestMapListRefresh(250);
+    return;
+  }
+  window.setTimeout(() => { loadMapList(); }, 250);
+}
+
 async function sendControl(cmd, label) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
+  if (cmd === 'start_match' && !isValidMapName(latestState?.selected_map || _selectedMapName)) {
+    setServiceNote('select a map before starting the match');
+    return;
+  }
+  const forceHttp = String(cmd || '').startsWith('set_map:');
+  if (!forceHttp && ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({cmd}));
     setServiceNote(`${label} requested...`);
+    scheduleMapRefresh(cmd);
     return;
   }
   setServiceNote(`${label} requested via HTTP...`);
@@ -343,6 +369,7 @@ async function sendControl(cmd, label) {
       const text = await resp.text();
       throw new Error(text || `HTTP ${resp.status}`);
     }
+    scheduleMapRefresh(cmd);
   } catch (error) {
     setServiceNote(`control failed: ${error.message || 'request error'}`);
   }
@@ -353,8 +380,12 @@ function connect() {
   ws.onopen = () => {
     statusEl.textContent = '● LIVE';
     statusEl.className   = 'connected';
-    if (!mapData) loadMap('chase');
-    loadMapList();
+    if (!mapData) loadMap(_activeMapName);
+    if (typeof window.requestMapListRefresh === 'function') {
+      window.requestMapListRefresh(0);
+    } else {
+      loadMapList();
+    }
   };
   ws.onmessage = (evt) => {
     const state = JSON.parse(evt.data);
@@ -373,9 +404,10 @@ function connect() {
     }
     latestState = state;
     window.latestState = state;
+    window.dispatchEvent(new CustomEvent(MONITOR_STATE_EVENT, { detail: state }));
     updateGameHud(state);
     if (!replayState.active) updatePlayers(state.players);
-    updateNodeLinks(state.players);
+    updateNodeLinks(state);
     updateBitsPanel(state);
     updateRedis(state.redis);
     updateServices(state.services);
@@ -383,9 +415,12 @@ function connect() {
     updateMatches(state.matches);
     updateMatchState(state.match);
     updateEvents(state.events);
-    if (state.active_map) {
-      updateMapSelector(state.active_map);
-    }
+    updateMapSelector(
+      state.active_map,
+      Object.prototype.hasOwnProperty.call(state, 'selected_map')
+        ? state.selected_map
+        : state.active_map,
+    );
     wsUpdateCount++;
     const now = performance.now();
     if (now - wsLastTime >= 1000) {
@@ -456,6 +491,7 @@ if (stackedFrameChart) {
 // Expose functions needed by inline onclick handlers in the template HTML.
 window.stopReplay = stopReplay;
 window.sendControl = sendControl;
+window.setServiceNote = setServiceNote;
 
 setActiveTab(window.location.hash.replace('#', ''));
 initThemeToggle();

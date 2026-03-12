@@ -40,8 +40,11 @@ function updateNodeLinks(players) {
   const normalised = normalisePlayers(players);
   [1, 2].forEach((nodeId) => {
     const el = document.getElementById(`node${nodeId}-link`);
-    const activePlayer = normalised.find((player) => player.id === nodeId);
-    const queuedPlayer = normalised.find((player) => player.queued && player.queueSlot === nodeId);
+    const simSlotIndex = nodeId - 1;
+    const activePlayer = normalised.find((player) => !player.queued && player.simSlot === simSlotIndex)
+      || normalised.find((player) => !player.queued && player.id === nodeId);
+    const queuedPlayer = normalised.find((player) => player.queued && player.simSlot === simSlotIndex)
+      || normalised.find((player) => player.queued && player.queueSlot === nodeId);
     const mode = requestedNodeModes[nodeId];
     const statusText = activePlayer ? 'connected' : queuedPlayer ? 'lobby' : 'offline';
     const statusColour = activePlayer ? '#baffd8' : queuedPlayer ? '#7dc3ff' : '#665a8a';
@@ -327,10 +330,32 @@ function updateEvents(events) {
 // ── WebSocket ──────────────────────────────────────────────────────────────
 const statusEl = document.getElementById('status');
 let ws = null;
+const MONITOR_STATE_EVENT = 'monitor:state';
+
+function scheduleMapRefresh(cmd) {
+  if (!String(cmd || '').startsWith('set_map:')) return;
+  const mapName = String(cmd).split(':', 2)[1] || '';
+  if (mapName) {
+    updateMapSelector(mapName, mapName);
+  }
+  if (typeof window.requestMapListRefresh === 'function') {
+    window.requestMapListRefresh(250);
+    return;
+  }
+  window.setTimeout(() => { loadMapList(); }, 250);
+}
+
 async function sendControl(cmd, label) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
+  const _resolvedMap = latestState?.selected_map || _selectedMapName || '';
+  if (cmd === 'start_match' && (!_resolvedMap || _resolvedMap === LOBBY_MAP_NAME)) {
+    setServiceNote('select a map before starting the match');
+    return;
+  }
+  const forceHttp = String(cmd || '').startsWith('set_map:');
+  if (!forceHttp && ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({cmd}));
     setServiceNote(`${label} requested...`);
+    scheduleMapRefresh(cmd);
     return;
   }
   setServiceNote(`${label} requested via HTTP...`);
@@ -344,6 +369,7 @@ async function sendControl(cmd, label) {
       const text = await resp.text();
       throw new Error(text || `HTTP ${resp.status}`);
     }
+    scheduleMapRefresh(cmd);
   } catch (error) {
     setServiceNote(`control failed: ${error.message || 'request error'}`);
   }
@@ -354,8 +380,11 @@ function connect() {
   ws.onopen = () => {
     statusEl.textContent = '● LIVE';
     statusEl.className   = 'connected';
-    if (!mapData) loadMap('chase');
-    loadMapList();
+    if (typeof window.requestMapListRefresh === 'function') {
+      window.requestMapListRefresh(0);
+    } else {
+      loadMapList();
+    }
     renderViewModeButtons();
     updateOrbitModeControls();
   };
@@ -376,7 +405,8 @@ function connect() {
     }
     latestState = state;
     window.latestState = state;
-    syncViewMode(state.sim_view_mode || 'map');
+    window.dispatchEvent(new CustomEvent(MONITOR_STATE_EVENT, { detail: state }));
+    syncViewMode(_viewMode);
     updateGameHud(state);
     maybeEnforceMapManual(state.players || []);
     if (!replayState.active) updatePlayers(state.players);
@@ -388,9 +418,13 @@ function connect() {
     updateMatches(state.matches);
     updateMatchState(state.match);
     updateEvents(state.events);
-    if (state.selected_map || state.active_map) {
-      updateMapSelector(state.selected_map || state.active_map);
-    }
+    updateMapSelector(
+      state.active_map,
+      Object.prototype.hasOwnProperty.call(state, 'selected_map')
+        ? state.selected_map
+        : state.active_map,
+    );
+    maybeStartAutoPlay(state);
     wsUpdateCount++;
     const now = performance.now();
     if (now - wsLastTime >= 1000) {
@@ -404,6 +438,25 @@ function connect() {
     setTimeout(connect, 2000);
   };
   ws.onerror = () => ws.close();
+}
+
+function maybeStartAutoPlay(state) {
+  if (_viewMode !== 'auto') return;
+  if (typeof window.isAutoPlayArmed === 'function' && !window.isAutoPlayArmed()) return;
+  if (!state?.match || state.match.started || state.match.ended || state.match.paused) return;
+
+  const liveMap = String(state.active_map || '').trim().toLowerCase();
+  if (!liveMap || liveMap === 'lobby') return;
+
+  const players = normalisePlayers(state.players);
+  const readyHumans = players.filter((player) => !player.queued && !(player.flags & FLAG_GHOST)).length;
+  const queuedHumans = players.filter((player) => player.queued && !(player.flags & FLAG_GHOST)).length;
+  if ((readyHumans + queuedHumans) < 2) return;
+
+  if (typeof window.clearAutoPlayArmed === 'function') {
+    window.clearAutoPlayArmed();
+  }
+  sendControl('start_match', 'auto play start');
 }
 
 function initThemeToggle() {
@@ -457,6 +510,7 @@ if (stackedFrameChart) {
 // Expose functions needed by inline onclick handlers in the template HTML.
 window.stopReplay = stopReplay;
 window.sendControl = sendControl;
+window.setServiceNote = setServiceNote;
 
 setActiveTab(window.location.hash.replace('#', ''));
 initThemeToggle();

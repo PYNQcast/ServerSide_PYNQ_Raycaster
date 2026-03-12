@@ -4,10 +4,15 @@ import ServerEntityCard from './player-stats/ServerEntityCard.jsx';
 import {
   asNumber,
   currentRoleForPlayer,
+  inferSimSlotFromProfile,
   isGhostPlayer,
+  normaliseIdentityText,
   normaliseMatch,
   normaliseProfile,
+  simSlotForValue,
 } from './player-stats/utils.js';
+
+const MONITOR_STATE_EVENT = 'monitor:state';
 
 function buildGhostSlots(ghosts) {
   return Array.from({ length: 3 }, (_, index) => {
@@ -39,6 +44,13 @@ function buildGhostSlots(ghosts) {
         : `slot ${slotNumber} · reserved server lane`,
     };
   });
+}
+
+function preferLiveCandidate(current, next) {
+  if (!current) return next;
+  if (current.queued && !next.queued) return next;
+  if (current.sim_slot == null && next.sim_slot != null) return next;
+  return current;
 }
 
 export default function PlayerStatsTab() {
@@ -141,23 +153,37 @@ export default function PlayerStatsTab() {
 
   useEffect(() => {
     if (!pageVisible) return () => {};
-    const syncLivePlayers = () => {
-      const snapshot = Array.isArray(window.latestState?.players) ? window.latestState.players.slice() : [];
+    const syncLivePlayers = (state = window.latestState) => {
+      const snapshot = Array.isArray(state?.players) ? state.players.slice() : [];
       startTransition(() => setLivePlayers(snapshot));
+    };
+    const handleState = (event) => {
+      syncLivePlayers(event.detail);
     };
 
     syncLivePlayers();
-    const intervalId = setInterval(syncLivePlayers, 500);
-    return () => clearInterval(intervalId);
+    window.addEventListener(MONITOR_STATE_EVENT, handleState);
+    return () => window.removeEventListener(MONITOR_STATE_EVENT, handleState);
   }, [pageVisible]);
 
   const liveByProfileKey = new Map();
+  const liveByUsername = new Map();
+  const liveByDisplayName = new Map();
+  const liveByControllerKey = new Map();
+  const liveBySimSlot = new Map();
   livePlayers.forEach((player) => {
-    if (!player?.profile_key || isGhostPlayer(player)) return;
-    const existing = liveByProfileKey.get(player.profile_key);
-    if (!existing || (existing.queued && !player.queued)) {
-      liveByProfileKey.set(player.profile_key, player);
-    }
+    if (isGhostPlayer(player)) return;
+    const profileKey = normaliseIdentityText(player.profile_key);
+    const username = normaliseIdentityText(player.username);
+    const displayName = normaliseIdentityText(player.display_name);
+    const controllerKey = normaliseIdentityText(player.controller_key);
+    const simSlot = simSlotForValue(player.sim_slot);
+
+    if (profileKey) liveByProfileKey.set(profileKey, preferLiveCandidate(liveByProfileKey.get(profileKey), player));
+    if (username) liveByUsername.set(username, preferLiveCandidate(liveByUsername.get(username), player));
+    if (displayName) liveByDisplayName.set(displayName, preferLiveCandidate(liveByDisplayName.get(displayName), player));
+    if (controllerKey) liveByControllerKey.set(controllerKey, preferLiveCandidate(liveByControllerKey.get(controllerKey), player));
+    if (simSlot !== null) liveBySimSlot.set(simSlot, preferLiveCandidate(liveBySimSlot.get(simSlot), player));
   });
 
   const ghosts = livePlayers
@@ -170,7 +196,17 @@ export default function PlayerStatsTab() {
 
   const enrichedProfiles = profiles
     .map((profile) => {
-      const live = liveByProfileKey.get(profile.player_key) || null;
+      const profileKey = normaliseIdentityText(profile.player_key);
+      const username = normaliseIdentityText(profile.username);
+      const displayName = normaliseIdentityText(profile.display_name);
+      const controllerKey = normaliseIdentityText(profile.controller_key);
+      const inferredSimSlot = inferSimSlotFromProfile(profile);
+      const live = liveByProfileKey.get(profileKey)
+        || liveByUsername.get(username)
+        || liveByDisplayName.get(displayName)
+        || liveByControllerKey.get(controllerKey)
+        || (inferredSimSlot !== null ? liveBySimSlot.get(inferredSimSlot) : null)
+        || null;
       return {
         ...profile,
         live,

@@ -14,6 +14,7 @@
 #   t2_redis_io           — broadcast packet builder, Redis write helpers
 
 import asyncio
+import copy
 import json
 import os
 import queue
@@ -23,7 +24,7 @@ import threading
 import redis as redislib
 
 from t2_constants import CONTROL_CHANNEL
-from t2_map_loader import load_map, DEFAULT_MAP_PATH
+from t2_map_loader import load_map
 from game_logic.match_state import MatchState
 from t2_packet_handler import PacketHandler
 from game_logic.core_logic import CoreLogic
@@ -32,6 +33,7 @@ from t2_redis_io import RedisIO
 _MAPS_DIR = os.path.normpath(
     os.path.join(os.path.dirname(__file__), '..', 'maps')
 )
+_LOBBY_MAP_NAME = "lobby"
 
 class GameTick:
     def __init__(self, packet_queue, broadcast_queue, write_queue, tick_rate=20,
@@ -43,8 +45,10 @@ class GameTick:
         self.tick_count      = 0
         self.control_queue   = queue.SimpleQueue()
 
-        self.map_state = load_map(DEFAULT_MAP_PATH)  # mutable dict; hot-swappable via set_map
+        self.map_state = self._build_lobby_map()      # mutable dict; starts on the shared lobby map
+        self._selected_map = copy.deepcopy(self.map_state)
         self.state     = MatchState()                 # all mutable match fields
+        self.state.selected_map_name = self._selected_map.get("name", "")
         self.state.set_spawn_positions(self.map_state.get("spawn_positions", []))
 
         # Sub-modules share state by reference; callbacks keep them decoupled
@@ -115,6 +119,9 @@ class GameTick:
         if cmd == "force_end":
             self.logic._force_end_flag = True
         elif cmd == "start_match":
+            if self._selected_map.get("name") == _LOBBY_MAP_NAME:
+                print("[T2] start_match blocked: select a game map before starting")
+                return
             started, message = self.packets.start_match_from_lobby()
             print(f"[T2] start_match: {message}")
         elif cmd == "restart":
@@ -122,14 +129,25 @@ class GameTick:
         elif cmd == "set_ghost_count":
             count = int(data.get("count", 0))
             self.packets.set_ghost_count(count)
+        elif cmd == "set_node_mode":
+            board_slot = int(data.get("board_slot", 0) or 0)
+            mode = str(data.get("mode", "manual"))
+            if board_slot in (1, 2):
+                started, message = self.packets.set_node_mode(board_slot, mode)
+                print(f"[T2] set_node_mode: {message}")
         elif cmd == "set_map":
             name = data.get("map", "chase")
             new_map = load_map(os.path.join(_MAPS_DIR, f"{name}.txt"))
             if new_map["width"] > 0:
+                self._selected_map = copy.deepcopy(new_map)
+                self.state.selected_map_name = self._selected_map.get("name", "")
                 self._swap_map(new_map)
 
     def _swap_map(self, new_map: dict):
         self._return_players_to_lobby("map_changed", next_map=new_map)
+
+    def _build_lobby_map(self) -> dict:
+        return load_map(os.path.join(_MAPS_DIR, f"{_LOBBY_MAP_NAME}.txt"))
 
     def _drain_asyncio_queue(self, q: asyncio.Queue) -> int:
         drained = 0
@@ -166,6 +184,7 @@ class GameTick:
         for player in current_players:
             self.write_queue.put({"op": "del", "key": f"player:{player['player_id']}"})
         self.state.clear_match(arm_lockout=arm_lockout)
+        self.state.selected_map_name = self._selected_map.get("name", "")
         self.state.set_spawn_positions(self.map_state.get("spawn_positions", []))
         self.logic._force_end_flag = False
 

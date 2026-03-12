@@ -1,10 +1,28 @@
+function computeFallbackWorldLimit(players = [], bits = []) {
+  let limit = WORLD_LIMIT;
+
+  (players || []).forEach((player) => {
+    const absX = Math.abs(Number(player?.x) || 0);
+    const absY = Math.abs(Number(player?.y) || 0);
+    limit = Math.max(limit, absX + 16, absY + 16);
+  });
+
+  (bits || []).forEach((bit) => {
+    const absX = Math.abs(Number(bit?.[0]) || 0);
+    const absY = Math.abs(Number(bit?.[1]) || 0);
+    limit = Math.max(limit, absX + 16, absY + 16);
+  });
+
+  return limit;
+}
+
 // ── Canvas ─────────────────────────────────────────────────────────────────
-function worldToCanvas(wx, wy) {
-  const pad = (_showMap && mapData && mapData.width > 0) ? MAP_VIEW_PAD : ORBIT_VIEW_PAD;
-  // In map mode use the actual map extent; fall back to orbit view extent
-  const limit = (_showMap && mapData && mapData.width > 0)
-    ? (mapData.width / 2) * (mapData.tile_scale || TILE_SCALE)
-    : WORLD_LIMIT;
+function worldToCanvas(wx, wy, renderLimit = null) {
+  const pad = MAP_VIEW_PAD;
+  const mapMarginTiles = mapData?.name === 'lobby' ? 2 : 1;
+  const limit = renderLimit ?? ((_showMap && mapData && mapData.width > 0)
+    ? ((mapData.width / 2) + mapMarginTiles) * (mapData.tile_scale || TILE_SCALE)
+    : WORLD_LIMIT);
   const minX = -limit, maxX = limit;
   const minY = -limit, maxY = limit;
   const rx  = maxX - minX;
@@ -15,24 +33,17 @@ function worldToCanvas(wx, wy) {
 
 function drawArena(players, bits, bitsMask) {
   ctx.clearRect(0, 0, W, H);
-
-  if (!_showMap) {
-    // Grid only helps in orbit view; it makes map mode feel busier than it is.
-    ctx.strokeStyle = '#141414'; ctx.lineWidth = 1;
-    for (let i = 0; i <= 8; i++) {
-      const x = W/8*i, y = H/8*i;
-      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
-    }
-  }
+  const renderLimit = (_showMap && mapData && mapData.width > 0)
+    ? null
+    : computeFallbackWorldLimit(players, bits);
 
   // Origin axes
-  const [ox, oy] = worldToCanvas(0, 0);
+  const [ox, oy] = worldToCanvas(0, 0, renderLimit);
   ctx.strokeStyle = '#1e1e1e'; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(ox,0); ctx.lineTo(ox,H); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(0,oy); ctx.lineTo(W,oy); ctx.stroke();
 
-  const [,,sc] = worldToCanvas(0,0);
+  const [,,sc] = worldToCanvas(0, 0, renderLimit);
   const tagPx  = TAG_RADIUS * sc;
   const tilePx = (mapData?.tile_scale || TILE_SCALE) * sc;
   const bodyBase = Math.max(3.0, Math.min(PLAYER_COLLISION_RADIUS * sc * 0.85, tilePx * 0.28));
@@ -48,7 +59,7 @@ function drawArena(players, bits, bitsMask) {
         if (!cell) return;
         const wx = (ci - mw / 2) * (mapData.tile_scale || TILE_SCALE);
         const wy = (ri - mh / 2) * (mapData.tile_scale || TILE_SCALE);
-        const [px, py] = worldToCanvas(wx, wy);
+        const [px, py] = worldToCanvas(wx, wy, renderLimit);
         ctx.fillStyle = '#1a1730';
         ctx.fillRect(px, py, ts, ts);
         ctx.strokeStyle = '#2a2448';
@@ -56,19 +67,13 @@ function drawArena(players, bits, bitsMask) {
         ctx.strokeRect(px, py, ts, ts);
       });
     });
-  } else {
-    // Legacy orbit guide when no map / in orbit view
-    ctx.beginPath(); ctx.arc(ox, oy, ORBIT_RADIUS * sc, 0, Math.PI*2);
-    ctx.strokeStyle = 'rgba(0,212,255,0.12)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
   }
 
   // Bit collectibles — yellow dot if active, grey if collected
   if (bits && bits.length) {
     bits.forEach((b, i) => {
       const active = (bitsMask & (1 << i)) !== 0;
-      const [bx, by] = worldToCanvas(b[0], b[1]);
+      const [bx, by] = worldToCanvas(b[0], b[1], renderLimit);
       ctx.beginPath(); ctx.arc(bx, by, 5, 0, Math.PI * 2);
       ctx.fillStyle = active ? '#ffdd00' : '#333344';
       ctx.fill();
@@ -124,8 +129,8 @@ function drawArena(players, bits, bitsMask) {
   if (activePlayers.length >= 2) {
     const a = drawPoseById[activePlayers[0].entityKey];
     const b = drawPoseById[activePlayers[1].entityKey];
-    const [ax,ay] = worldToCanvas(a.x, a.y);
-    const [bx,by] = worldToCanvas(b.x, b.y);
+    const [ax,ay] = worldToCanvas(a.x, a.y, renderLimit);
+    const [bx,by] = worldToCanvas(b.x, b.y, renderLimit);
     const dx = b.x - a.x;
     const dy = b.y - a.y;
     const dist = Math.sqrt(dx*dx + dy*dy);
@@ -150,7 +155,7 @@ function drawArena(players, bits, bitsMask) {
 
     const pose = drawPoseById[p.entityKey] || { x: p.x, y: p.y, angle: p.angle, t: null, isAnimating: false };
     const { x: drawX, y: drawY, angle: drawAngle, t, isAnimating } = pose;
-    const [cx,cy] = worldToCanvas(drawX, drawY);
+    const [cx,cy] = worldToCanvas(drawX, drawY, renderLimit);
 
     // Hitbox ring — pulses red while tagged
     ctx.beginPath(); ctx.arc(cx, cy, tagPx, 0, Math.PI*2);

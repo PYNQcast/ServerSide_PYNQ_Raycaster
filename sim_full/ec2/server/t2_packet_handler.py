@@ -26,6 +26,8 @@ from protocol import (
     ROLE_TAGGER,
     SERVER_STATE_FLAGS,
     FLAG_GHOST,
+    pack_bits_init_packet,
+    pack_map_packet,
     decode_movement_mode,
     unpack_node_packet,
     unpack_register_packet,
@@ -144,6 +146,11 @@ class PacketHandler:
 
         last = p["last_seq"]
         if last is not None and not validate_seq(last, seq):
+            last_log = float(p.get("_last_invalid_seq_log_at", 0.0) or 0.0)
+            now = time.monotonic()
+            if (now - last_log) >= 0.5:
+                p["_last_invalid_seq_log_at"] = now
+                print(f"[T2] dropped seq for {addr}: prev={last} next={seq}")
             return
 
         min_x, min_y, max_x, max_y = self._world_bounds()
@@ -162,6 +169,15 @@ class PacketHandler:
                 DEFAULT_MAX_SPEED_PER_TICK,
             )
         ):
+            last_log = float(p.get("_last_invalid_pos_log_at", 0.0) or 0.0)
+            now = time.monotonic()
+            if (now - last_log) >= 0.5:
+                p["_last_invalid_pos_log_at"] = now
+                print(
+                    f"[T2] dropped movement for {addr}: "
+                    f"prev=({p['x']:.2f},{p['y']:.2f}) next=({next_x:.2f},{next_y:.2f}) "
+                    f"seq={seq} mode={decode_movement_mode(movement_mode)} map={self.map_state.get('name')}"
+                )
             return
 
         p["last_seq"] = seq
@@ -209,7 +225,7 @@ class PacketHandler:
         }
 
         human_count = sum(1 for a in self.state.players if not str(a).startswith("ghost:"))
-        self._send_ack(addr, 0)
+        self._refresh_lobby_queue_positions()
         print(f"[T2] player queued from {addr} (lobby humans={human_count}, ghosts={self._ghost_count()})")
 
     def _human_addrs(self):
@@ -257,6 +273,7 @@ class PacketHandler:
                     if not str(addr).startswith("ghost:") and player.get("player_id", 0) == 0
                 ),
                 key=lambda item: (
+                    item[1].get("sim_slot") if item[1].get("sim_slot") is not None else 999,
                     item[1].get("controller_key", ""),
                     item[1].get("display_name", ""),
                     item[1].get("x", 0.0),
@@ -264,6 +281,24 @@ class PacketHandler:
                 ),
             )
         ]
+
+    def _refresh_lobby_queue_positions(self):
+        self.state.set_spawn_positions(self.map_state.get("spawn_positions", []))
+        for queue_slot, addr in enumerate(self._queued_human_addrs()):
+            player = self.state.players.get(addr)
+            if not player:
+                continue
+            lobby_x, lobby_y, lobby_angle = self._spawn_pose_for_slot(queue_slot)
+            player["player_id"] = 0
+            player["x"] = lobby_x
+            player["y"] = lobby_y
+            player["angle"] = lobby_angle
+            player["flags"] = 0
+            player["last_seq"] = None
+            player["timed_out"] = False
+            player["preferred_role"] = player.get("preferred_role", ROLE_ANY)
+            self.state.pending_roles[addr] = player["preferred_role"]
+            self._send_ack(addr, 0)
 
     def _spawn_pose_for_slot(self, slot_index: int):
         positions = self.state.spawn_positions
@@ -281,19 +316,18 @@ class PacketHandler:
         self.state.reset_match_runtime(arm_lockout=False)
         self.state.set_spawn_positions(self.map_state.get("spawn_positions", []))
 
-        for queue_slot, addr in enumerate(human_addrs):
-            player = self.state.players[addr]
-            lobby_x, lobby_y, lobby_angle = self._spawn_pose_for_slot(queue_slot)
+        for addr in human_addrs:
+            player = self.state.players.get(addr)
+            if not player:
+                continue
             player["player_id"] = 0
-            player["x"] = lobby_x
-            player["y"] = lobby_y
-            player["angle"] = lobby_angle
             player["flags"] = 0
             player["last_seq"] = None
             player["timed_out"] = False
-            player["preferred_role"] = player.get("preferred_role", ROLE_ANY)
-            self.state.pending_roles[addr] = player["preferred_role"]
-            self._send_ack(addr, 0)
+
+        self._refresh_lobby_queue_positions()
+        for addr in human_addrs:
+            self._send_map(addr)
 
         for addr, player in self.state.players.items():
             if not str(addr).startswith("ghost:"):
@@ -352,11 +386,13 @@ class PacketHandler:
 
         self.state.players[runner_addr]["player_id"] = 1
         self._send_ack(runner_addr, 1)
+        self._send_map(runner_addr)
         print(f"[T2] assigned RUNNER(1) to {runner_addr}")
 
         if tagger_addr:
             self.state.players[tagger_addr]["player_id"] = 2
             self._send_ack(tagger_addr, 2)
+            self._send_map(tagger_addr)
             print(f"[T2] assigned TAGGER(2) to {tagger_addr}")
 
         self.state.pending_roles = {}
@@ -401,6 +437,7 @@ class PacketHandler:
                 return False, f"node slot {slot_index + 1} missing"
             self.state.pending_roles.pop(addr, None)
             self.write_queue.put({"op": "del", "key": f"player:{player['player_id']}"})
+            self._refresh_lobby_queue_positions()
             print(f"[T2] removed queued lobby player from slot {slot_index + 1}: {addr}")
             return True, f"removed node slot {slot_index + 1} from lobby"
 
@@ -437,6 +474,30 @@ class PacketHandler:
             self.udp_transport.sendto(packet, addr)
         except Exception as exc:
             print(f"[T2] failed sending ACK to {addr}: {exc}")
+
+    def _send_map(self, addr):
+        if self.udp_transport is None or not self.map_state.get("tiles"):
+            return
+        ms = self.map_state
+        packet = pack_map_packet(0, ms["width"], ms["height"], ms["tile_scale"], ms["tiles"])
+        try:
+            self.udp_transport.sendto(packet, addr)
+            print(f"[T2] sent PKT_MAP ({ms['name']}) to {addr} ({len(packet)} bytes)")
+        except Exception as exc:
+            print(f"[T2] failed sending PKT_MAP to {addr}: {exc}")
+
+    def _send_bits_init(self, addr):
+        if self.udp_transport is None:
+            return
+        bits = self.map_state.get("bits", [])
+        if not bits:
+            return
+        packet = pack_bits_init_packet(0, bits)
+        try:
+            self.udp_transport.sendto(packet, addr)
+            print(f"[T2] sent PKT_BITS_INIT ({len(bits)} bits) to {addr}")
+        except Exception as exc:
+            print(f"[T2] failed sending PKT_BITS_INIT to {addr}: {exc}")
 
     # ── Ghost management ──────────────────────────────────────────────────────
 
