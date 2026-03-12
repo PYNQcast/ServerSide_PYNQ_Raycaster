@@ -2246,6 +2246,272 @@
     text-shadow: none;
   }
 
+  .map-editor-page {
+    min-height: 0;
+  }
+
+  #map-editor-react-slot {
+    min-height: 100%;
+  }
+
+  .map-editor-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-height: 0;
+  }
+
+  .map-editor-overview {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 12px;
+  }
+
+  .map-editor-notice {
+    padding: 14px 16px;
+    border: 1px solid rgba(0, 212, 255, 0.14);
+    color: #dceaff;
+  }
+
+  .map-editor-notice.success {
+    border-color: rgba(0, 255, 65, 0.3);
+    color: #ccffd8;
+  }
+
+  .map-editor-notice.error {
+    border-color: rgba(240, 82, 82, 0.34);
+    color: var(--coral-light);
+  }
+
+  .map-editor-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(360px, 0.85fr);
+    gap: 14px;
+    align-items: start;
+  }
+
+  .map-editor-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-width: 0;
+  }
+
+  .map-editor-canvas-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    align-items: center;
+    padding: 16px;
+  }
+
+  .map-editor-canvas-stage {
+    position: relative;
+    width: min(100%, 768px);
+    aspect-ratio: 1 / 1;
+    border: 1px solid rgba(0, 212, 255, 0.18);
+    background:
+      radial-gradient(circle at top, rgba(0, 212, 255, 0.12), transparent 62%),
+      linear-gradient(180deg, rgba(12, 20, 36, 0.98), rgba(7, 12, 22, 0.98));
+    overflow: hidden;
+  }
+
+  .map-editor-canvas-layer {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+  }
+
+  .map-editor-canvas-layer.overlay {
+    cursor: crosshair;
+    touch-action: none;
+  }
+
+  .map-editor-canvas-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    color: #9db6d9;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .map-editor-toolbar,
+  .map-library-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 16px;
+  }
+
+  .map-editor-field,
+  .map-editor-field-row {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .map-editor-field-row {
+    flex-direction: row;
+    align-items: flex-end;
+  }
+
+  .map-editor-field-row .map-editor-field {
+    flex: 1;
+  }
+
+  .map-editor-label,
+  .map-editor-stat-label {
+    font-family: 'Silkscreen', cursive;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--cyan);
+  }
+
+  .map-editor-input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid rgba(0, 212, 255, 0.14);
+    background: rgba(9, 17, 31, 0.92);
+    color: var(--white);
+    font: inherit;
+  }
+
+  .map-editor-input:focus {
+    outline: 2px solid rgba(0, 212, 255, 0.24);
+    outline-offset: 0;
+  }
+
+  .map-editor-tool-row,
+  .map-editor-button-stack,
+  .map-editor-save-row,
+  .map-library-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .map-editor-button-stack.compact {
+    justify-content: flex-end;
+    min-width: 168px;
+  }
+
+  .map-editor-save-row .control-btn {
+    flex: 1;
+  }
+
+  .map-editor-status-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .map-editor-status-grid .panel-inset {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .map-editor-validation {
+    padding: 12px 14px;
+    border: 1px solid rgba(0, 212, 255, 0.14);
+    background: rgba(8, 14, 26, 0.72);
+  }
+
+  .map-editor-validation.ready {
+    border-color: rgba(0, 255, 65, 0.22);
+  }
+
+  .map-editor-validation.blocked {
+    border-color: rgba(255, 215, 0, 0.28);
+    color: #ffe699;
+  }
+
+  .map-library-section-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .map-library-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .map-library-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 12px;
+  }
+
+  .map-library-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .map-library-head,
+  .map-library-title-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .map-library-title-row {
+    justify-content: flex-start;
+    align-items: center;
+  }
+
+  .map-library-card h3 {
+    font-family: 'Silkscreen', cursive;
+    font-size: 15px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .map-library-subtitle {
+    color: #89a4cb;
+    word-break: break-all;
+  }
+
+  .map-library-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .micro-chip.editor {
+    border-color: rgba(255, 215, 0, 0.24);
+    color: #ffe699;
+  }
+
+  .micro-chip.active {
+    border-color: rgba(0, 255, 65, 0.24);
+    color: var(--green);
+  }
+
+  .map-editor-file-input {
+    display: none;
+  }
+
+  [data-theme="light"] .map-editor-notice,
+  [data-theme="light"] .map-editor-validation,
+  [data-theme="light"] .map-editor-input,
+  [data-theme="light"] .map-editor-canvas-stage {
+    background: rgba(255, 255, 255, 0.62);
+  }
+
+  [data-theme="light"] .map-editor-canvas-meta,
+  [data-theme="light"] .map-library-subtitle {
+    color: #4d5f76;
+  }
+
   @keyframes player-spin {
     to {
       transform: rotate(360deg);
@@ -2329,6 +2595,10 @@
     .entity-stats-grid {
       grid-template-columns: 1fr;
     }
+
+    .map-editor-layout {
+      grid-template-columns: 1fr;
+    }
   }
 
   @media (max-width: 820px) {
@@ -2354,7 +2624,8 @@
     .hud-grid,
     .status-grid,
     .control-pair,
-    .game-sidebar {
+    .game-sidebar,
+    .map-editor-status-grid {
       grid-template-columns: 1fr;
     }
 
@@ -2369,6 +2640,15 @@
     .viewport-head {
       flex-direction: column;
       gap: 12px;
+    }
+
+    .map-editor-field-row {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .map-editor-canvas-meta {
+      flex-direction: column;
     }
 
     .viewport-head-meta {

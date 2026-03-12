@@ -18,6 +18,18 @@ from aiohttp import web
 from boto3.dynamodb.conditions import Key
 from decimal import Decimal
 
+REPO_ROOT    = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from monitor_map_store import (
+    MapStorageError,
+    delete_map_entry,
+    list_map_entries,
+    load_map_entry,
+    save_map_entry,
+)
+
 REDIS_HOST   = "127.0.0.1"
 REDIS_PORT   = 6379
 HTTP_PORT    = 8080
@@ -29,7 +41,6 @@ REDIS_STATS_POLL_INTERVAL_S = 1.0
 DYNAMO_TABLE = "pynq-raycaster-seda-matches"
 PLAYER_TABLE = "pynq-raycaster-players"
 AWS_REGION   = "eu-west-2"
-REPO_ROOT    = Path(__file__).resolve().parents[3]
 MAPS_DIR     = REPO_ROOT / "pynq_full" / "ec2" / "maps"   # shared map files
 MONITOR_DIR  = Path(__file__).resolve().parent
 LOGO_ASSET_PATHS = {
@@ -872,8 +883,16 @@ async def control_handler(request):
 
 async def maps_list_handler(request):
     """GET /api/maps — list all available map names."""
-    names = sorted(p.stem for p in MAPS_DIR.glob("*.txt"))
-    return web.json_response({"maps": names})
+    try:
+        entries = await asyncio.to_thread(list_map_entries, MAPS_DIR)
+    except MapStorageError as exc:
+        raise web.HTTPBadRequest(text=str(exc))
+    return web.json_response({
+        "maps": [entry["map_id"] for entry in entries],
+        "entries": entries,
+        "active_map": (_state_cache.get("active_map") or _active_map),
+        "selected_map": (_state_cache.get("selected_map") or _active_map),
+    })
 
 
 async def map_handler(request):
@@ -882,27 +901,65 @@ async def map_handler(request):
     Returns {width, height, tile_scale, tiles: [[0|1,...],...]}
     """
     name = request.match_info["name"]
-    # Reject path traversal
-    if "/" in name or "\\" in name or ".." in name:
-        raise web.HTTPBadRequest(text="invalid map name")
-    path = MAPS_DIR / f"{name}.txt"
-    if not path.exists():
-        raise web.HTTPNotFound(text=f"map not found: {name}")
-    rows = []
-    with open(path) as f:
-        for line in f:
-            line = line.rstrip('\r\n')
-            if line:
-                rows.append([1 if c == '#' else 0 for c in line])
-    width  = len(rows[0]) if rows else 0
-    height = len(rows)
+    try:
+        payload = await asyncio.to_thread(load_map_entry, MAPS_DIR, name, True)
+    except MapStorageError as exc:
+        message = str(exc)
+        if message.startswith("map not found:"):
+            raise web.HTTPNotFound(text=message)
+        raise web.HTTPBadRequest(text=message)
+    return web.json_response(payload)
+
+
+async def map_save_handler(request):
+    try:
+        data = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text="invalid map payload")
+
+    apply_map = bool(data.get("apply"))
+    try:
+        payload = await asyncio.to_thread(save_map_entry, MAPS_DIR, data)
+        if apply_map and len(payload.get("spawns", [])) < 2:
+            raise MapStorageError("pushing live requires two spawn points")
+        if apply_map:
+            await asyncio.to_thread(handle_control_command, f"set_map:{payload['map_id']}")
+    except MapStorageError as exc:
+        raise web.HTTPBadRequest(text=str(exc))
+    except Exception as exc:
+        print(f"[monitor] map save error: {exc}")
+        raise web.HTTPInternalServerError(text="failed to save map")
+
     return web.json_response({
-        "name":       name,
-        "width":      width,
-        "height":     height,
-        "tile_scale": 8,
-        "tiles":      rows,
+        "ok": True,
+        "map": payload,
+        "applied": apply_map,
+        "message": _service_message if apply_map else f"map '{payload['map_id']}' saved",
     })
+
+
+async def map_delete_handler(request):
+    name = request.match_info["name"]
+    protected = {
+        value
+        for value in (
+            _state_cache.get("active_map"),
+            _state_cache.get("selected_map"),
+            _active_map,
+        )
+        if value
+    }
+    try:
+        payload = await asyncio.to_thread(delete_map_entry, MAPS_DIR, name, protected)
+    except MapStorageError as exc:
+        message = str(exc)
+        if message.startswith("map not found:"):
+            raise web.HTTPNotFound(text=message)
+        raise web.HTTPBadRequest(text=message)
+    except Exception as exc:
+        print(f"[monitor] map delete error for {name}: {exc}")
+        raise web.HTTPInternalServerError(text="failed to delete map")
+    return web.json_response({"ok": True, **payload})
 
 
 async def main():
@@ -922,7 +979,9 @@ async def main():
     app.router.add_get("/api/players/{player_key}", player_handler)
     app.router.add_post("/api/control", control_handler)
     app.router.add_get("/api/maps",         maps_list_handler)
+    app.router.add_post("/api/maps",        map_save_handler)
     app.router.add_get("/api/map/{name}",   map_handler)
+    app.router.add_delete("/api/maps/{name}", map_delete_handler)
     await asyncio.to_thread(refresh_state_cache)
     app["state_cache_task"] = asyncio.create_task(state_cache_loop())
 

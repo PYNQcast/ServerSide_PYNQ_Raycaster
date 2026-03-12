@@ -173,9 +173,9 @@ function updateCanvasLabel() {
 }
 
 function setActiveTab(tab) {
-  const target = (tab === 'server' || tab === 'controls' || tab === 'about' || tab === 'players') ? tab : 'game';
+  const target = (tab === 'server' || tab === 'controls' || tab === 'about' || tab === 'players' || tab === 'editor') ? tab : 'game';
   _activePage = target;
-  ['game', 'server', 'controls', 'about', 'players'].forEach((page) => {
+  ['game', 'server', 'controls', 'about', 'players', 'editor'].forEach((page) => {
     const panel = document.getElementById(`page-${page}`);
     const tabBtn = document.getElementById(`tab-${page}`);
     if (panel) panel.hidden = page !== target;
