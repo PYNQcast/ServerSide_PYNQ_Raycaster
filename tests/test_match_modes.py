@@ -771,6 +771,72 @@ def test_sim_node_runtime_prefers_selected_map_over_orbit_runtime_map():
         assert selected_map == "ghost_bits"
 
 
+def test_sim_auto_runner_prefers_nearest_active_bit_in_bits_mode():
+    with sim_import_context():
+        protocol = importlib.import_module("protocol")
+        node_sim = importlib.import_module("node_simulator")
+
+        objective = node_sim.choose_auto_objective(
+            x=0.0,
+            y=0.0,
+            assigned_player_id=1,
+            game_mode=protocol.GAME_MODE_CHASE_BITS,
+            packet_players=[
+                {"player_id": 1, "x": 0.0, "y": 0.0, "flags": 0},
+                {"player_id": 2, "x": 80.0, "y": 80.0, "flags": 0},
+            ],
+            bits=[(24.0, 0.0), (6.0, 0.0), (40.0, 0.0)],
+            bits_mask=0b011,
+        )
+
+        assert objective["mode"] == "collect"
+        assert objective["target"] == (6.0, 0.0)
+
+
+def test_sim_auto_runner_evades_close_tagger():
+    with sim_import_context():
+        protocol = importlib.import_module("protocol")
+        node_sim = importlib.import_module("node_simulator")
+
+        objective = node_sim.choose_auto_objective(
+            x=0.0,
+            y=0.0,
+            assigned_player_id=1,
+            game_mode=protocol.GAME_MODE_CHASE_BITS,
+            packet_players=[
+                {"player_id": 1, "x": 0.0, "y": 0.0, "flags": 0},
+                {"player_id": 2, "x": 12.0, "y": 0.0, "flags": 0},
+            ],
+            bits=[(4.0, 0.0)],
+            bits_mask=0b1,
+        )
+
+        assert objective["mode"] == "evade"
+        assert objective["target"][0] < 0.0
+
+
+def test_sim_auto_tagger_chases_runner():
+    with sim_import_context():
+        protocol = importlib.import_module("protocol")
+        node_sim = importlib.import_module("node_simulator")
+
+        objective = node_sim.choose_auto_objective(
+            x=24.0,
+            y=24.0,
+            assigned_player_id=2,
+            game_mode=protocol.GAME_MODE_CHASE,
+            packet_players=[
+                {"player_id": 1, "x": -10.0, "y": 5.0, "flags": 0},
+                {"player_id": 2, "x": 24.0, "y": 24.0, "flags": 0},
+            ],
+            bits=[],
+            bits_mask=0,
+        )
+
+        assert objective["mode"] == "chase"
+        assert objective["target"] == (-10.0, 5.0)
+
+
 def test_sim_orbit_tagger_speed_exceeds_runner_speed():
     with sim_import_context():
         node_sim = importlib.import_module("node_simulator")
