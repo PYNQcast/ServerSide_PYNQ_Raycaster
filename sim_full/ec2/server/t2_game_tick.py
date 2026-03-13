@@ -1,4 +1,4 @@
-# t2_game_tick.py — T2 GameTick: authoritative game loop at 20 Hz.
+# t2_game_tick.py — T2 GameTick: authoritative game loop at 60 Hz.
 #
 # Queues:
 #   in:  packet_queue    {"data": bytes, "addr": (ip, port)}
@@ -40,7 +40,7 @@ _LOBBY_MAP_NAME = "lobby"
 
 
 class GameTick:
-    def __init__(self, packet_queue, broadcast_queue, write_queue, tick_rate=20, udp_transport=None):
+    def __init__(self, packet_queue, broadcast_queue, write_queue, tick_rate=60, udp_transport=None):
         self.packet_queue    = packet_queue
         self.broadcast_queue = broadcast_queue
         self.write_queue     = write_queue
@@ -92,7 +92,7 @@ class GameTick:
 
             elapsed   = time.monotonic() - tick_start
             sleep_for = max(0.0, self.interval - elapsed)
-            if self.tick_count % 20 == 0:
+            if self.tick_count % self.tick_rate == 0:
                 self._print_metrics(elapsed)
             self.tick_count += 1
             await asyncio.sleep(sleep_for)

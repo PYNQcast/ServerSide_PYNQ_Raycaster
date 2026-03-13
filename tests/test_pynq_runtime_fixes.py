@@ -136,6 +136,18 @@ def test_test_package_v3_manual_turns_match_real_left_right():
         assert right_state["angle_raw"] == (test_package.HW_ANGLE_STEPS - 64)
 
 
+def test_test_package_v3_tick_rate_scaling_preserves_20hz_baseline():
+    with pynq_import_context():
+        test_package = importlib.import_module("test_package_v3")
+
+        assert test_package._scaled_linear_for_tick_rate(0.2, 20) == 0.2
+        assert test_package._scaled_linear_for_tick_rate(0.2, 60) == 0.2 / 3.0
+        assert test_package._scaled_turn_step_for_tick_rate(64, 20) == 64
+        assert test_package._scaled_turn_step_for_tick_rate(64, 60) == 21
+        assert test_package._scaled_period_ticks_for_tick_rate(4, 20) == 4
+        assert test_package._scaled_period_ticks_for_tick_rate(4, 60) == 12
+
+
 def test_test_package_v2_ignores_small_server_echo_deltas():
     with pynq_import_context():
         test_package = importlib.import_module("test_package_v2")
@@ -235,6 +247,45 @@ def test_test_package_v3_map_packet_clears_stale_end_and_bits_state():
         assert state["bits"] == []
         assert state["tiles"] == tiles
         assert len(bram.writes) == 32
+
+
+def test_pynq_redis_io_sanitises_none_values_before_hset():
+    with pynq_import_context():
+        redis_io_mod = importlib.import_module("t2_redis_io")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+
+        state = match_state_mod.MatchState()
+        state.players = {
+            ("ghost", 1): {
+                "player_id": 3,
+                "x": 1.0,
+                "y": 2.0,
+                "angle": 0.5,
+                "flags": 0,
+                "board_slot": None,
+                "control_mode": None,
+                "username": None,
+                "display_name": None,
+                "profile_key": None,
+                "controller_key": None,
+                "identity_source": None,
+            }
+        }
+        state.selected_map_name = None
+        queue = FakeWriteQueue()
+        redis_io = redis_io_mod.RedisIO(
+            state=state,
+            map_state={"name": None, "bits": []},
+            broadcast_queue=None,
+            write_queue=queue,
+        )
+
+        redis_io.push_redis_writes(tick_count=1, match_tick=0)
+
+        hsets = [item for item in queue.items if item.get("op") == "hset"]
+        assert hsets
+        for item in hsets:
+            assert all(value is not None for value in item["mapping"].values())
 
 
 def test_pynq_packet_handler_allows_single_player_match_start():

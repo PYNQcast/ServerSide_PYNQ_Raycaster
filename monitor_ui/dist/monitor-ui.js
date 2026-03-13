@@ -262,7 +262,7 @@ Error generating stack: `+n.message+`
               </div>
 
               <div class="pipe-card stage-logic">
-                <div class="pipe-card-label">asyncio \xB7 20 Hz</div>
+                <div class="pipe-card-label">asyncio \xB7 60 Hz</div>
                 <div class="pipe-card-title">T2 GameTick</div>
                 <div class="pipe-card-desc">authoritative state, tags, bits, and broadcast build</div>
                 <div class="pipe-card-val"><span id="pp-players">0</span> live players</div>
@@ -781,7 +781,7 @@ Error generating stack: `+n.message+`
               </div>
 
               <div class="pipe-card stage-logic">
-                <div class="pipe-card-label">asyncio \xB7 20 Hz</div>
+                <div class="pipe-card-label">asyncio \xB7 60 Hz</div>
                 <div class="pipe-card-title">T2 GameTick</div>
                 <div class="pipe-card-desc">authoritative state, tags, bits, and broadcast build</div>
                 <div class="pipe-card-val"><span id="pp-players">0</span> live players</div>

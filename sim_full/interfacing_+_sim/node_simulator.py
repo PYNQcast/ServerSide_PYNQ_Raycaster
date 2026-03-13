@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # node_simulator.py — fake PYNQ node for testing without hardware.
 #
-# State machine: CONNECTED (send position @ 20 Hz) ↔ DISCONNECTED/REJOINING.
+# State machine: CONNECTED (send position @ 60 Hz) ↔ DISCONNECTED/REJOINING.
 # The simulator now auto-registers into the lobby on launch; explicit reconnect
 # controls are only needed when the operator wants to drop a node manually.
 # Usage: python3 node_simulator.py <server_ip> [port] --nodes N --node-index I --username sim
@@ -44,20 +44,29 @@ from protocol import (
 RESTART_DELAY_S = 1.5
 MAP_CHANGE_REJOIN_DELAY_S = 0.25
 
-TICK_HZ      = 20
+BASE_TICK_HZ = 20
+TICK_HZ      = 60
 TICK_INTERVAL = 1.0 / TICK_HZ
 ARENA_RADIUS = 50.0
-ORBIT_RUNNER_ROTATION_SPEED = 0.06
-ORBIT_TAGGER_ROTATION_SPEED = 0.10
-ORBIT_FALLBACK_ROTATION_SPEED = 0.08
-MAP_ROTATION_SPEED_BASE = 0.05
-MAP_ROTATION_SPEED_STEP = 0.06
-MANUAL_TURN_STEP = 0.2
-MANUAL_MOVE_STEP = 4.0
-AUTO_TURN_STEP = 0.22
-AUTO_RUNNER_SPEED = 3.8
-AUTO_TAGGER_SPEED = 4.6
-AUTO_FALLBACK_SPEED = 3.4
+
+
+def _scaled_linear_for_tick_rate(value: float, target_tick_hz: int, baseline_tick_hz: int = BASE_TICK_HZ) -> float:
+    target = max(1, int(target_tick_hz))
+    baseline = max(1, int(baseline_tick_hz))
+    return float(value) * (baseline / target)
+
+
+ORBIT_RUNNER_ROTATION_SPEED = _scaled_linear_for_tick_rate(0.06, TICK_HZ)
+ORBIT_TAGGER_ROTATION_SPEED = _scaled_linear_for_tick_rate(0.10, TICK_HZ)
+ORBIT_FALLBACK_ROTATION_SPEED = _scaled_linear_for_tick_rate(0.08, TICK_HZ)
+MAP_ROTATION_SPEED_BASE = _scaled_linear_for_tick_rate(0.05, TICK_HZ)
+MAP_ROTATION_SPEED_STEP = _scaled_linear_for_tick_rate(0.06, TICK_HZ)
+MANUAL_TURN_STEP = _scaled_linear_for_tick_rate(0.2, TICK_HZ)
+MANUAL_MOVE_STEP = _scaled_linear_for_tick_rate(4.0, TICK_HZ)
+AUTO_TURN_STEP = _scaled_linear_for_tick_rate(0.22, TICK_HZ)
+AUTO_RUNNER_SPEED = _scaled_linear_for_tick_rate(3.8, TICK_HZ)
+AUTO_TAGGER_SPEED = _scaled_linear_for_tick_rate(4.6, TICK_HZ)
+AUTO_FALLBACK_SPEED = _scaled_linear_for_tick_rate(3.4, TICK_HZ)
 AUTO_RUNNER_EVADE_DISTANCE = 42.0
 AUTO_TAGGER_SHOOT_RANGE = 26.0
 AUTO_TAGGER_SHOOT_ARC = 0.4

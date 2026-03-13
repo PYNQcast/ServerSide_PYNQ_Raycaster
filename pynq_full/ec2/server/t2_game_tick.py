@@ -1,4 +1,4 @@
-# t2_game_tick.py — T2 GameTick: authoritative game loop at 20 Hz.
+# t2_game_tick.py — T2 GameTick: authoritative game loop at 60 Hz.
 #
 # Queues:
 #   in:  packet_queue    {"data": bytes, "addr": (ip, port)}
@@ -36,7 +36,7 @@ _MAPS_DIR = os.path.normpath(
 _LOBBY_MAP_NAME = "lobby"
 
 class GameTick:
-    def __init__(self, packet_queue, broadcast_queue, write_queue, tick_rate=20,
+    def __init__(self, packet_queue, broadcast_queue, write_queue, tick_rate=60,
                  udp_transport=None):
         self.packet_queue    = packet_queue
         self.broadcast_queue = broadcast_queue

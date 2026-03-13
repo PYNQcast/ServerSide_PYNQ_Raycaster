@@ -8,6 +8,12 @@ This file documents the current runtime launch surface for:
 `test_package_v3.py` is the current stabilized copy of the PYNQ board client for `pynq_full`.
 `test_package_v2.py` exposes the same runtime flags and remains compatible with the same launch surface.
 
+Important runtime note:
+
+- `test_package_v2.py` keeps the older `20 Hz` board loop baseline
+- `test_package_v3.py` now defaults to a higher `60 Hz` board loop and auto-scales its default per-tick movement values from the old `20 Hz` tuning baseline
+- if you pass explicit movement values, those are treated as raw per-tick values
+
 ## Basic usage
 
 On the board:
@@ -87,6 +93,23 @@ python3 test_package_v2.py --mode manual
 python3 test_package_v2.py --mode auto
 ```
 
+### `--tick-rate`
+
+- Type: `int`
+- Default:
+  - `test_package_v2.py`: `20`
+  - `test_package_v3.py`: `60`
+- Purpose: board-side control/send loop rate in Hz
+
+For `test_package_v3.py`, the built-in default move/turn/auto speeds are automatically rescaled from the old `20 Hz` baseline so higher tick rates improve smoothness without automatically tripling world speed.
+
+Example:
+
+```bash
+python3 test_package_v3.py --tick-rate 60
+python3 test_package_v3.py --tick-rate 30
+```
+
 ### `--move-speed`
 
 - Type: `float`
@@ -147,10 +170,25 @@ Example:
 python3 test_package_v2.py --mode auto --auto-fallback-speed 0.18
 ```
 
+### `--auto-shoot-period`
+
+- Type: `int`
+- Default:
+  - `test_package_v2.py`: `4`
+  - `test_package_v3.py`: auto-scaled from the `20 Hz` baseline
+- Purpose: auto tagger shot cadence in ticks
+
+Example:
+
+```bash
+python3 test_package_v3.py --mode auto --tick-rate 60 --auto-shoot-period 12
+```
+
 ## Environment variable equivalents
 
 Every runtime tuning flag also has an env form:
 
+- `PYNQ_TICK_RATE`
 - `PYNQ_USERNAME`
 - `PYNQ_MODE`
 - `PYNQ_MOVE_SPEED`
@@ -158,11 +196,12 @@ Every runtime tuning flag also has an env form:
 - `PYNQ_AUTO_RUNNER_SPEED`
 - `PYNQ_AUTO_TAGGER_SPEED`
 - `PYNQ_AUTO_FALLBACK_SPEED`
+- `PYNQ_AUTO_SHOOT_PERIOD`
 
 Example:
 
 ```bash
-PYNQ_MODE=auto PYNQ_USERNAME=demo-board-2 python3 test_package_v2.py
+PYNQ_MODE=auto PYNQ_USERNAME=demo-board-2 python3 test_package_v3.py
 ```
 
 ## Common launch recipes
@@ -170,22 +209,21 @@ PYNQ_MODE=auto PYNQ_USERNAME=demo-board-2 python3 test_package_v2.py
 ### Manual board with explicit known-good baseline
 
 ```bash
-python3 test_package_v2.py \
+python3 test_package_v3.py \
   --mode manual \
-  --move-speed 0.2 \
-  --turn-step 64 \
+  --tick-rate 60 \
   --username board-1
 ```
+
+That keeps the old `0.2 / 64` feel approximately, but at a smoother `60 Hz`, because `v3` rescales its defaults automatically.
 
 ### Auto board for one-human demo
 
 ```bash
-python3 test_package_v2.py \
+python3 test_package_v3.py \
   --mode auto \
-  --username board-2 \
-  --auto-runner-speed 0.2 \
-  --auto-tagger-speed 0.26 \
-  --auto-fallback-speed 0.18
+  --tick-rate 60 \
+  --username board-2
 ```
 
 ### Custom overlay path
@@ -202,13 +240,13 @@ python3 test_package_v2.py \
 This changes the value for just that launch:
 
 ```bash
-python3 test_package_v2.py --mode manual --move-speed 0.25
+python3 test_package_v3.py --mode manual --tick-rate 60 --move-speed 0.08
 ```
 
 Another example:
 
 ```bash
-python3 test_package_v2.py --mode auto --auto-tagger-speed 0.3
+python3 test_package_v3.py --mode auto --tick-rate 60 --auto-tagger-speed 0.09
 ```
 
 ### Export environment variables in Bash
@@ -216,20 +254,27 @@ python3 test_package_v2.py --mode auto --auto-tagger-speed 0.3
 This is useful if you want to keep the command shorter:
 
 ```bash
+export PYNQ_TICK_RATE=60
 export PYNQ_MODE=manual
-export PYNQ_MOVE_SPEED=0.2
-export PYNQ_TURN_STEP=64
-python3 test_package_v2.py
+unset PYNQ_MOVE_SPEED
+unset PYNQ_TURN_STEP
+unset PYNQ_AUTO_RUNNER_SPEED
+unset PYNQ_AUTO_TAGGER_SPEED
+unset PYNQ_AUTO_FALLBACK_SPEED
+unset PYNQ_AUTO_SHOOT_PERIOD
+python3 test_package_v3.py
 ```
 
 Auto example:
 
 ```bash
+export PYNQ_TICK_RATE=60
 export PYNQ_MODE=auto
-export PYNQ_AUTO_RUNNER_SPEED=0.2
-export PYNQ_AUTO_TAGGER_SPEED=0.26
-export PYNQ_AUTO_FALLBACK_SPEED=0.18
-python3 test_package_v2.py
+unset PYNQ_AUTO_RUNNER_SPEED
+unset PYNQ_AUTO_TAGGER_SPEED
+unset PYNQ_AUTO_FALLBACK_SPEED
+unset PYNQ_AUTO_SHOOT_PERIOD
+python3 test_package_v3.py
 ```
 
 ### Clear exported values
@@ -243,6 +288,8 @@ unset PYNQ_TURN_STEP
 unset PYNQ_AUTO_RUNNER_SPEED
 unset PYNQ_AUTO_TAGGER_SPEED
 unset PYNQ_AUTO_FALLBACK_SPEED
+unset PYNQ_AUTO_SHOOT_PERIOD
+unset PYNQ_TICK_RATE
 ```
 
 ### Relaunch with new values
@@ -250,16 +297,16 @@ unset PYNQ_AUTO_FALLBACK_SPEED
 If the script is already running, stop it and start it again with the new args:
 
 ```bash
-pkill -f 'test_package_v2.py'
+pkill -f 'test_package_v3.py'
 cd /home/xilinx/jupyter_notebooks
-python3 test_package_v2.py --mode manual --move-speed 0.2 --turn-step 64
+python3 test_package_v3.py --mode manual --tick-rate 60
 ```
 
 If you are running it inside a `tmux` pane, the usual flow is:
 
 ```bash
 Ctrl+C
-python3 test_package_v2.py --mode auto --auto-runner-speed 0.2 --auto-tagger-speed 0.26
+python3 test_package_v3.py --mode auto --tick-rate 60
 ```
 
 ## Runtime vs startup control
@@ -275,6 +322,7 @@ What is currently startup-only:
 - `auto-runner-speed`
 - `auto-tagger-speed`
 - `auto-fallback-speed`
+- `auto-shoot-period`
 - `server`
 - `port`
 - `overlay`
@@ -285,5 +333,6 @@ So if you want to tune movement or AI speeds, restart the board client with new 
 ## Notes
 
 - `test_package_v1.py` is the frozen legacy version
-- `test_package_v2.py` is the current runtime path for `pynq_full`
+- `test_package_v3.py` is now the smoother high-rate runtime path for `pynq_full`
+- `test_package_v2.py` keeps the older 20 Hz behavior
 - if board movement looks dead, first confirm the board is actually running the version and args you think it is
