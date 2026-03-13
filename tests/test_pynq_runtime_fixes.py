@@ -66,6 +66,14 @@ class FakeWriteQueue:
         self.items.append(item)
 
 
+class DummyBram:
+    def __init__(self):
+        self.writes = {}
+
+    def write(self, offset, value):
+        self.writes[offset] = value
+
+
 def test_test_package_v2_encodes_leftmost_wall_to_msb():
     with pynq_import_context():
         test_package = importlib.import_module("test_package_v2")
@@ -339,6 +347,39 @@ def test_test_package_v3_ignores_soft_server_corrections_while_manual_input_is_r
         assert state["angle"] == 0.5
 
 
+def test_test_package_v3_keeps_manual_angle_local_even_when_position_snaps():
+    with pynq_import_context():
+        test_package = importlib.import_module("test_package_v3")
+
+        state = {
+            "player_id": 1,
+            "mode": "manual",
+            "x": 10.0,
+            "y": 20.0,
+            "angle": 0.5,
+            "angle_raw": test_package._radians_to_hw_angle(0.5),
+            "match_ended": False,
+            "force_server_pose_sync": False,
+            "server_pose_snap_distance": 4.0,
+            "server_pose_snap_angle": 0.1,
+            "server_pose_hard_snap_distance": 8.0,
+            "server_pose_hard_snap_angle": 0.2,
+            "last_manual_input_at": 0.0,
+        }
+
+        test_package._update_local_pose_from_server(state, [{
+            "player_id": 1,
+            "x": 25.0,
+            "y": 28.0,
+            "angle": 1.4,
+            "flags": 0,
+        }])
+
+        assert state["x"] == 25.0
+        assert state["y"] == 28.0
+        assert state["angle"] == 0.5
+
+
 def test_test_package_v3_builds_fallback_lobby_map_with_border_walls():
     with pynq_import_context():
         test_package = importlib.import_module("test_package_v3")
@@ -354,6 +395,102 @@ def test_test_package_v3_builds_fallback_lobby_map_with_border_walls():
         assert all(fallback["tiles"][row * 32] == 1 for row in range(32))
         assert all(fallback["tiles"][row * 32 + 31] == 1 for row in range(32))
         assert fallback["tiles"][16 * 32 + 16] == 0
+
+
+def test_test_package_v3_suspends_manual_input_during_map_sync_grace():
+    with pynq_import_context():
+        test_package = importlib.import_module("test_package_v3")
+
+        state = {
+            "input_flags": 0,
+            "angle_raw": 0,
+            "angle": 0.0,
+            "x": 0.0,
+            "y": 0.0,
+            "move_speed": 0.2,
+            "turn_step": 64,
+            "map_w": 32,
+            "map_h": 32,
+            "tile_scale": 8,
+            "tiles": bytearray(32 * 32),
+            "input_suspended_until": 9999999999.0,
+        }
+
+        test_package._apply_manual_input(
+            state,
+            FakeButtons(
+                test_package.BUTTON_FORWARD_MASK | test_package.BUTTON_TURN_LEFT_MASK
+            ),
+        )
+
+        assert state["x"] == 0.0
+        assert state["y"] == 0.0
+        assert state["angle_raw"] == 0
+
+
+def test_test_package_v3_build_remote_entities_keeps_ghosts_and_caps():
+    with pynq_import_context():
+        test_package = importlib.import_module("test_package_v3")
+        protocol = importlib.import_module("protocol")
+
+        players = [
+            {"player_id": 1, "x": 10.0, "y": 20.0, "angle": 0.25, "flags": 0},
+            {"player_id": 2, "x": 30.0, "y": 40.0, "angle": 0.50, "flags": 0},
+            {"player_id": 3, "x": 50.0, "y": 60.0, "angle": 0.75, "flags": protocol.FLAG_GHOST},
+            {"player_id": 4, "x": 70.0, "y": 80.0, "angle": 1.00, "flags": protocol.FLAG_GHOST},
+            {"player_id": 5, "x": 90.0, "y": 100.0, "angle": 1.25, "flags": 0},
+            {"player_id": 6, "x": 110.0, "y": 120.0, "angle": 1.50, "flags": 0},
+        ]
+
+        entities = test_package.build_remote_entities(1, players)
+
+        assert len(entities) == test_package.HW_MAX_REMOTE_ENTITIES
+        assert [entity["entity_id"] for entity in entities] == [2, 3, 4, 5]
+        assert entities[1]["flags"] & protocol.FLAG_GHOST
+        assert entities[2]["flags"] & protocol.FLAG_GHOST
+
+
+def test_test_package_v3_writes_sprite_tables_and_clears_unused_slots():
+    with pynq_import_context():
+        test_package = importlib.import_module("test_package_v3")
+        protocol = importlib.import_module("protocol")
+
+        bram = DummyBram()
+        state = {
+            "player_id": 1,
+            "map_w": 32,
+            "map_h": 32,
+            "tile_scale": 8,
+            "players": [
+                {"player_id": 1, "x": 0.0, "y": 0.0, "angle": 0.0, "flags": 0},
+                {"player_id": 2, "x": 16.0, "y": -8.0, "angle": 0.5, "flags": 0},
+                {"player_id": 3, "x": -24.0, "y": 12.0, "angle": 1.0, "flags": protocol.FLAG_GHOST},
+            ],
+            "bits": [(8.0, 8.0), (-8.0, 16.0)],
+            "bits_mask": 0b11,
+        }
+
+        test_package._write_sprite_state_to_bram(bram, state)
+
+        entities = state["remote_entities"]
+        assert len(entities) == 2
+        assert bram.writes[test_package.HW_REMOTE_ENTITY_COUNT_OFFSET] == 2
+        assert bram.writes[test_package.HW_BITS_COUNT_OFFSET] == 2
+        assert bram.writes[test_package.HW_BITS_MASK_OFFSET] == 0b11
+
+        entity0_base = test_package.HW_REMOTE_ENTITY_BASE_OFFSET
+        entity1_base = entity0_base + (test_package.HW_REMOTE_ENTITY_STRIDE_WORDS * 4)
+        empty_entity_base = entity1_base + (test_package.HW_REMOTE_ENTITY_STRIDE_WORDS * 4)
+        assert bram.writes[entity0_base] == test_package._pack_hw_xy_word(16.0, -8.0, 8, 32, 32)
+        assert bram.writes[entity0_base + 4] == test_package._pack_remote_entity_meta(entities[0])
+        assert bram.writes[entity1_base] == test_package._pack_hw_xy_word(-24.0, 12.0, 8, 32, 32)
+        assert bram.writes[entity1_base + 4] == test_package._pack_remote_entity_meta(entities[1])
+        assert bram.writes[empty_entity_base] == 0
+        assert bram.writes[empty_entity_base + 4] == 0
+
+        assert bram.writes[test_package.HW_BITS_BASE_OFFSET] == test_package._pack_hw_xy_word(8.0, 8.0, 8, 32, 32)
+        assert bram.writes[test_package.HW_BITS_BASE_OFFSET + 4] == test_package._pack_hw_xy_word(-8.0, 16.0, 8, 32, 32)
+        assert bram.writes[test_package.HW_BITS_BASE_OFFSET + (15 * 4)] == 0
 
 
 def test_pynq_redis_io_sanitises_none_values_before_hset():
