@@ -51,6 +51,16 @@ HW_MAP_ROWS = 32
 HW_MAP_COLS = 32
 HW_PLAYER_POS_OFFSET = 32 * 4
 HW_PLAYER_ANGLE_OFFSET = 33 * 4
+# Sprite-capable hardware still exposes one BRAM window, so remote entities and
+# bit markers are staged into the unused words immediately after the local pose.
+HW_REMOTE_ENTITY_COUNT_OFFSET = 34 * 4
+HW_REMOTE_ENTITY_BASE_OFFSET = 35 * 4
+HW_REMOTE_ENTITY_STRIDE_WORDS = 2
+HW_MAX_REMOTE_ENTITIES = 4
+HW_BITS_COUNT_OFFSET = (35 + (HW_REMOTE_ENTITY_STRIDE_WORDS * HW_MAX_REMOTE_ENTITIES)) * 4
+HW_BITS_MASK_OFFSET = HW_BITS_COUNT_OFFSET + 4
+HW_BITS_BASE_OFFSET = HW_BITS_MASK_OFFSET + 4
+HW_MAX_BITS = 16
 HW_COORD_FRAC_BITS = 10
 HW_ANGLE_STEPS = 1 << 12
 HW_ANGLE_MASK = HW_ANGLE_STEPS - 1
@@ -70,11 +80,12 @@ AUTO_RUNNER_EVADE_DISTANCE = 42.0
 AUTO_TAGGER_SHOOT_RANGE = 26.0
 AUTO_TAGGER_SHOOT_ARC = 0.4
 AUTO_TAGGER_SHOOT_PERIOD_TICKS = 4
-SERVER_POSE_SNAP_DISTANCE = 4.0
-SERVER_POSE_SNAP_ANGLE = 0.75
-SERVER_POSE_HARD_SNAP_DISTANCE = 12.0
-SERVER_POSE_HARD_SNAP_ANGLE = 1.8
+SERVER_POSE_SNAP_DISTANCE = 8.0
+SERVER_POSE_SNAP_ANGLE = math.pi
+SERVER_POSE_HARD_SNAP_DISTANCE = 24.0
+SERVER_POSE_HARD_SNAP_ANGLE = math.pi
 MANUAL_CORRECTION_GRACE_S = 0.25
+MAP_SYNC_INPUT_GRACE_S = 0.35
 BUTTON_TURN_RIGHT_MASK = 1 << 0
 BUTTON_BACKWARD_MASK = 1 << 1
 BUTTON_FORWARD_MASK = 1 << 2
@@ -179,8 +190,12 @@ def _apply_fallback_lobby_map(state: dict, bram) -> None:
     state["bits"] = fallback["bits"]
     state["bits_mask"] = fallback["bits_mask"]
     state["game_mode"] = fallback["game_mode"]
+    state["players"] = []
+    state["remote_entities"] = []
+    state["input_suspended_until"] = time.monotonic() + MAP_SYNC_INPUT_GRACE_S
     state["force_server_pose_sync"] = True
     _write_map_to_bram(bram, fallback["map_w"], fallback["map_h"], fallback["tiles"])
+    _write_sprite_state_to_bram(bram, state)
     print("[HW] loaded fallback lobby map until PKT_MAP arrives")
 
 
@@ -249,6 +264,107 @@ def _write_pose_to_bram(bram, state: dict):
     y_q = _world_to_hw_q6_10(state["y"], state["tile_scale"], state["map_h"])
     bram.write(HW_PLAYER_POS_OFFSET, ((x_q & 0xFFFF) << 16) | (y_q & 0xFFFF))
     bram.write(HW_PLAYER_ANGLE_OFFSET, state["angle_raw"] & HW_ANGLE_MASK)
+
+
+# Pack world-space x/y into the same 16-bit-per-axis BRAM word used for the local player.
+def _pack_hw_xy_word(x: float, y: float, tile_scale: int, map_w: int, map_h: int) -> int:
+    x_q = _world_to_hw_q6_10(x, tile_scale, map_w)
+    y_q = _world_to_hw_q6_10(y, tile_scale, map_h)
+    return ((x_q & 0xFFFF) << 16) | (y_q & 0xFFFF)
+
+
+# Keep only non-local, sprite-worthy entities in a small stable list for hardware rendering.
+def build_remote_entities(local_player_id: int | None, players):
+    entities = []
+    for player in players or []:
+        player_id = int(player.get("player_id", 0) or 0)
+        if player_id == 0 or player_id == local_player_id:
+            continue
+        entities.append({
+            "entity_id": player_id & 0xFF,
+            "x": float(player.get("x", 0.0) or 0.0),
+            "y": float(player.get("y", 0.0) or 0.0),
+            "angle": float(player.get("angle", 0.0) or 0.0),
+            "flags": int(player.get("flags", 0) or 0) & 0xFF,
+        })
+    entities.sort(key=lambda entity: entity["entity_id"])
+    return entities[:HW_MAX_REMOTE_ENTITIES]
+
+
+# Pack one remote entity's metadata into a compact control word for the sprite pass.
+def _pack_remote_entity_meta(entity: dict) -> int:
+    angle_raw = _radians_to_hw_angle(float(entity.get("angle", 0.0) or 0.0))
+    entity_id = int(entity.get("entity_id", 0) or 0) & 0x7F
+    flags = int(entity.get("flags", 0) or 0) & 0xFF
+    return (1 << 31) | (entity_id << 24) | (flags << 16) | (angle_raw & 0x0FFF)
+
+
+# Mirror remote entities into BRAM so the FPGA sprite pass can render other humans and ghosts.
+def _write_remote_entities_to_bram(bram, state: dict) -> None:
+    if bram is None:
+        return
+
+    entities = build_remote_entities(state.get("player_id"), state.get("players", []))
+    state["remote_entities"] = entities
+    bram.write(HW_REMOTE_ENTITY_COUNT_OFFSET, len(entities) & 0xFFFFFFFF)
+
+    for slot in range(HW_MAX_REMOTE_ENTITIES):
+        base = HW_REMOTE_ENTITY_BASE_OFFSET + (slot * HW_REMOTE_ENTITY_STRIDE_WORDS * 4)
+        if slot < len(entities):
+            entity = entities[slot]
+            bram.write(
+                base,
+                _pack_hw_xy_word(
+                    entity["x"],
+                    entity["y"],
+                    state["tile_scale"],
+                    state["map_w"],
+                    state["map_h"],
+                ),
+            )
+            bram.write(base + 4, _pack_remote_entity_meta(entity))
+        else:
+            bram.write(base, 0)
+            bram.write(base + 4, 0)
+
+
+# Mirror collectible bit positions plus the live bits_mask into BRAM for sprite rendering.
+def _write_bits_to_bram(bram, state: dict) -> None:
+    if bram is None:
+        return
+
+    bits = list(state.get("bits") or [])
+    count = min(len(bits), HW_MAX_BITS)
+    bram.write(HW_BITS_COUNT_OFFSET, count & 0xFFFFFFFF)
+    bram.write(HW_BITS_MASK_OFFSET, int(state.get("bits_mask", 0) or 0) & 0xFFFF)
+
+    for slot in range(HW_MAX_BITS):
+        offset = HW_BITS_BASE_OFFSET + (slot * 4)
+        if slot < count and bits[slot] is not None:
+            bit_x, bit_y = bits[slot]
+            bram.write(
+                offset,
+                _pack_hw_xy_word(
+                    float(bit_x),
+                    float(bit_y),
+                    state["tile_scale"],
+                    state["map_w"],
+                    state["map_h"],
+                ),
+            )
+        else:
+            bram.write(offset, 0)
+
+
+# Keep the whole sprite side of BRAM coherent whenever remote state changes.
+def _write_sprite_state_to_bram(bram, state: dict) -> None:
+    _write_remote_entities_to_bram(bram, state)
+    _write_bits_to_bram(bram, state)
+
+
+# Hold local movement briefly while registration or map sync is settling.
+def _input_is_temporarily_suspended(state: dict) -> bool:
+    return time.monotonic() < float(state.get("input_suspended_until", 0.0) or 0.0)
 
 
 # Check whether a world-space point and collision radius are clear of walls.
@@ -591,6 +707,8 @@ def _apply_auto_input(state: dict) -> None:
 def _apply_manual_input(state: dict, buttons) -> None:
     raw = buttons.read() & 0xF
     state["input_flags"] = 0
+    if _input_is_temporarily_suspended(state):
+        return
     if raw:
         state["last_manual_input_at"] = time.monotonic()
     turn_step = int(state.get("turn_step", TURN_STEP))
@@ -674,25 +792,38 @@ def _update_local_pose_from_server(state: dict, players) -> None:
         soft_snap_angle = float(state.get("server_pose_snap_angle", SERVER_POSE_SNAP_ANGLE))
         hard_snap_distance = float(state.get("server_pose_hard_snap_distance", SERVER_POSE_HARD_SNAP_DISTANCE))
         hard_snap_angle = float(state.get("server_pose_hard_snap_angle", SERVER_POSE_HARD_SNAP_ANGLE))
-        should_snap = (
+        should_snap_position = (
             state.get("force_server_pose_sync", False)
             or player_id == 0
             or server_match_end
             or distance_error >= hard_snap_distance
-            or angle_error >= hard_snap_angle
             or (
                 not active_manual_control
+                and distance_error >= soft_snap_distance
+            )
+        )
+        should_snap_angle = (
+            state.get("force_server_pose_sync", False)
+            or player_id == 0
+            or server_match_end
+            or (
+                state.get("mode", "manual") == "auto"
                 and (
-                    distance_error >= soft_snap_distance
-                    or angle_error >= soft_snap_angle
+                    angle_error >= hard_snap_angle
+                    or (
+                        not active_manual_control
+                        and angle_error >= soft_snap_angle
+                    )
                 )
             )
         )
-        if should_snap:
+        if should_snap_position:
             state["x"] = server_x
             state["y"] = server_y
+        if should_snap_angle:
             state["angle"] = server_angle
             state["angle_raw"] = _radians_to_hw_angle(server_angle)
+        if should_snap_position or should_snap_angle:
             state["force_server_pose_sync"] = False
         state["match_ended"] = server_match_end
         return
@@ -716,7 +847,12 @@ def _handle_packet(data: bytes, state: dict, bram) -> None:
         state["registered"] = True
         state["player_id"] = player_id
         state["match_ended"] = False
+        state["players"] = []
+        state["remote_entities"] = []
+        state["bits_mask"] = 0
+        state["input_suspended_until"] = time.monotonic() + MAP_SYNC_INPUT_GRACE_S
         state["force_server_pose_sync"] = True
+        _write_sprite_state_to_bram(bram, state)
         if previous_player_id != player_id:
             print(f"[ACK] player_id={player_id} role={_role_name(player_id)} header_seq={seq} ts={timestamp}")
         return
@@ -733,10 +869,14 @@ def _handle_packet(data: bytes, state: dict, bram) -> None:
         state["tiles"] = tiles
         state["bits"] = []
         state["bits_mask"] = 0
+        state["players"] = []
+        state["remote_entities"] = []
         state["game_mode"] = protocol.GAME_MODE_CHASE
         state["match_ended"] = False
+        state["input_suspended_until"] = time.monotonic() + MAP_SYNC_INPUT_GRACE_S
         state["force_server_pose_sync"] = True
         _write_map_to_bram(bram, width, height, tiles)
+        _write_sprite_state_to_bram(bram, state)
         return
 
     if pkt_type == protocol.PKT_BITS_INIT:
@@ -753,6 +893,7 @@ def _handle_packet(data: bytes, state: dict, bram) -> None:
             state["bits"] = bits
         else:
             state["bits"] = []
+        _write_bits_to_bram(bram, state)
         print(f"[BITS_INIT] count={len(raw_bits)}")
         return
 
@@ -778,6 +919,7 @@ def _handle_packet(data: bytes, state: dict, bram) -> None:
         state["bits_mask"] = bits_mask
         state["players"] = players
         _update_local_pose_from_server(state, players)
+        _write_sprite_state_to_bram(bram, state)
 
         now = time.monotonic()
         if now - state["last_state_log_at"] >= STATE_LOG_PERIOD_S:
@@ -911,6 +1053,7 @@ def main():
         "bits_mask": 0xFFFF,
         "bits": [],
         "players": [],
+        "remote_entities": [],
         "move_speed": effective_move_speed,
         "turn_step": effective_turn_step,
         "auto_runner_speed": effective_auto_runner_speed,
