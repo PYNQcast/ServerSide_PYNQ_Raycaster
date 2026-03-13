@@ -1,5 +1,7 @@
 import asyncio
 import importlib
+import math
+import struct
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -141,10 +143,13 @@ def test_test_package_v3_tick_rate_scaling_preserves_20hz_baseline():
         test_package = importlib.import_module("test_package_v3")
 
         assert test_package._scaled_linear_for_tick_rate(0.2, 20) == 0.2
+        assert math.isclose(test_package._scaled_linear_for_tick_rate(0.2, 50), 0.08)
         assert test_package._scaled_linear_for_tick_rate(0.2, 60) == 0.2 / 3.0
         assert test_package._scaled_turn_step_for_tick_rate(64, 20) == 64
+        assert test_package._scaled_turn_step_for_tick_rate(64, 50) == 26
         assert test_package._scaled_turn_step_for_tick_rate(64, 60) == 21
         assert test_package._scaled_period_ticks_for_tick_rate(4, 20) == 4
+        assert test_package._scaled_period_ticks_for_tick_rate(4, 50) == 10
         assert test_package._scaled_period_ticks_for_tick_rate(4, 60) == 12
 
 
@@ -249,6 +254,68 @@ def test_test_package_v3_map_packet_clears_stale_end_and_bits_state():
         assert len(bram.writes) == 32
 
 
+def test_test_package_v3_ignores_stale_game_state_packets():
+    with pynq_import_context():
+        protocol = importlib.import_module("protocol")
+        test_package = importlib.import_module("test_package_v3")
+
+        class DummyBram:
+            def write(self, _offset, _value):
+                pass
+
+        def pack_game_state(seq, x, y, angle):
+            payload = struct.pack(protocol.GAME_STATE_EXT_FMT, protocol.GAME_MODE_CHASE, 1, 0)
+            payload += struct.pack(protocol.PLAYER_FMT, 1, float(x), float(y), float(angle), 0)
+            header = struct.pack(protocol.HEADER_FMT, protocol.PKT_GAME_STATE, seq, 1000 + seq)
+            return header + payload
+
+        state = {
+            "registered": True,
+            "player_id": 1,
+            "x": 0.0,
+            "y": 0.0,
+            "angle": 0.0,
+            "angle_raw": test_package._radians_to_hw_angle(0.0),
+            "match_ended": False,
+            "force_server_pose_sync": True,
+            "map_w": 32,
+            "map_h": 32,
+            "tile_scale": 8,
+            "tiles": bytearray(32 * 32),
+            "game_mode": protocol.GAME_MODE_CHASE,
+            "bits_mask": 0,
+            "bits": [],
+            "players": [],
+            "last_state_log_at": 0.0,
+            "last_game_state_seq": None,
+        }
+
+        bram = DummyBram()
+        test_package._handle_packet(pack_game_state(10, 4.0, 5.0, 0.25), state, bram)
+        test_package._handle_packet(pack_game_state(9, 14.0, 15.0, 1.25), state, bram)
+
+        assert state["x"] == 4.0
+        assert state["y"] == 5.0
+        assert state["angle"] == 0.25
+
+
+def test_test_package_v3_builds_fallback_lobby_map_with_border_walls():
+    with pynq_import_context():
+        test_package = importlib.import_module("test_package_v3")
+
+        fallback = test_package._build_fallback_lobby_map()
+
+        assert fallback["map_w"] == 32
+        assert fallback["map_h"] == 32
+        assert fallback["tile_scale"] == 8
+        assert len(fallback["tiles"]) == 32 * 32
+        assert all(fallback["tiles"][col] == 1 for col in range(32))
+        assert all(fallback["tiles"][31 * 32 + col] == 1 for col in range(32))
+        assert all(fallback["tiles"][row * 32] == 1 for row in range(32))
+        assert all(fallback["tiles"][row * 32 + 31] == 1 for row in range(32))
+        assert fallback["tiles"][16 * 32 + 16] == 0
+
+
 def test_pynq_redis_io_sanitises_none_values_before_hset():
     with pynq_import_context():
         redis_io_mod = importlib.import_module("t2_redis_io")
@@ -347,3 +414,72 @@ def test_pynq_packet_handler_allows_single_player_match_start():
         assert message == "single-player match started"
         assert state.match_started is True
         assert state.players[("127.0.0.1", 9001)]["player_id"] == 1
+
+
+def test_pynq_packet_handler_rejects_stale_sequences():
+    with pynq_import_context():
+        packet_handler = importlib.import_module("t2_packet_handler")
+        match_state = importlib.import_module("game_logic.match_state")
+        protocol = importlib.import_module("protocol")
+
+        state = match_state.MatchState()
+        addr = ("127.0.0.1", 9001)
+        state.players = {
+            addr: {
+                "player_id": 1,
+                "x": 1.0,
+                "y": 2.0,
+                "angle": 0.0,
+                "flags": 0,
+                "last_seen": 0.0,
+                "last_seq": 10,
+                "movement_mode": 0,
+                "protocol_version": 1,
+                "timed_out": False,
+                "preferred_role": protocol.ROLE_ANY,
+                "board_slot": 1,
+                "control_mode": "manual",
+                "username": "p1",
+                "display_name": "p1",
+                "profile_key": "p1",
+                "controller_key": "controller-p1",
+                "identity_source": "username",
+            },
+        }
+
+        handler = packet_handler.PacketHandler(
+            state=state,
+            packet_queue=asyncio.Queue(),
+            write_queue=FakeWriteQueue(),
+            udp_transport=None,
+            map_state={
+                "width": 32,
+                "height": 32,
+                "tile_scale": 8,
+                "tiles": bytearray(32 * 32),
+                "name": "test_map",
+                "bits": [],
+                "spawn_positions": [],
+            },
+            on_match_start=lambda: None,
+            on_match_abort=lambda *_args, **_kwargs: None,
+            on_match_pause=lambda *_args, **_kwargs: None,
+            on_match_resume=lambda *_args, **_kwargs: None,
+            on_event=lambda *_args, **_kwargs: None,
+        )
+
+        pkt = protocol.pack_node_packet(
+            pkt_type=protocol.PKT_STATE_UPDATE,
+            seq=9,
+            x=9.0,
+            y=9.0,
+            angle=1.0,
+            flags=0,
+            movement_mode=protocol.MOVEMENT_MODE_POSE,
+        )
+
+        handler._process_packet({"data": pkt, "addr": addr})
+
+        assert state.players[addr]["last_seq"] == 10
+        assert state.players[addr]["x"] == 1.0
+        assert state.players[addr]["y"] == 2.0

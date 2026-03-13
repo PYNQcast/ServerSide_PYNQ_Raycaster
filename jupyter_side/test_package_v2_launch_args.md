@@ -11,7 +11,7 @@ This file documents the current runtime launch surface for:
 Important runtime note:
 
 - `test_package_v2.py` keeps the older `20 Hz` board loop baseline
-- `test_package_v3.py` supports `--tick-rate`, but now defaults back to the calmer `20 Hz` board loop baseline
+- `test_package_v3.py` supports `--tick-rate`, and now defaults to `50 Hz`
 - if you pass explicit movement values, those are treated as raw per-tick values
 
 ## Basic usage
@@ -98,7 +98,7 @@ python3 test_package_v2.py --mode auto
 - Type: `int`
 - Default:
   - `test_package_v2.py`: `20`
-  - `test_package_v3.py`: `60`
+  - `test_package_v3.py`: `50`
 - Purpose: board-side control/send loop rate in Hz
 
 For `test_package_v3.py`, the built-in default move/turn/auto speeds are automatically rescaled from the old `20 Hz` baseline so higher tick rates improve smoothness without automatically tripling world speed.
@@ -106,7 +106,7 @@ For `test_package_v3.py`, the built-in default move/turn/auto speeds are automat
 Example:
 
 ```bash
-python3 test_package_v3.py --tick-rate 60
+python3 test_package_v3.py --tick-rate 50
 python3 test_package_v3.py --tick-rate 30
 ```
 
@@ -181,7 +181,7 @@ python3 test_package_v2.py --mode auto --auto-fallback-speed 0.18
 Example:
 
 ```bash
-python3 test_package_v3.py --mode auto --tick-rate 60 --auto-shoot-period 12
+python3 test_package_v3.py --mode auto --tick-rate 50 --auto-shoot-period 10
 ```
 
 ## Environment variable equivalents
@@ -211,7 +211,7 @@ PYNQ_MODE=auto PYNQ_USERNAME=demo-board-2 python3 test_package_v3.py
 ```bash
 python3 test_package_v3.py \
   --mode manual \
-  --tick-rate 60 \
+  --tick-rate 50 \
   --username board-1
 ```
 
@@ -222,7 +222,7 @@ That keeps the old `0.2 / 64` feel approximately, because `v3` rescales its defa
 ```bash
 python3 test_package_v3.py \
   --mode auto \
-  --tick-rate 60 \
+  --tick-rate 50 \
   --username board-2
 ```
 
@@ -240,13 +240,13 @@ python3 test_package_v2.py \
 This changes the value for just that launch:
 
 ```bash
-python3 test_package_v3.py --mode manual --tick-rate 60 --move-speed 0.08
+python3 test_package_v3.py --mode manual --tick-rate 50 --move-speed 0.08
 ```
 
 Another example:
 
 ```bash
-python3 test_package_v3.py --mode auto --tick-rate 60 --auto-tagger-speed 0.09
+python3 test_package_v3.py --mode auto --tick-rate 50 --auto-tagger-speed 0.10
 ```
 
 ### Export environment variables in Bash
@@ -254,7 +254,7 @@ python3 test_package_v3.py --mode auto --tick-rate 60 --auto-tagger-speed 0.09
 This is useful if you want to keep the command shorter:
 
 ```bash
-export PYNQ_TICK_RATE=20
+export PYNQ_TICK_RATE=50
 export PYNQ_MODE=manual
 unset PYNQ_MOVE_SPEED
 unset PYNQ_TURN_STEP
@@ -268,7 +268,7 @@ python3 test_package_v3.py
 Auto example:
 
 ```bash
-export PYNQ_TICK_RATE=20
+export PYNQ_TICK_RATE=50
 export PYNQ_MODE=auto
 unset PYNQ_AUTO_RUNNER_SPEED
 unset PYNQ_AUTO_TAGGER_SPEED
@@ -299,14 +299,14 @@ If the script is already running, stop it and start it again with the new args:
 ```bash
 pkill -f 'test_package_v3.py'
 cd /home/xilinx/jupyter_notebooks
-python3 test_package_v3.py --mode manual --tick-rate 60
+python3 test_package_v3.py --mode manual --tick-rate 50
 ```
 
 If you are running it inside a `tmux` pane, the usual flow is:
 
 ```bash
 Ctrl+C
-python3 test_package_v3.py --mode auto --tick-rate 60
+python3 test_package_v3.py --mode auto --tick-rate 50
 ```
 
 ## Runtime vs startup control
