@@ -1573,6 +1573,18 @@
       4px 4px 0 0 #000;
   }
 
+  .replay-entry {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: stretch;
+  }
+
+  .replay-live-btn {
+    min-width: 132px;
+    text-align: center;
+  }
+
   .controls-actions {
     grid-column: span 3;
     max-height: min(68vh, 760px);

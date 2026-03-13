@@ -21,12 +21,12 @@ import protocol
 # Keep protocol.py beside this file on the board.
 #
 # Copy to board:
-#   scp jupyter_side/test_package_v2.py pynq_full/interfacing/protocol.py \
+#   scp jupyter_side/test_package_v3.py pynq_full/interfacing/protocol.py \
 #       xilinx@<PYNQ_IP>:/home/xilinx/jupyter_notebooks/
 #
 # Run on board:
 #   cd /home/xilinx/jupyter_notebooks
-#   python3 test_package_v2.py --mode auto
+#   python3 test_package_v3.py --mode auto
 
 
 # --- Network configuration ---
@@ -149,7 +149,7 @@ def _radians_to_hw_angle(angle_radians: float) -> int:
 def _load_overlay(overlay_path: str):
     if Overlay is None or Clocks is None:
         raise SystemExit(
-            "test_package_v2.py must run on the PYNQ board with the pynq package installed"
+            "test_package_v3.py must run on the PYNQ board with the pynq package installed"
         )
     print(f"[HW] loading overlay {overlay_path}")
     overlay = Overlay(overlay_path)

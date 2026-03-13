@@ -520,14 +520,20 @@ def collect_state():
     for pid, raw in enumerate(redis_rows[:9], start=1):
         if not raw:
             continue
+        board_slot = _as_optional_int(raw.get("board_slot"))
+        is_ghost = bool(_as_int(raw.get("is_ghost", 0), 0))
         players.append({
             "id":              pid,
-            "entity_key":      f"player:{pid}",
+            "entity_key":      (
+                f"ghost:{pid}"
+                if is_ghost
+                else (f"board:{board_slot}" if board_slot is not None else f"player:{pid}")
+            ),
             "x":               float(raw.get("x", 0)),
             "y":               float(raw.get("y", 0)),
             "angle":           float(raw.get("angle", 0)),
             "flags":           int(raw.get("flags", 0)),
-            "board_slot":      _as_optional_int(raw.get("board_slot")),
+            "board_slot":      board_slot,
             "control_mode":    raw.get("control_mode", "manual") or "manual",
             "username":        raw.get("username", ""),
             "display_name":    raw.get("display_name", ""),
@@ -535,7 +541,7 @@ def collect_state():
             "controller_key":  raw.get("controller_key", ""),
             "identity_source": raw.get("identity_source", ""),
             "sim_slot":        _as_optional_int(raw.get("sim_slot")),
-            "is_ghost":        bool(_as_int(raw.get("is_ghost", 0), 0)),
+            "is_ghost":        is_ghost,
             "queued":          False,
             "queue_slot":      None,
         })
@@ -573,6 +579,7 @@ def collect_state():
             queued_players = []
     for index, raw in enumerate(queued_players, start=1):
         queue_slot = _as_int(raw.get("queue_slot", index), index)
+        board_slot = _as_optional_int(raw.get("board_slot")) or queue_slot
         entity_key_seed = (
             raw.get("profile_key")
             or raw.get("display_name")
@@ -581,12 +588,12 @@ def collect_state():
         )
         players.append({
             "id":              0,
-            "entity_key":      f"queued:{queue_slot}:{entity_key_seed}",
+            "entity_key":      f"board:{board_slot}" if board_slot is not None else f"queued:{queue_slot}:{entity_key_seed}",
             "x":               _as_float(raw.get("x"), 0.0),
             "y":               _as_float(raw.get("y"), 0.0),
             "angle":           _as_float(raw.get("angle"), 0.0),
             "flags":           _as_int(raw.get("flags", 0), 0),
-            "board_slot":      _as_optional_int(raw.get("board_slot")) or queue_slot,
+            "board_slot":      board_slot,
             "control_mode":    raw.get("control_mode", slot_modes.get(queue_slot, "manual")) or slot_modes.get(queue_slot, "manual"),
             "username":        raw.get("username", ""),
             "display_name":    raw.get("display_name", ""),
