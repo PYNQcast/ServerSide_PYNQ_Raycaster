@@ -20,6 +20,7 @@ def pynq_import_context():
         if name in {
             "protocol",
             "test_package_v2",
+            "test_package_v3",
             "t2_packet_handler",
             "match_state",
             "game_logic.match_state",
@@ -36,6 +37,7 @@ def pynq_import_context():
             if name in {
                 "protocol",
                 "test_package_v2",
+                "test_package_v3",
                 "t2_packet_handler",
                 "match_state",
                 "game_logic.match_state",
@@ -100,11 +102,38 @@ def test_test_package_v2_manual_turns_match_real_left_right():
 
         left_state = dict(base_state)
         test_package._apply_manual_input(left_state, FakeButtons(test_package.BUTTON_TURN_LEFT_MASK))
-        assert left_state["angle_raw"] == (test_package.HW_ANGLE_STEPS - 64)
+        assert left_state["angle_raw"] == 64
 
         right_state = dict(base_state)
         test_package._apply_manual_input(right_state, FakeButtons(test_package.BUTTON_TURN_RIGHT_MASK))
-        assert right_state["angle_raw"] == 64
+        assert right_state["angle_raw"] == (test_package.HW_ANGLE_STEPS - 64)
+
+
+def test_test_package_v3_manual_turns_match_real_left_right():
+    with pynq_import_context():
+        test_package = importlib.import_module("test_package_v3")
+
+        base_state = {
+            "input_flags": 0,
+            "angle_raw": 0,
+            "angle": 0.0,
+            "x": 0.0,
+            "y": 0.0,
+            "move_speed": 0.2,
+            "turn_step": 64,
+            "map_w": 32,
+            "map_h": 32,
+            "tile_scale": 8,
+            "tiles": bytearray(32 * 32),
+        }
+
+        left_state = dict(base_state)
+        test_package._apply_manual_input(left_state, FakeButtons(test_package.BUTTON_TURN_LEFT_MASK))
+        assert left_state["angle_raw"] == 64
+
+        right_state = dict(base_state)
+        test_package._apply_manual_input(right_state, FakeButtons(test_package.BUTTON_TURN_RIGHT_MASK))
+        assert right_state["angle_raw"] == (test_package.HW_ANGLE_STEPS - 64)
 
 
 def test_test_package_v2_ignores_small_server_echo_deltas():

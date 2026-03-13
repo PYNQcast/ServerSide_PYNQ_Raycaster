@@ -520,6 +520,13 @@ let replayState = {
   matchId: null,
 };
 
+function resetTransientArenaState() {
+  for (const key of Object.keys(tagFlash)) delete tagFlash[key];
+  for (const key of Object.keys(tagPos)) delete tagPos[key];
+  for (const key of Object.keys(lastLivePos)) delete lastLivePos[key];
+  for (const key of Object.keys(prevFlags)) delete prevFlags[key];
+}
+
 function normalisePlayers(players) {
   return (players || []).map((p) => ({
     id: p.id ?? p.player_id,
@@ -560,3 +567,4 @@ window.deleteMapFromControls = deleteMapFromControls;
 window.loadMapList = loadMapList;
 window.requestMapListRefresh = requestMapListRefresh;
 window.invalidateMonitorMapCache = invalidateMapCache;
+window.resetTransientArenaState = resetTransientArenaState;

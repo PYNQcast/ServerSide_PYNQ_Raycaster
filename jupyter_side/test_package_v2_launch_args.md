@@ -1,10 +1,12 @@
-# `test_package_v2.py` Launch Arguments
+# `test_package_v2.py` / `test_package_v3.py` Launch Arguments
 
 This file documents the current runtime launch surface for:
 
 - [test_package_v2.py](/home/akendall/Documents/ServerSide_PYNQ_Raycaster/jupyter_side/test_package_v2.py)
+- [test_package_v3.py](/home/akendall/Documents/ServerSide_PYNQ_Raycaster/jupyter_side/test_package_v3.py)
 
-It is the current PYNQ board client for `pynq_full`.
+`test_package_v3.py` is the current stabilized copy of the PYNQ board client for `pynq_full`.
+`test_package_v2.py` exposes the same runtime flags and remains compatible with the same launch surface.
 
 ## Basic usage
 
@@ -12,12 +14,12 @@ On the board:
 
 ```bash
 cd /home/xilinx/jupyter_notebooks
-python3 test_package_v2.py
+python3 test_package_v3.py
 ```
 
 Important:
 
-- `protocol.py` or `as` `protocol_1` must be in the same folder as `test_package_v2.py`
+- `protocol.py` or `as` `protocol_1` must be in the same folder as the script you run
 - this script is meant to run on the PYNQ board with the `pynq` package installed
 
 ## Current CLI arguments

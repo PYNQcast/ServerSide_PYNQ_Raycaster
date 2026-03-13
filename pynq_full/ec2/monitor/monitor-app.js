@@ -76,7 +76,7 @@ function setReplayStatus(text) {
   document.getElementById('replay-status').textContent = text;
 }
 
-function stopReplay() {
+function stopReplay(statusText = 'replay stopped') {
   if (replayState.timer) {
     clearInterval(replayState.timer);
     replayState.timer = null;
@@ -87,15 +87,18 @@ function stopReplay() {
   replayState.frameIndex = 0;
   replayState.matchId = null;
   if (wasActive) {
-    setReplayStatus('replay stopped');
+    window.resetTransientArenaState?.();
+    setReplayStatus(statusText);
     if (latestState) {
       updatePlayers(latestState.players);
+      updateNodeLinks(latestState);
     }
   }
 }
 
 function startReplayPlayback(matchId, events) {
   stopReplay();
+  window.resetTransientArenaState?.();
   const frames = events.filter((ev) => ev.event === 'state_snapshot');
   if (!frames.length) {
     setReplayStatus(`match ${matchId.replace(/^match-/, '')} has no state frames`);
@@ -137,6 +140,61 @@ async function loadReplay(matchId) {
     startReplayPlayback(matchId, payload.events || []);
   } catch (err) {
     setReplayStatus(`replay load failed: ${err.message}`);
+  } finally {
+    replayLoading = false;
+  }
+}
+
+function extractReplayStartEvent(events) {
+  return (events || []).find((event) => event?.event === 'match_start') || null;
+}
+
+async function autoPlayReplay(matchId) {
+  if (replayLoading) {
+    return;
+  }
+  replayLoading = true;
+  stopReplay('replay stopped — returning to live control');
+  setReplayStatus(`preparing auto play for ${matchId.replace(/^match-/, '')}...`);
+  try {
+    const resp = await fetch(`/api/replay/${encodeURIComponent(matchId)}`);
+    if (!resp.ok) {
+      const msg = await resp.text();
+      throw new Error(msg || `HTTP ${resp.status}`);
+    }
+    const payload = await resp.json();
+    const startEvent = extractReplayStartEvent(payload.events || []);
+    if (!startEvent) {
+      throw new Error('replay has no match_start event');
+    }
+
+    const mapName = String(startEvent.map || '').trim();
+    const ghostCount = Math.max(0, Math.min(3, Number(startEvent.ghost_count || 0)));
+    if (!isValidMapName(mapName)) {
+      throw new Error('replay map metadata is missing');
+    }
+
+    updateMapSelector(mapName, mapName);
+    await loadMap(mapName);
+    if (!await sendControl(`set_map:${mapName}`, `map → ${mapName}`, { forceHttp: true })) {
+      throw new Error(`failed to set map '${mapName}'`);
+    }
+    if (!await sendControl(`set_ghosts_${ghostCount}`, `ghost count → ${ghostCount}`, { forceHttp: true })) {
+      throw new Error(`failed to set ghost count to ${ghostCount}`);
+    }
+    if (!await sendControl('node1_auto', 'board 1 auto', { forceHttp: true })) {
+      throw new Error('failed to switch board 1 to auto');
+    }
+    if (!await sendControl('node2_auto', 'board 2 auto', { forceHttp: true })) {
+      throw new Error('failed to switch board 2 to auto');
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+    if (!await sendControl('start_match', 'start match', { forceHttp: true })) {
+      throw new Error('failed to start match');
+    }
+    setReplayStatus(`auto play armed for ${matchId.replace(/^match-/, '')} on ${mapName}`);
+  } catch (err) {
+    setReplayStatus(`auto play failed: ${err.message}`);
   } finally {
     replayLoading = false;
   }
@@ -271,9 +329,14 @@ function updateMatches(matches) {
   const replaySignature = JSON.stringify(replayable.map(m => [m.match_id, m.replay_frames]));
   if (replaySignature !== lastReplayListSignature) {
     replayEl.innerHTML = replayable.map(m => `
-      <button class="replay-btn" onclick="loadReplay('${m.match_id}')">
-        replay ${m.match_id.replace(/^match-/, '')} (${m.replay_frames}f)
-      </button>
+      <div class="replay-entry">
+        <button class="replay-btn" onclick="loadReplay('${m.match_id}')">
+          replay ${m.match_id.replace(/^match-/, '')} (${m.replay_frames}f)
+        </button>
+        <button class="control-btn start replay-live-btn" onclick="autoPlayReplay('${m.match_id}')">
+          auto play
+        </button>
+      </div>
     `).join('');
     lastReplayListSignature = replaySignature;
   }
@@ -332,6 +395,9 @@ function updateEvents(events) {
 const statusEl = document.getElementById('status');
 let ws = null;
 const MONITOR_STATE_EVENT = 'monitor:state';
+let lastLiveMatchEnded = false;
+let lastActiveMapSeen = null;
+let lastActivePlayerCount = 0;
 
 function scheduleMapRefresh(cmd) {
   if (!String(cmd || '').startsWith('set_map:')) return;
@@ -346,17 +412,20 @@ function scheduleMapRefresh(cmd) {
   window.setTimeout(() => { loadMapList(); }, 250);
 }
 
-async function sendControl(cmd, label) {
+async function sendControl(cmd, label, options = {}) {
+  if (replayState.active) {
+    stopReplay('replay stopped — returning to live control');
+  }
   if (cmd === 'start_match' && !isValidMapName(latestState?.selected_map || _selectedMapName)) {
     setServiceNote('select a map before starting the match');
-    return;
+    return false;
   }
-  const forceHttp = String(cmd || '').startsWith('set_map:');
+  const forceHttp = Boolean(options.forceHttp) || String(cmd || '').startsWith('set_map:');
   if (!forceHttp && ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({cmd}));
     setServiceNote(`${label} requested...`);
     scheduleMapRefresh(cmd);
-    return;
+    return true;
   }
   setServiceNote(`${label} requested via HTTP...`);
   try {
@@ -370,8 +439,10 @@ async function sendControl(cmd, label) {
       throw new Error(text || `HTTP ${resp.status}`);
     }
     scheduleMapRefresh(cmd);
+    return true;
   } catch (error) {
     setServiceNote(`control failed: ${error.message || 'request error'}`);
+    return false;
   }
 }
 function connect() {
@@ -389,6 +460,15 @@ function connect() {
   };
   ws.onmessage = (evt) => {
     const state = JSON.parse(evt.data);
+    const normalisedPlayers = normalisePlayers(state.players || []);
+    const activePlayerCount = normalisedPlayers.filter((player) => !player.queued).length;
+    const matchEnded = Boolean(state.match?.ended);
+    const activeMapChanged = lastActiveMapSeen !== null && state.active_map !== lastActiveMapSeen;
+    const returnedToLobby = lastActivePlayerCount > 0 && activePlayerCount === 0;
+    const exitedEndHold = lastLiveMatchEnded && !matchEnded;
+    if (activeMapChanged || returnedToLobby || exitedEndHold) {
+      window.resetTransientArenaState?.();
+    }
     // New match boundary: drop any previous round's tag/match-end visual state.
     if (state.events && state.events.length > 0 && state.events[0].event === 'match_start') {
       for (const k of Object.keys(prevFlags)) delete prevFlags[k];
@@ -402,6 +482,9 @@ function connect() {
       for (const k of Object.keys(tagPos)) delete tagPos[k];
       for (const k of Object.keys(lastLivePos)) delete lastLivePos[k];
     }
+    lastLiveMatchEnded = matchEnded;
+    lastActiveMapSeen = state.active_map || null;
+    lastActivePlayerCount = activePlayerCount;
     latestState = state;
     window.latestState = state;
     window.dispatchEvent(new CustomEvent(MONITOR_STATE_EVENT, { detail: state }));

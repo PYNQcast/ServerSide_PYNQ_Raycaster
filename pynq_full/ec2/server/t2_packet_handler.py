@@ -227,6 +227,7 @@ class PacketHandler:
         human_count = sum(1 for a in self.state.players if not str(a).startswith("ghost:"))
         self._send_ack(addr, 0)
         self._send_map(addr)
+        self._send_bits_init(addr)
         self._send_control_mode(addr)
         print(f"[T2] player queued from {addr} (lobby humans={human_count}, ghosts={self._ghost_count()})")
 
@@ -268,6 +269,7 @@ class PacketHandler:
             self.state.pending_roles[addr] = player["preferred_role"]
             self._send_ack(addr, 0)
             self._send_map(addr)
+            self._send_bits_init(addr)
             self._send_control_mode(addr)
 
         for addr, player in self.state.players.items():
@@ -327,6 +329,7 @@ class PacketHandler:
         self.state.players[runner_addr]["player_id"] = 1
         self._send_ack(runner_addr, 1)
         self._send_map(runner_addr)
+        self._send_bits_init(runner_addr)
         self._send_control_mode(runner_addr)
         print(f"[T2] assigned RUNNER(1) to {runner_addr}")
 
@@ -334,6 +337,7 @@ class PacketHandler:
             self.state.players[tagger_addr]["player_id"] = 2
             self._send_ack(tagger_addr, 2)
             self._send_map(tagger_addr)
+            self._send_bits_init(tagger_addr)
             self._send_control_mode(tagger_addr)
             print(f"[T2] assigned TAGGER(2) to {tagger_addr}")
 
@@ -349,8 +353,6 @@ class PacketHandler:
             self.state.game_mode  = GAME_MODE_CHASE_BITS
             self.state.bits       = [[x, y, True] for x, y in bits]
             self.state.bits_mask  = (1 << len(bits)) - 1
-            for addr in addrs:
-                self._send_bits_init(addr)
         else:
             self.state.game_mode = GAME_MODE_CHASE
             self.state.bits = []
@@ -451,13 +453,11 @@ class PacketHandler:
         except Exception as e:
             print(f"[T2] failed to send PKT_MAP to {addr}: {e}")
 
-    # Send PKT_BITS_INIT so the node knows where bits are — sent once at match start
+    # Send PKT_BITS_INIT so the node knows the current bit layout — including zero bits.
     def _send_bits_init(self, addr):
         if self.udp_transport is None:
             return
         bits = self.map_state.get("bits", [])
-        if not bits:
-            return
         pkt = pack_bits_init_packet(0, bits)
         try:
             self.udp_transport.sendto(pkt, addr)
