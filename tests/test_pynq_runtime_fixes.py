@@ -1,4 +1,5 @@
 import asyncio
+import errno
 import importlib
 import math
 import struct
@@ -72,6 +73,11 @@ class DummyBram:
 
     def write(self, offset, value):
         self.writes[offset] = value
+
+
+class BlockingSock:
+    def sendto(self, _packet, _addr):
+        raise BlockingIOError(errno.EAGAIN, "Resource temporarily unavailable")
 
 
 def test_test_package_v2_encodes_leftmost_wall_to_msb():
@@ -426,6 +432,29 @@ def test_test_package_v3_suspends_manual_input_during_map_sync_grace():
         assert state["x"] == 0.0
         assert state["y"] == 0.0
         assert state["angle_raw"] == 0
+
+
+def test_test_package_v3_drops_backpressured_state_send_without_crashing():
+    with pynq_import_context():
+        test_package = importlib.import_module("test_package_v3")
+
+        state = {
+            "seq": 12,
+            "x": 1.0,
+            "y": 2.0,
+            "angle": 0.5,
+            "input_flags": 0,
+            "match_ended": False,
+            "tx_drop_count": 0,
+            "last_tx_error_log_at": 0.0,
+            "last_state_tx_at": 0.0,
+        }
+
+        ok = test_package._send_state(BlockingSock(), ("127.0.0.1", 9000), state)
+
+        assert ok is False
+        assert state["seq"] == 12
+        assert state["tx_drop_count"] == 1
 
 
 def test_test_package_v3_build_remote_entities_keeps_ghosts_and_caps():
