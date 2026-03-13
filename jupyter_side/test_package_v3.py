@@ -36,7 +36,7 @@ USERNAME = ""
 MODE = "manual"
 PREFERRED_ROLE = protocol.ROLE_ANY
 BASE_TICK_RATE = 20
-TICK_RATE = 20
+TICK_RATE = 50
 TICK_INTERVAL = 1.0 / TICK_RATE
 REGISTER_RETRY_S = 2.0
 SERVER_SILENCE_S = 5.0
@@ -129,6 +129,56 @@ def _describe_packet(data: bytes) -> str:
         return f"short packet ({len(data)} bytes)"
     pkt_type, seq, timestamp = protocol.unpack_header(data)
     return f"type=0x{pkt_type:04x} seq={seq} ts={timestamp} len={len(data)}"
+
+
+# Reject an older 16-bit sequence number so stale server state cannot rewind the board.
+def _is_newer_seq(prev_seq: int | None, seq: int) -> bool:
+    if prev_seq is None:
+        return True
+    delta = (int(seq) - int(prev_seq)) & 0xFFFF
+    return delta != 0 and delta <= 0x7FFF
+
+
+# Reject an older timestamp for packets that do not carry a meaningful rolling seq.
+def _is_newer_timestamp(prev_ts: int | None, timestamp: int) -> bool:
+    if prev_ts is None:
+        return True
+    return int(timestamp) >= int(prev_ts)
+
+
+# Build a local 32x32 border-wall lobby map so HDMI and local collision start in a known-safe state.
+def _build_fallback_lobby_map():
+    tiles = bytearray(HW_MAP_ROWS * HW_MAP_COLS)
+    for col in range(HW_MAP_COLS):
+        tiles[col] = 1
+        tiles[(HW_MAP_ROWS - 1) * HW_MAP_COLS + col] = 1
+    for row in range(HW_MAP_ROWS):
+        tiles[row * HW_MAP_COLS] = 1
+        tiles[row * HW_MAP_COLS + (HW_MAP_COLS - 1)] = 1
+    return {
+        "map_w": HW_MAP_COLS,
+        "map_h": HW_MAP_ROWS,
+        "tile_scale": 8,
+        "tiles": tiles,
+        "bits": [],
+        "bits_mask": 0,
+        "game_mode": protocol.GAME_MODE_CHASE,
+    }
+
+
+# Load the local fallback lobby map until the server sends the authoritative PKT_MAP.
+def _apply_fallback_lobby_map(state: dict, bram) -> None:
+    fallback = _build_fallback_lobby_map()
+    state["map_w"] = fallback["map_w"]
+    state["map_h"] = fallback["map_h"]
+    state["tile_scale"] = fallback["tile_scale"]
+    state["tiles"] = fallback["tiles"]
+    state["bits"] = fallback["bits"]
+    state["bits_mask"] = fallback["bits_mask"]
+    state["game_mode"] = fallback["game_mode"]
+    state["force_server_pose_sync"] = True
+    _write_map_to_bram(bram, fallback["map_w"], fallback["map_h"], fallback["tiles"])
+    print("[HW] loaded fallback lobby map until PKT_MAP arrives")
 
 
 # Pack a flat 32x32 tile map into BRAM row words for the FPGA.
@@ -633,6 +683,10 @@ def _handle_packet(data: bytes, state: dict, bram) -> None:
     state["last_rx_at"] = time.monotonic()
 
     if pkt_type == protocol.PKT_ACK:
+        last_ack_ts = state.get("last_ack_timestamp")
+        if not _is_newer_timestamp(last_ack_ts, timestamp):
+            return
+        state["last_ack_timestamp"] = timestamp
         if len(data) < protocol.HEADER_SIZE + 1:
             print(f"[ACK] malformed: {_describe_packet(data)}")
             return
@@ -647,6 +701,10 @@ def _handle_packet(data: bytes, state: dict, bram) -> None:
         return
 
     if pkt_type == protocol.PKT_MAP:
+        last_map_ts = state.get("last_map_timestamp")
+        if not _is_newer_timestamp(last_map_ts, timestamp):
+            return
+        state["last_map_timestamp"] = timestamp
         width, height, tile_scale, tiles = protocol.unpack_map_packet(data)
         state["map_w"] = width
         state["map_h"] = height
@@ -661,6 +719,10 @@ def _handle_packet(data: bytes, state: dict, bram) -> None:
         return
 
     if pkt_type == protocol.PKT_BITS_INIT:
+        last_bits_ts = state.get("last_bits_timestamp")
+        if not _is_newer_timestamp(last_bits_ts, timestamp):
+            return
+        state["last_bits_timestamp"] = timestamp
         raw_bits = protocol.unpack_bits_init_packet(data)
         if raw_bits:
             max_id = max(bit_id for bit_id, _, _ in raw_bits)
@@ -674,6 +736,10 @@ def _handle_packet(data: bytes, state: dict, bram) -> None:
         return
 
     if pkt_type == protocol.PKT_NODE_MODE:
+        last_mode_ts = state.get("last_node_mode_timestamp")
+        if not _is_newer_timestamp(last_mode_ts, timestamp):
+            return
+        state["last_node_mode_timestamp"] = timestamp
         next_mode = _mode_name_from_packet(protocol.unpack_node_mode_packet(data))
         previous_mode = state.get("mode", "manual")
         state["mode"] = next_mode
@@ -682,6 +748,10 @@ def _handle_packet(data: bytes, state: dict, bram) -> None:
         return
 
     if pkt_type == protocol.PKT_GAME_STATE:
+        last_seq = state.get("last_game_state_seq")
+        if not _is_newer_seq(last_seq, seq):
+            return
+        state["last_game_state_seq"] = seq
         _, rx_seq, rx_ts, game_mode, players, bits_mask = protocol.unpack_server_packet(data)
         state["game_mode"] = game_mode
         state["bits_mask"] = bits_mask
@@ -831,7 +901,13 @@ def main():
         "server_pose_snap_distance": SERVER_POSE_SNAP_DISTANCE,
         "server_pose_snap_angle": SERVER_POSE_SNAP_ANGLE,
         "force_server_pose_sync": True,
+        "last_ack_timestamp": None,
+        "last_map_timestamp": None,
+        "last_bits_timestamp": None,
+        "last_node_mode_timestamp": None,
+        "last_game_state_seq": None,
     }
+    _apply_fallback_lobby_map(state, bram)
 
     print("[NET] starting lobby/register loop")
 
@@ -851,6 +927,8 @@ def main():
                     state["registered"] = False
                     state["player_id"] = None
                     state["match_ended"] = False
+                    state["last_game_state_seq"] = None
+                    _apply_fallback_lobby_map(state, bram)
 
             if state["mode"] == "auto":
                 _apply_auto_input(state)

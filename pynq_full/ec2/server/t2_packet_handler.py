@@ -37,6 +37,12 @@ from t2_map_loader import resolve_walkable_world
 from player_profiles import build_player_identity
 
 
+# Reject a stale or replayed 16-bit client sequence number with wraparound handling.
+def _validate_seq(prev_seq, seq):
+    delta = (int(seq) - int(prev_seq)) & 0xFFFF
+    return delta != 0 and delta <= 0x7FFF
+
+
 # Drains the inbound packet queue, registers players, sends ACK+MAP on registration
 class PacketHandler:
 
@@ -160,6 +166,15 @@ class PacketHandler:
             p["movement_mode"] = movement_mode
             p["protocol_version"] = protocol_version
             self._maybe_resume_match()
+            return
+
+        last = p["last_seq"]
+        if last is not None and not _validate_seq(last, seq):
+            last_log = float(p.get("_last_invalid_seq_log_at", 0.0) or 0.0)
+            now = time.monotonic()
+            if (now - last_log) >= 0.5:
+                p["_last_invalid_seq_log_at"] = now
+                print(f"[T2] dropped stale seq for {addr}: prev={last} next={seq}")
             return
 
         next_x, next_y = x, y
