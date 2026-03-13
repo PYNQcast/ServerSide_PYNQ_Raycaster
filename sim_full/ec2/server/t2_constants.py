@@ -12,7 +12,7 @@ TAGS_TO_WIN      = 2      # runner must be tagged this many times to end the mat
 # Spawned when both humans declare RUNNER — max 3 to keep the match fair.
 
 MAX_GHOSTS       = 3
-GHOST_SPEED      = 0.6    # world units per tick (~12 wu/s at 20 Hz — intentionally slow early-game pressure)
+GHOST_SPEED      = 0.2    # world units per tick (~12 wu/s at 60 Hz — matches pynq ghost pressure)
 
 # ── Bits (GAME_MODE_CHASE_BITS) ───────────────────────────────────────────────
 
@@ -31,7 +31,7 @@ PAUSE_ABORT_S    = 60.0   # abort only if a paused match stays disconnected this
 # ── Grace period after tag reset ─────────────────────────────────────────────
 # Players are teleported to spawn after each tag, so proximity detection is
 # paused for GRACE_TICKS to let them reach their orbits.
-GRACE_TICKS      = 10     # 0.5 s at 20 Hz
+GRACE_TICKS      = 30     # 0.5 s at 60 Hz
 
 # ── Spawn geometry ────────────────────────────────────────────────────────────
 # Map-relative spawn points for a 32×32 tile map at MAP_TILE_SCALE=8 (256×256 wu).

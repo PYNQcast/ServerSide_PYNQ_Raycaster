@@ -35,7 +35,8 @@ SERVER_PORT = 9000
 USERNAME = ""
 MODE = "manual"
 PREFERRED_ROLE = protocol.ROLE_ANY
-TICK_RATE = 20
+BASE_TICK_RATE = 20
+TICK_RATE = 60
 TICK_INTERVAL = 1.0 / TICK_RATE
 REGISTER_RETRY_S = 2.0
 SERVER_SILENCE_S = 5.0
@@ -75,6 +76,26 @@ BUTTON_TURN_RIGHT_MASK = 1 << 0
 BUTTON_BACKWARD_MASK = 1 << 1
 BUTTON_FORWARD_MASK = 1 << 2
 BUTTON_TURN_LEFT_MASK = 1 << 3
+
+
+# Scale a per-tick linear movement value from the 20 Hz tuning baseline to a target tick rate.
+def _scaled_linear_for_tick_rate(value: float, target_tick_rate: int, baseline_tick_rate: int = BASE_TICK_RATE) -> float:
+    target = max(1, int(target_tick_rate))
+    baseline = max(1, int(baseline_tick_rate))
+    return float(value) * (baseline / target)
+
+
+# Scale a per-tick angle step from the 20 Hz tuning baseline to a target tick rate.
+def _scaled_turn_step_for_tick_rate(value: int, target_tick_rate: int, baseline_tick_rate: int = BASE_TICK_RATE) -> int:
+    scaled = _scaled_linear_for_tick_rate(float(value), target_tick_rate, baseline_tick_rate)
+    return max(1, int(round(scaled)))
+
+
+# Scale a tick-count cadence from the 20 Hz baseline so time-based auto actions stay similar.
+def _scaled_period_ticks_for_tick_rate(value: int, target_tick_rate: int, baseline_tick_rate: int = BASE_TICK_RATE) -> int:
+    target = max(1, int(target_tick_rate))
+    baseline = max(1, int(baseline_tick_rate))
+    return max(1, int(round(int(value) * (target / baseline))))
 
 
 # Convert a runtime mode name into the board client's internal mode label.
@@ -706,28 +727,65 @@ def main():
     parser.add_argument("--username", default=os.environ.get("PYNQ_USERNAME", USERNAME))
     parser.add_argument("--mode", choices=["manual", "auto"],
                         default=os.environ.get("PYNQ_MODE", MODE))
+    parser.add_argument("--tick-rate", type=int,
+                        default=int(os.environ.get("PYNQ_TICK_RATE", TICK_RATE)))
     parser.add_argument("--move-speed", type=float,
-                        default=float(os.environ.get("PYNQ_MOVE_SPEED", MOVE_SPEED)))
+                        default=(float(os.environ["PYNQ_MOVE_SPEED"]) if "PYNQ_MOVE_SPEED" in os.environ else None))
     parser.add_argument("--turn-step", type=int,
-                        default=int(os.environ.get("PYNQ_TURN_STEP", TURN_STEP)))
+                        default=(int(os.environ["PYNQ_TURN_STEP"]) if "PYNQ_TURN_STEP" in os.environ else None))
     parser.add_argument("--auto-runner-speed", type=float,
-                        default=float(os.environ.get("PYNQ_AUTO_RUNNER_SPEED", AUTO_RUNNER_SPEED)))
+                        default=(float(os.environ["PYNQ_AUTO_RUNNER_SPEED"]) if "PYNQ_AUTO_RUNNER_SPEED" in os.environ else None))
     parser.add_argument("--auto-tagger-speed", type=float,
-                        default=float(os.environ.get("PYNQ_AUTO_TAGGER_SPEED", AUTO_TAGGER_SPEED)))
+                        default=(float(os.environ["PYNQ_AUTO_TAGGER_SPEED"]) if "PYNQ_AUTO_TAGGER_SPEED" in os.environ else None))
     parser.add_argument("--auto-fallback-speed", type=float,
-                        default=float(os.environ.get("PYNQ_AUTO_FALLBACK_SPEED", AUTO_FALLBACK_SPEED)))
+                        default=(float(os.environ["PYNQ_AUTO_FALLBACK_SPEED"]) if "PYNQ_AUTO_FALLBACK_SPEED" in os.environ else None))
+    parser.add_argument("--auto-shoot-period", type=int,
+                        default=(int(os.environ["PYNQ_AUTO_SHOOT_PERIOD"]) if "PYNQ_AUTO_SHOOT_PERIOD" in os.environ else None))
     args = parser.parse_args()
+    tick_rate = max(1, int(args.tick_rate))
+    tick_interval = 1.0 / tick_rate
+    effective_move_speed = (
+        float(args.move_speed)
+        if args.move_speed is not None
+        else _scaled_linear_for_tick_rate(MOVE_SPEED, tick_rate)
+    )
+    effective_turn_step = (
+        int(args.turn_step)
+        if args.turn_step is not None
+        else _scaled_turn_step_for_tick_rate(TURN_STEP, tick_rate)
+    )
+    effective_auto_runner_speed = (
+        float(args.auto_runner_speed)
+        if args.auto_runner_speed is not None
+        else _scaled_linear_for_tick_rate(AUTO_RUNNER_SPEED, tick_rate)
+    )
+    effective_auto_tagger_speed = (
+        float(args.auto_tagger_speed)
+        if args.auto_tagger_speed is not None
+        else _scaled_linear_for_tick_rate(AUTO_TAGGER_SPEED, tick_rate)
+    )
+    effective_auto_fallback_speed = (
+        float(args.auto_fallback_speed)
+        if args.auto_fallback_speed is not None
+        else _scaled_linear_for_tick_rate(AUTO_FALLBACK_SPEED, tick_rate)
+    )
+    effective_auto_shoot_period = (
+        int(args.auto_shoot_period)
+        if args.auto_shoot_period is not None
+        else _scaled_period_ticks_for_tick_rate(AUTO_TAGGER_SHOOT_PERIOD_TICKS, tick_rate)
+    )
 
     print(f"[NET] EC2 target {args.server}:{args.port}")
     print(
         f"[CFG] username={args.username or '<none>'} role={PREFERRED_ROLE} "
-        f"tick_rate={TICK_RATE} overlay={args.overlay} mode={args.mode}"
+        f"tick_rate={tick_rate} overlay={args.overlay} mode={args.mode}"
     )
     print(
-        f"[CFG] move_speed={args.move_speed:.3f} turn_step={args.turn_step} "
-        f"auto_runner_speed={args.auto_runner_speed:.3f} "
-        f"auto_tagger_speed={args.auto_tagger_speed:.3f} "
-        f"auto_fallback_speed={args.auto_fallback_speed:.3f}"
+        f"[CFG] move_speed={effective_move_speed:.3f} turn_step={effective_turn_step} "
+        f"auto_runner_speed={effective_auto_runner_speed:.3f} "
+        f"auto_tagger_speed={effective_auto_tagger_speed:.3f} "
+        f"auto_fallback_speed={effective_auto_fallback_speed:.3f} "
+        f"auto_shoot_period={effective_auto_shoot_period}"
     )
 
     USERNAME = args.username
@@ -762,14 +820,14 @@ def main():
         "bits_mask": 0xFFFF,
         "bits": [],
         "players": [],
-        "move_speed": float(args.move_speed),
-        "turn_step": int(args.turn_step),
-        "auto_runner_speed": float(args.auto_runner_speed),
-        "auto_tagger_speed": float(args.auto_tagger_speed),
-        "auto_fallback_speed": float(args.auto_fallback_speed),
+        "move_speed": effective_move_speed,
+        "turn_step": effective_turn_step,
+        "auto_runner_speed": effective_auto_runner_speed,
+        "auto_tagger_speed": effective_auto_tagger_speed,
+        "auto_fallback_speed": effective_auto_fallback_speed,
         "auto_tagger_shoot_range": AUTO_TAGGER_SHOOT_RANGE,
         "auto_tagger_shoot_arc": AUTO_TAGGER_SHOOT_ARC,
-        "auto_tagger_shoot_period_ticks": AUTO_TAGGER_SHOOT_PERIOD_TICKS,
+        "auto_tagger_shoot_period_ticks": effective_auto_shoot_period,
         "server_pose_snap_distance": SERVER_POSE_SNAP_DISTANCE,
         "server_pose_snap_angle": SERVER_POSE_SNAP_ANGLE,
         "force_server_pose_sync": True,
@@ -808,7 +866,7 @@ def main():
                 state["tick"] += 1
 
             elapsed = time.monotonic() - tick_start
-            sleep_time = TICK_INTERVAL - elapsed
+            sleep_time = tick_interval - elapsed
             if sleep_time > 0:
                 time.sleep(sleep_time)
 

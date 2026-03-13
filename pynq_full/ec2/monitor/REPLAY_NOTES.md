@@ -5,8 +5,8 @@
 The first replay implementation worked, but it was unreliable in practice for three specific reasons:
 
 1. The replay buttons were being rebuilt on every WebSocket push.
-   - The monitor updates at 20 Hz.
-   - That meant the replay button DOM was being destroyed and recreated 20 times per second.
+   - The monitor updates at 60 Hz.
+   - That meant the replay button DOM was being destroyed and recreated 60 times per second.
    - Result: clicks could feel hit-or-miss because the element under the cursor could change mid-click.
 
 2. Replay loading was blocking the monitor server event loop.
@@ -81,7 +81,7 @@ The replay path now works like this:
 3. The replay is stored in S3 as compressed NDJSON
 4. DynamoDB `META` stores the replay key and frame counts
 5. The monitor fetches the replay from S3 by `match_id`
-6. The browser plays back `state_snapshot` frames at 20 Hz
+6. The browser plays back `state_snapshot` frames at the current monitor replay cadence
 
 ## Remaining Nice-to-Haves
 

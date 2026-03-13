@@ -76,6 +76,8 @@ function setReplayStatus(text) {
   document.getElementById('replay-status').textContent = text;
 }
 
+const REPLAY_FPS = 60;
+
 function snapshotSlotModes(state = latestState) {
   const slotModes = state?.slot_modes || { 1: 'manual', 2: 'manual' };
   return {
@@ -162,7 +164,7 @@ function startReplayPlayback(matchId, events) {
     }
     const frame = replayState.frames[replayState.frameIndex];
     updatePlayers(frame.players);
-  }, 1000 / 20);
+  }, 1000 / REPLAY_FPS);
 }
 
 async function loadReplay(matchId) {
