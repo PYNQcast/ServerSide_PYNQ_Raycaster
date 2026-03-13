@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import errno
 import heapq
 import math
 import os
@@ -38,10 +39,13 @@ PREFERRED_ROLE = protocol.ROLE_ANY
 BASE_TICK_RATE = 20
 TICK_RATE = 50
 TICK_INTERVAL = 1.0 / TICK_RATE
+STATE_SEND_RATE = 20
+STATE_SEND_INTERVAL = 1.0 / STATE_SEND_RATE
 REGISTER_RETRY_S = 2.0
 SERVER_SILENCE_S = 5.0
 STATE_LOG_PERIOD_S = 1.0
 SOCKET_RECV_SIZE = 4096
+SOCKET_SEND_BUFFER = 262144
 
 
 # --- Hardware configuration ---
@@ -365,6 +369,32 @@ def _write_sprite_state_to_bram(bram, state: dict) -> None:
 # Hold local movement briefly while registration or map sync is settling.
 def _input_is_temporarily_suspended(state: dict) -> bool:
     return time.monotonic() < float(state.get("input_suspended_until", 0.0) or 0.0)
+
+
+# Send one UDP packet without letting temporary network backpressure kill the board loop.
+def _try_send_packet(sock: socket.socket, packet: bytes, server_address, state: dict, label: str) -> bool:
+    try:
+        sock.sendto(packet, server_address)
+        return True
+    except BlockingIOError:
+        err_no = errno.EAGAIN
+        err_text = "send buffer busy"
+    except OSError as exc:
+        if exc.errno not in {errno.EAGAIN, errno.EWOULDBLOCK, errno.ENOBUFS}:
+            raise
+        err_no = int(exc.errno or 0)
+        err_text = str(exc)
+
+    now = time.monotonic()
+    state["tx_drop_count"] = int(state.get("tx_drop_count", 0) or 0) + 1
+    last_log_at = float(state.get("last_tx_error_log_at", 0.0) or 0.0)
+    if now - last_log_at >= 1.0:
+        print(
+            f"[TX_DROP] {label} err={err_no} {err_text} "
+            f"drops={state['tx_drop_count']}"
+        )
+        state["last_tx_error_log_at"] = now
+    return False
 
 
 # Check whether a world-space point and collision radius are clear of walls.
@@ -744,13 +774,15 @@ def _send_register(sock: socket.socket, server_address, state: dict):
         username=USERNAME,
         movement_mode=protocol.MOVEMENT_MODE_POSE,
     )
-    sock.sendto(pkt, server_address)
+    if not _try_send_packet(sock, pkt, server_address, state, "register"):
+        return False
     print(
         f"[TX] REGISTER seq={state['seq']} pose=({state['x']:.2f}, {state['y']:.2f}, {state['angle']:.2f}) "
         f"username={USERNAME or '<none>'}"
     )
     state["seq"] = (state["seq"] + 1) & 0xFFFF
     state["last_register_tx_at"] = time.monotonic()
+    return True
 
 
 # Send either a live state update or a heartbeat when the match has ended.
@@ -765,8 +797,11 @@ def _send_state(sock: socket.socket, server_address, state: dict):
         flags=state.get("input_flags", 0),
         movement_mode=protocol.MOVEMENT_MODE_POSE,
     )
-    sock.sendto(pkt, server_address)
+    if not _try_send_packet(sock, pkt, server_address, state, "state"):
+        return False
     state["seq"] = (state["seq"] + 1) & 0xFFFF
+    state["last_state_tx_at"] = time.monotonic()
+    return True
 
 
 # Snap the local authoritative pose from the latest server player snapshot.
@@ -962,6 +997,8 @@ def main():
                         default=os.environ.get("PYNQ_MODE", MODE))
     parser.add_argument("--tick-rate", type=int,
                         default=int(os.environ.get("PYNQ_TICK_RATE", TICK_RATE)))
+    parser.add_argument("--send-rate", type=int,
+                        default=int(os.environ.get("PYNQ_SEND_RATE", STATE_SEND_RATE)))
     parser.add_argument("--move-speed", type=float,
                         default=(float(os.environ["PYNQ_MOVE_SPEED"]) if "PYNQ_MOVE_SPEED" in os.environ else None))
     parser.add_argument("--turn-step", type=int,
@@ -977,6 +1014,8 @@ def main():
     args = parser.parse_args()
     tick_rate = max(1, int(args.tick_rate))
     tick_interval = 1.0 / tick_rate
+    state_send_rate = max(1, int(args.send_rate))
+    state_send_interval = 1.0 / state_send_rate
     effective_move_speed = (
         float(args.move_speed)
         if args.move_speed is not None
@@ -1011,7 +1050,7 @@ def main():
     print(f"[NET] EC2 target {args.server}:{args.port}")
     print(
         f"[CFG] username={args.username or '<none>'} role={PREFERRED_ROLE} "
-        f"tick_rate={tick_rate} overlay={args.overlay} mode={args.mode}"
+        f"tick_rate={tick_rate} send_rate={state_send_rate} overlay={args.overlay} mode={args.mode}"
     )
     print(
         f"[CFG] move_speed={effective_move_speed:.3f} turn_step={effective_turn_step} "
@@ -1027,6 +1066,7 @@ def main():
     _ = overlay
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SOCKET_SEND_BUFFER)
     sock.setblocking(False)
     server_address = (args.server, args.port)
 
@@ -1044,6 +1084,7 @@ def main():
         "match_ended": False,
         "last_rx_at": None,
         "last_register_tx_at": 0.0,
+        "last_state_tx_at": 0.0,
         "last_state_log_at": 0.0,
         "map_w": 32,
         "map_h": 32,
@@ -1073,6 +1114,8 @@ def main():
         "last_bits_timestamp": None,
         "last_node_mode_timestamp": None,
         "last_game_state_seq": None,
+        "tx_drop_count": 0,
+        "last_tx_error_log_at": 0.0,
     }
     _apply_fallback_lobby_map(state, bram)
 
@@ -1107,8 +1150,9 @@ def main():
                 if now - state["last_register_tx_at"] >= REGISTER_RETRY_S:
                     _send_register(sock, server_address, state)
             else:
-                _send_state(sock, server_address, state)
                 state["tick"] += 1
+                if now - float(state.get("last_state_tx_at", 0.0) or 0.0) >= state_send_interval:
+                    _send_state(sock, server_address, state)
 
             elapsed = time.monotonic() - tick_start
             sleep_time = tick_interval - elapsed
