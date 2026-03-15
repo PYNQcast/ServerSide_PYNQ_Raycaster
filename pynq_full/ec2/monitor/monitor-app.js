@@ -205,6 +205,21 @@ function extractReplayStartEvent(events) {
   return (events || []).find((event) => event?.event === 'match_start') || null;
 }
 
+// Poll latestState until at least 2 human board slots are queued (lobby), or timeout.
+// Returns true if boards are ready, false if timed out.
+async function waitForBoardsQueued(timeoutMs = 2500) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    const players = normalisePlayers(latestState?.players || []);
+    const queued = players.filter((p) => p.queued && p.boardSlot !== null);
+    if (queued.length >= 2) return true;
+    setReplayStatus(`waiting for boards... (${queued.length}/2 ready)`);
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+  }
+  // Timed out — proceed anyway (e.g. only 1 board connected)
+  return false;
+}
+
 async function autoPlayReplay(matchId) {
   if (replayLoading) {
     return;
@@ -252,7 +267,10 @@ async function autoPlayReplay(matchId) {
     if (!await sendControl('node2_auto', 'board 2 auto', { forceHttp: true, preserveAutoPlaySession: true })) {
       throw new Error('failed to switch board 2 to auto');
     }
-    await new Promise((resolve) => window.setTimeout(resolve, 250));
+    // Wait until both board slots appear as queued in latestState before starting.
+    // set_map returned everyone to lobby — we need confirmation they've re-registered
+    // before firing start_match, otherwise start_match finds no queued players.
+    await waitForBoardsQueued(2500);
     if (!await sendControl('start_match', 'start match', { forceHttp: true })) {
       throw new Error('failed to start match');
     }
