@@ -141,6 +141,10 @@ function stopReplay(statusText = 'replay stopped') {
       updateNodeLinks(latestState);
     }
   }
+  // If an autoplay session is active (boards may be in auto), restore board modes now.
+  if (autoPlaySession.active) {
+    void restoreAutoPlaySessionModes('replay stopped — restoring board modes');
+  }
 }
 
 function startReplayPlayback(matchId, events) {
