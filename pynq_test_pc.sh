@@ -18,7 +18,13 @@
 # Extra args after the script name are forwarded verbatim to test_package_v3.py.
 # Requires: tmux, python3
 
-SESSION="pynq_pc"
+BASE_SESSION="pynq_pc"
+SESSION="$BASE_SESSION"
+n=2
+while tmux has-session -t "$SESSION" 2>/dev/null; do
+  SESSION="${BASE_SESSION}_${n}"
+  n=$(( n + 1 ))
+done
 REPO="$(cd "$(dirname "$0")" && pwd)"
 SCRIPT="$REPO/jupyter_side/test_package_v3.py"
 PROTO_SRC="$REPO/pynq_full/interfacing/protocol.py"
