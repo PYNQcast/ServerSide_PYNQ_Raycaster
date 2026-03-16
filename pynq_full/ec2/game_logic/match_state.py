@@ -23,6 +23,7 @@ class MatchState:
     def reset_all(self):
         self.spawn_positions = list(SPAWN_POSITIONS)
         self.slot_modes = {1: "manual", 2: "manual"}
+        self.reconnect_blocked_until = {}
         self.clear_match(arm_lockout=False)
 
     def reset_slot_modes(self):
@@ -118,6 +119,22 @@ class MatchState:
 
     def clear_lockout(self):
         self.lockout_until = None
+
+    def block_reconnect(self, addr, duration_s: float):
+        if duration_s <= 0:
+            self.reconnect_blocked_until.pop(addr, None)
+            return
+        self.reconnect_blocked_until[addr] = time.monotonic() + duration_s
+
+    def reconnect_block_remaining(self, addr) -> float:
+        deadline = self.reconnect_blocked_until.get(addr)
+        if deadline is None:
+            return 0.0
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            self.reconnect_blocked_until.pop(addr, None)
+            return 0.0
+        return remaining
 
     # True while match_tick is below GRACE_TICKS — proximity check is skipped
     def in_grace_period(self) -> bool:

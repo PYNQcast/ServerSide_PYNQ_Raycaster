@@ -397,8 +397,11 @@ def handle_control_command(cmd: str):
             if board_slot not in (1, 2):
                 _service_message = f"invalid board slot: {board_slot}"
             else:
+                # If a sim_full node is still subscribed on this slot, tell it to stop
+                # rejoining before we evict the queued/live slot from the PYNQ server.
+                r.publish("game:control", json.dumps({"cmd": "disconnect", "node_index": board_slot - 1}))
                 r.publish("game:control", json.dumps({"cmd": "kick_board", "board_slot": board_slot}))
-                _service_message = f"kick sent for board {board_slot}"
+                _service_message = f"disconnect + kick sent for board {board_slot}"
     elif cmd == "restart_stack":
         _stop_service("sidecar")
         _stop_service("server")
@@ -905,6 +908,15 @@ async def player_handler(request):
     return web.json_response(payload)
 
 
+async def state_handler(request):
+    try:
+        payload = await asyncio.to_thread(refresh_state_cache)
+    except Exception as e:
+        print(f"[monitor] state fetch error: {e}")
+        raise web.HTTPInternalServerError(text="failed to load live state")
+    return web.json_response(payload)
+
+
 async def control_handler(request):
     try:
         data = await request.json()
@@ -1017,6 +1029,7 @@ async def main():
         app.router.add_get(f"/{logo_asset_name}", asset_handler)
     app.router.add_get("/ws", ws_handler)
     app.router.add_get("/api/replay/{match_id}", replay_handler)
+    app.router.add_get("/api/state", state_handler)
     app.router.add_get("/api/players", players_handler)
     app.router.add_get("/api/players/{player_key}", player_handler)
     app.router.add_post("/api/control", control_handler)

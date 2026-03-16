@@ -978,6 +978,78 @@ def test_pynq_packet_handler_return_to_lobby_sends_empty_bits_init_to_clear_clie
         assert all(protocol.unpack_bits_init_packet(packet) == [] for packet in bits_packets)
 
 
+def test_pynq_packet_handler_kicked_board_is_temporarily_blocked_from_rejoining():
+    with pynq_import_context():
+        import asyncio
+
+        protocol = importlib.import_module("protocol")
+        packet_handler_mod = importlib.import_module("t2_packet_handler")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+
+        class DummyTransport:
+            def __init__(self):
+                self.sent = []
+
+            def sendto(self, data, addr):
+                self.sent.append((data, addr))
+
+        class DummyQueue:
+            def __init__(self):
+                self.items = []
+
+            def put(self, item):
+                self.items.append(item)
+
+        state = match_state_mod.MatchState()
+        transport = DummyTransport()
+        write_queue = DummyQueue()
+        handler = packet_handler_mod.PacketHandler(
+            state=state,
+            packet_queue=asyncio.Queue(),
+            write_queue=write_queue,
+            udp_transport=transport,
+            map_state={
+                "name": "lobby",
+                "width": 32,
+                "height": 32,
+                "tile_scale": 8,
+                "tiles": bytearray(32 * 32),
+                "bits": [],
+                "spawn_positions": [(0.0, 0.0), (8.0, 0.0)],
+            },
+            on_match_start=lambda: None,
+            on_match_abort=lambda event=None: None,
+            on_match_pause=lambda event=None: None,
+            on_match_resume=lambda event=None: None,
+            on_event=lambda event=None: None,
+        )
+
+        addr = ("192.168.2.10", 40000)
+        packet = protocol.pack_register_packet(
+            seq=1,
+            x=0.0,
+            y=0.0,
+            angle=0.0,
+            preferred_role=protocol.ROLE_ANY,
+            username="solo",
+            movement_mode=protocol.MOVEMENT_MODE_POSE,
+        )
+
+        handler._process_packet({"data": packet, "addr": addr})
+        sent_before_kick = len(transport.sent)
+
+        kicked, _ = handler.evict_board_slot(1)
+
+        assert kicked is True
+        assert addr not in state.players
+        assert state.reconnect_block_remaining(addr) > 0
+
+        handler._process_packet({"data": packet, "addr": addr})
+
+        assert addr not in state.players
+        assert len(transport.sent) == sent_before_kick
+
+
 def test_pynq_game_tick_set_map_returns_players_to_lobby_on_new_map():
     with pynq_import_context():
         import asyncio
