@@ -34,7 +34,7 @@ from pynq_full.ec2.replay_store import ReplayNotFoundError, load_replay_payload
 REDIS_HOST   = "127.0.0.1"
 REDIS_PORT   = 6379
 HTTP_PORT    = 8080
-PUSH_RATE_HZ = 20   # push to browser at 20 Hz for a calmer live UI
+PUSH_RATE_HZ = 30   # push to browser at 30 Hz for a smoother minimap without overwhelming Redis/websocket load
 DDB_POLL_INTERVAL_S = 2.0
 SERVICE_POLL_INTERVAL_S = 1.0
 REDIS_STATS_POLL_INTERVAL_S = 1.0
