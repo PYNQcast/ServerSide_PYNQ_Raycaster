@@ -28,6 +28,7 @@ TAG_FLASH_S      = 0.3
 MATCH_END_HOLD_S = 0.5
 LOCKOUT_S        = 0.5    # reject re-registration for this long after match end
 NODE_TIMEOUT_S   = 60.0   # pause the match after this long with no packets from a human node
+LOBBY_TIMEOUT_S  = 10.0   # evict lobby/queued players faster — no match to pause yet
 PAUSE_ABORT_S    = 60.0   # abort only if a paused match stays disconnected this much longer
 
 # ── Grace period after tag reset ─────────────────────────────────────────────

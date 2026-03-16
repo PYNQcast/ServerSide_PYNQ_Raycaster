@@ -27,6 +27,7 @@ from protocol import (
 from t2_constants import (
     MATCH_PLAYERS,
     NODE_TIMEOUT_S,
+    LOBBY_TIMEOUT_S,
     PAUSE_ABORT_S,
     MAX_GHOSTS,
     PLAYER_COLLISION_RADIUS,
@@ -208,7 +209,41 @@ class PacketHandler:
         if self.state.match_started:
             print(f"[T2] rejected {addr} — match already started")
             return
-        # Count only human players (not ghost sentinels) for the cap check
+
+        # ── Dedup: evict stale entry from the same physical board ─────────────
+        # A reconnecting board arrives from a new (ip, port) but keeps the same
+        # IP → same controller_key.  If username is set, profile_key (derived
+        # from username) survives IP changes across WiFi networks.
+        identity = build_player_identity(username, addr)
+        new_ck = identity.get("controller_key", "")
+        new_pk = identity.get("profile_key", "")
+
+        stale_addrs = []
+        for existing_addr, existing_p in list(self.state.players.items()):
+            if str(existing_addr).startswith("ghost:"):
+                continue
+            if existing_addr == addr:
+                continue
+            ex_ck = existing_p.get("controller_key", "")
+            ex_pk = existing_p.get("profile_key", "")
+            # Same IP → same controller_key: definitive match.
+            # Same username-derived profile_key: match when both sides are username-sourced.
+            if new_ck and ex_ck == new_ck:
+                stale_addrs.append(existing_addr)
+            elif (new_pk and ex_pk == new_pk
+                  and identity.get("identity_source") == "username"
+                  and existing_p.get("identity_source") == "username"):
+                stale_addrs.append(existing_addr)
+
+        for stale_addr in stale_addrs:
+            stale_p = self.state.players.pop(stale_addr)
+            self.state.pending_roles.pop(stale_addr, None)
+            self.write_queue.put({"op": "del", "key": f"player:{stale_p['player_id']}"})
+            print(f"[T2] evicted stale {stale_addr} "
+                  f"(player_id={stale_p['player_id']}, board_slot={stale_p.get('board_slot')}) "
+                  f"— same board reconnected at {addr}")
+
+        # ── Cap check (after dedup so freed slot counts as available) ─────────
         human_count = sum(1 for a in self.state.players if not str(a).startswith("ghost:"))
         if human_count >= MATCH_PLAYERS:
             print(f"[T2] rejected {addr} — already at {MATCH_PLAYERS} human players")
@@ -221,8 +256,6 @@ class PacketHandler:
 
         self.state.clear_lockout()
         self.state.pending_roles[addr] = preferred_role
-
-        identity = build_player_identity(username, addr)
 
         # Placeholder player_id=0 until role assignment resolves both players
         self.state.players[addr] = {
@@ -539,9 +572,11 @@ class PacketHandler:
         for addr, p in list(self.state.players.items()):
             if str(addr).startswith("ghost:"):
                 continue
-            if now - p["last_seen"] <= NODE_TIMEOUT_S:
+            in_lobby = not self.state.match_started or self.state.match_ended
+            timeout = LOBBY_TIMEOUT_S if in_lobby else NODE_TIMEOUT_S
+            if now - p["last_seen"] <= timeout:
                 continue
-            if not self.state.match_started or self.state.match_ended:
+            if in_lobby:
                 lobby_evicted.append(addr)
                 continue
             if p.get("timed_out"):
@@ -553,7 +588,7 @@ class PacketHandler:
         for addr in lobby_evicted:
             p = self.state.players.pop(addr)
             print(f"[T2] evicted queued player {p['player_id']} from {addr} "
-                  f"— no packets for {NODE_TIMEOUT_S}s")
+                  f"— no packets for {LOBBY_TIMEOUT_S:.0f}s")
             self.write_queue.put({"op": "del", "key": f"player:{p['player_id']}"})
 
         if newly_timed_out:
