@@ -223,13 +223,27 @@ function setMapFilterText(value) {
 
 function updateCanvasLabel() {
   const el = document.getElementById('canvas-label');
+  const replayMapName = replayState?.mapName || _activeMapName;
+  const replayFrame = replayState?.active && replayState.frames.length
+    ? replayState.frames[Math.min(replayState.frameIndex, replayState.frames.length - 1)]
+    : null;
   if (mapData) {
-    const totalBits = latestState?.bits?.length || 0;
-    const remainingBits = countActiveBits(latestState?.bits_mask ?? 0, totalBits);
+    const totalBits = replayFrame ? (replayFrame.bits?.length || 0) : (latestState?.bits?.length || 0);
+    const remainingBits = replayFrame
+      ? countActiveBits(replayFrame.bits_mask ?? 0, totalBits)
+      : countActiveBits(latestState?.bits_mask ?? 0, totalBits);
     const bitText = totalBits ? ` · bits ${remainingBits}/${totalBits}` : '';
-    el.textContent = `fpga live · ${_activeMapName} · ${mapData.width}×${mapData.height} tiles${bitText}`;
+    if (replayState?.active) {
+      el.textContent = `monitor replay · ${replayMapName} · ${mapData.width}×${mapData.height} tiles${bitText}`;
+    } else {
+      el.textContent = `fpga live · ${_activeMapName} · ${mapData.width}×${mapData.height} tiles${bitText}`;
+    }
   } else {
-    el.textContent = `fpga live · ${_activeMapName} · loading map…`;
+    if (replayState?.active) {
+      el.textContent = `monitor replay · ${replayMapName} · loading map…`;
+    } else {
+      el.textContent = `fpga live · ${_activeMapName} · loading map…`;
+    }
   }
 }
 
@@ -460,7 +474,7 @@ function updateMapSelector(activeMap, selectedMap = activeMap) {
     }
   }
   renderMapButtons();
-  if (!mapData || mapData.name !== _activeMapName || activeChanged) {
+  if (!replayState.active && (!mapData || mapData.name !== _activeMapName || activeChanged)) {
     loadMap(_activeMapName);
   }
 }
@@ -518,6 +532,7 @@ let replayState = {
   frameIndex: 0,
   timer: null,
   matchId: null,
+  mapName: null,
 };
 
 function resetTransientArenaState() {
