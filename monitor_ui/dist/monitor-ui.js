@@ -134,16 +134,16 @@ Error generating stack: `+n.message+`
         <div class="game-sidebar">
           <div class="panel-raised frame-panel sidebar-profiler-panel">
             <div class="panel-head">
-              <h2>WS Push Interval</h2>
-              <span class="micro-chip" id="latency-chart-current">\u2014 ms</span>
+              <h2>Board Tick Rate</h2>
+              <span class="micro-chip" id="board-hz-current">\u2014 Hz</span>
             </div>
             <canvas id="latency-chart" width="260" height="120" style="width:100%;display:block;"></canvas>
             <div class="bar-time-axis">
-              <span>120 msgs ago</span>
-              <span id="latency-chart-avg">avg \u2014 ms</span>
-              <span>now</span>
+              <span>oldest</span>
+              <span id="latency-chart-avg">avg \u2014 Hz</span>
+              <span>newest</span>
             </div>
-            <div class="metric-note profiler-note">Time between consecutive WS messages arriving (target 33ms at 30 Hz). Green &lt;40 ms \xB7 yellow &lt;80 ms \xB7 red \u226580 ms. Clock-skew-free.</div>
+            <div class="metric-note profiler-note">PYNQ board achieved tick rate from PKT_PERF (target 60 Hz, reported every ~2 s). Green \u226558 Hz \xB7 yellow \u226550 Hz \xB7 red &lt;50 Hz. Shows \u2014 when no board connected.</div>
           </div>
 
           <div class="panel-raised player-panel">

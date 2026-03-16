@@ -705,6 +705,7 @@ def collect_state():
             "is_ghost":        False,
             "queued":          True,
             "queue_slot":      queue_slot,
+            "perf":            raw.get("perf") or "",
         })
 
     events_raw = redis_rows[10]

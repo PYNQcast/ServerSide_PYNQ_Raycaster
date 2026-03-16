@@ -122,6 +122,7 @@ class RedisIO:
                 "profile_key":     _redis_scalar(p.get("profile_key", "")),
                 "controller_key":  _redis_scalar(p.get("controller_key", "")),
                 "identity_source": _redis_scalar(p.get("identity_source", "")),
+                "perf":            p["perf"] if p.get("perf") else None,
             }
             for queue_slot, p in enumerate(
                 (
