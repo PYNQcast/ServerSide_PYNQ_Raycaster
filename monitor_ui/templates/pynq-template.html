@@ -202,13 +202,29 @@
               <span class="status-name">Monitor</span>
               <span id="svc-monitor" class="status-slot">—</span>
             </div>
-            <div class="panel-inset status-card">
-              <span class="status-name">P1 Node</span>
-              <span id="node1-link" class="status-slot">offline · fpga</span>
+            <div class="panel-inset status-card node-perf-card">
+              <div class="node-perf-head">
+                <span class="status-name">P1 Node</span>
+                <span id="node1-link" class="status-slot">offline · fpga</span>
+              </div>
+              <div class="node-perf-rows" id="node1-perf-rows">
+                <span class="node-perf-item" id="bs-p1-temp-inline"></span>
+                <span class="node-perf-item" id="bs-p1-hz-inline"></span>
+                <span class="node-perf-item" id="bs-p1-bram-inline"></span>
+                <span class="node-perf-item" id="bs-p1-overrun-inline"></span>
+              </div>
             </div>
-            <div class="panel-inset status-card">
-              <span class="status-name">P2 Node</span>
-              <span id="node2-link" class="status-slot">offline · fpga</span>
+            <div class="panel-inset status-card node-perf-card">
+              <div class="node-perf-head">
+                <span class="status-name">P2 Node</span>
+                <span id="node2-link" class="status-slot">offline · fpga</span>
+              </div>
+              <div class="node-perf-rows" id="node2-perf-rows">
+                <span class="node-perf-item" id="bs-p2-temp-inline"></span>
+                <span class="node-perf-item" id="bs-p2-hz-inline"></span>
+                <span class="node-perf-item" id="bs-p2-bram-inline"></span>
+                <span class="node-perf-item" id="bs-p2-overrun-inline"></span>
+              </div>
             </div>
             <div class="panel-inset status-card">
               <span class="status-name">Live View</span>
@@ -389,33 +405,6 @@
           <div class="metric-note">Recent monitor render times. Taller bars mean slower browser-side drawing.</div>
         </div>
 
-        <div class="panel-raised board-stats-panel">
-          <div class="panel-head">
-            <h2>PYNQ Board Stats</h2>
-            <span class="micro-chip">PKT_PERF · 2 s window</span>
-          </div>
-          <div class="board-stats-grid">
-            <div class="panel-inset board-stat-card" id="board-stat-p1">
-              <div class="board-stat-title">P1 Board</div>
-              <div class="board-stat-rows">
-                <div class="board-stat-row"><span>CPU temp</span><span id="bs-p1-temp">—</span></div>
-                <div class="board-stat-row"><span>Tick rate</span><span id="bs-p1-hz">—</span></div>
-                <div class="board-stat-row"><span>BRAM write</span><span id="bs-p1-bram">—</span></div>
-                <div class="board-stat-row"><span>Tick overrun</span><span id="bs-p1-overrun">—</span></div>
-              </div>
-            </div>
-            <div class="panel-inset board-stat-card" id="board-stat-p2">
-              <div class="board-stat-title">P2 Board</div>
-              <div class="board-stat-rows">
-                <div class="board-stat-row"><span>CPU temp</span><span id="bs-p2-temp">—</span></div>
-                <div class="board-stat-row"><span>Tick rate</span><span id="bs-p2-hz">—</span></div>
-                <div class="board-stat-row"><span>BRAM write</span><span id="bs-p2-bram">—</span></div>
-                <div class="board-stat-row"><span>Tick overrun</span><span id="bs-p2-overrun">—</span></div>
-              </div>
-            </div>
-          </div>
-          <div class="metric-note">Sent by the PYNQ board every ~2 s via PKT_PERF. Tick overrun: positive = board fell behind its 60 Hz target. No data = board not connected or running simulator.</div>
-        </div>
       </div>
     </section>
 
