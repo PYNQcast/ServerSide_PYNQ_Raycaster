@@ -794,17 +794,59 @@
   }
 
   .viewport-wrap {
+    position: relative;
     flex: 1;
     min-height: 0;
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 16px;
+    overflow: hidden;
     background: #050814;
     border: var(--px) solid #183356;
     box-shadow:
       inset var(--px) var(--px) 0 0 #02050b,
       inset calc(var(--px) * -1) calc(var(--px) * -1) 0 0 #335c93;
+  }
+
+  .arena-replay-overlay {
+    position: absolute;
+    top: 18px;
+    left: 50%;
+    z-index: 2;
+    transform: translateX(-50%);
+    pointer-events: none;
+    padding: 10px 16px;
+    font-family: 'Press Start 2P', cursive;
+    font-size: 11px;
+    line-height: 1.7;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    text-align: center;
+    color: #fff7d6;
+    background: rgba(151, 24, 28, 0.92);
+    border: var(--px) solid #ffd166;
+    box-shadow:
+      inset var(--px) var(--px) 0 0 #ff8a80,
+      inset calc(var(--px) * -1) calc(var(--px) * -1) 0 0 #5c0b12,
+      0 0 0 var(--px) rgba(0, 0, 0, 0.75);
+    text-shadow: 2px 2px 0 #4f0910;
+    animation: arena-replay-flash 0.85s steps(2) infinite;
+  }
+
+  @keyframes arena-replay-flash {
+    0% {
+      opacity: 1;
+      filter: saturate(1);
+    }
+    50% {
+      opacity: 0.5;
+      filter: saturate(1.25);
+    }
+    100% {
+      opacity: 1;
+      filter: saturate(1);
+    }
   }
 
   canvas {
@@ -1578,6 +1620,21 @@
     grid-template-columns: minmax(0, 1fr);
     gap: 10px;
     align-items: stretch;
+  }
+
+  .replay-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .replay-btn.secondary {
+    background: #1d3f67;
+    color: #dff6ff;
+    box-shadow:
+      inset -3px -3px 0 0 #122742,
+      inset 3px 3px 0 0 #4b8ec9,
+      4px 4px 0 0 #000;
   }
 
   .controls-actions {

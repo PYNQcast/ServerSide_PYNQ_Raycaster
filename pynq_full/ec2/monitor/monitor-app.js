@@ -38,12 +38,35 @@ function updatePlayers(players) {
 
 function updateNodeLinks(stateOrPlayers) {
   const state = Array.isArray(stateOrPlayers)
-    ? { players: stateOrPlayers, slot_modes: latestState?.slot_modes || { 1: 'manual', 2: 'manual' } }
-    : (stateOrPlayers || { players: [], slot_modes: { 1: 'manual', 2: 'manual' } });
+    ? {
+      players: stateOrPlayers,
+      slot_modes: latestState?.slot_modes || { 1: 'manual', 2: 'manual' },
+      board_replays: latestState?.board_replays || [],
+    }
+    : (stateOrPlayers || { players: [], slot_modes: { 1: 'manual', 2: 'manual' }, board_replays: [] });
   const normalised = normalisePlayers(state.players);
   const slotModes = state.slot_modes || { 1: 'manual', 2: 'manual' };
   [1, 2].forEach((nodeId) => {
     const el = document.getElementById(`node${nodeId}-link`);
+    const replay = Array.isArray(state.board_replays)
+      ? state.board_replays.find((entry) => Number(entry.board_slot) === nodeId)
+      : null;
+    if (replay && replay.status === 'playing') {
+      const progress = replay.frame_count ? `${replay.frame_index}/${replay.frame_count}` : 'streaming';
+      el.textContent = `replay · ${progress}`;
+      el.style.color = '#ffd166';
+      return;
+    }
+    if (replay && replay.status === 'loading') {
+      el.textContent = 'replay · loading';
+      el.style.color = '#ffd166';
+      return;
+    }
+    if (replay && replay.status === 'error') {
+      el.textContent = 'replay · error';
+      el.style.color = '#ff6666';
+      return;
+    }
     const activePlayer = normalised.find((player) => !player.queued && player.boardSlot === nodeId);
     const queuedPlayer = normalised.find((player) => player.queued && player.boardSlot === nodeId);
     const statusText = activePlayer ? 'connected' : queuedPlayer ? 'lobby' : 'offline';
@@ -76,6 +99,24 @@ function setReplayStatus(text) {
   document.getElementById('replay-status').textContent = text;
 }
 
+function setArenaReplayOverlay(active, matchId = null) {
+  const el = document.getElementById('arena-replay-overlay');
+  if (!el) return;
+  if (!active) {
+    el.hidden = true;
+    el.textContent = 'IN REPLAY MODE';
+    return;
+  }
+  const suffix = matchId ? ` · ${String(matchId).replace(/^match-/, '')}` : '';
+  el.textContent = `IN REPLAY MODE${suffix}`;
+  el.hidden = false;
+}
+
+function setBoardReplayStatus(text) {
+  const el = document.getElementById('board-replay-status');
+  if (el) el.textContent = text;
+}
+
 const REPLAY_FPS = 20;
 
 function stopReplay(statusText = 'replay stopped') {
@@ -88,6 +129,7 @@ function stopReplay(statusText = 'replay stopped') {
   replayState.frames = [];
   replayState.frameIndex = 0;
   replayState.matchId = null;
+  setArenaReplayOverlay(false);
   if (wasActive) {
     window.resetTransientArenaState?.();
     setReplayStatus(statusText);
@@ -111,6 +153,7 @@ function startReplayPlayback(matchId, events) {
   replayState.frames = frames;
   replayState.frameIndex = 0;
   replayState.matchId = matchId;
+  setArenaReplayOverlay(true, matchId);
   setReplayStatus(`playing ${matchId.replace(/^match-/, '')} from S3 (${frames.length} frames)`);
   updatePlayers(frames[0].players);
   updateBitsPanel({ bits: frames[0].bits || [], bits_mask: frames[0].bits_mask ?? 0xFFFF, game_mode: frames[0].game_mode ?? 0 });
@@ -147,6 +190,44 @@ async function loadReplay(matchId) {
   } finally {
     replayLoading = false;
   }
+}
+
+async function startBoardReplay(boardSlot, matchId) {
+  setBoardReplayStatus(`requesting ${matchId.replace(/^match-/, '')} on P${boardSlot}...`);
+  await sendControl('start_board_replay', `start board ${boardSlot} replay`, {
+    payload: { board_slot: boardSlot, match_id: matchId },
+    preserveReplay: true,
+  });
+}
+
+async function stopBoardReplayStream(boardSlot) {
+  setBoardReplayStatus(`stopping board replay on P${boardSlot}...`);
+  await sendControl('stop_board_replay', `stop board ${boardSlot} replay`, {
+    payload: { board_slot: boardSlot },
+    preserveReplay: true,
+  });
+}
+
+function updateBoardReplayStatus(state) {
+  const replays = Array.isArray(state?.board_replays) ? state.board_replays : [];
+  if (!replays.length) {
+    setBoardReplayStatus('no board replay active');
+    return;
+  }
+  const summary = replays.map((replay) => {
+    const slot = Number(replay.board_slot || 0);
+    const matchLabel = String(replay.match_id || '').replace(/^match-/, '') || 'unknown';
+    if (replay.status === 'playing') {
+      const progress = replay.frame_count ? ` ${replay.frame_index}/${replay.frame_count}` : '';
+      return `P${slot}: ${matchLabel}${progress}`;
+    }
+    if (replay.status === 'loading') {
+      return `P${slot}: loading ${matchLabel}`;
+    }
+    const tail = replay.message ? ` (${replay.message})` : '';
+    return `P${slot}: error${tail}`;
+  }).join(' · ');
+  setBoardReplayStatus(summary);
 }
 
 function updateRedis(redis) {
@@ -280,8 +361,16 @@ function updateMatches(matches) {
     replayEl.innerHTML = replayable.map(m => `
       <div class="replay-entry">
         <button class="replay-btn" onclick="loadReplay('${m.match_id}')">
-          replay ${m.match_id.replace(/^match-/, '')} (${m.replay_frames}f)
+          mini map ${m.match_id.replace(/^match-/, '')} (${m.replay_frames}f)
         </button>
+        <div class="replay-actions">
+          <button class="replay-btn secondary" onclick="startBoardReplay(1, '${m.match_id}')">
+            P1 screen
+          </button>
+          <button class="replay-btn secondary" onclick="startBoardReplay(2, '${m.match_id}')">
+            P2 screen
+          </button>
+        </div>
       </div>
     `).join('');
     lastReplayListSignature = replaySignature;
@@ -369,16 +458,17 @@ function scheduleMapRefresh(cmd) {
 }
 
 async function sendControl(cmd, label, options = {}) {
-  if (replayState.active) {
+  if (replayState.active && !options.preserveReplay) {
     stopReplay('replay stopped — returning to live control');
   }
   if (cmd === 'start_match' && !isValidMapName(latestState?.selected_map || _selectedMapName)) {
     setServiceNote('select a map before starting the match');
     return false;
   }
+  const payload = { ...(options.payload || {}), cmd };
   const forceHttp = Boolean(options.forceHttp) || String(cmd || '').startsWith('set_map:');
   if (!forceHttp && ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({cmd}));
+    ws.send(JSON.stringify(payload));
     setServiceNote(`${label} requested...`);
     scheduleMapRefresh(cmd);
     return true;
@@ -388,7 +478,7 @@ async function sendControl(cmd, label, options = {}) {
     const resp = await fetch('/api/control', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cmd }),
+      body: JSON.stringify(payload),
     });
     if (!resp.ok) {
       const text = await resp.text();
@@ -454,6 +544,7 @@ function connect() {
     updateRedis(state.redis);
     updateServices(state.services);
     updatePipeline(state.pipeline);
+    updateBoardReplayStatus(state);
     updateMatches(state.matches);
     updateMatchState(state.match);
     updateEvents(state.events);
@@ -532,6 +623,8 @@ if (stackedFrameChart) {
 }
 // Expose functions needed by inline onclick handlers in the template HTML.
 window.stopReplay = stopReplay;
+window.startBoardReplay = startBoardReplay;
+window.stopBoardReplayStream = stopBoardReplayStream;
 window.sendControl = sendControl;
 window.setServiceNote = setServiceNote;
 

@@ -7,13 +7,13 @@
 #   - Anticheat-aware: FLAG_TAGGED triggers a spawn snap; FLAG_MATCH_END halts
 #     movement and sends heartbeats until next match.
 #   - PKT_BITS_INIT handled: bit positions cached, bitmask updated each tick.
-#   - PKT_NODE_MODE honoured: server can switch manual ↔ auto at runtime.
+#   - PKT_NODE_MODE honoured: server can switch manual ↔ auto ↔ replay at runtime.
 #
 # Design principle: manual mode = 100% local authority.
 #                   auto mode   = local board steering with server resync on
 #                                 tagged/map-reset/large divergence.
-#                   replay      = monitor/browser only; recorded matches are
-#                                 not streamed back through this client.
+#                   replay      = authoritative server-driven playback; buttons
+#                                 are ignored and pose is streamed from UDP.
 #                   Both modes  = local collision + BRAM writes every tick.
 #
 # Hardware note (design_1_wrapper.bit / design_1.hwh):
@@ -471,11 +471,13 @@ def _send_register(sock, addr, state):
         state["last_reg_tx"] = time.monotonic()
 
 def _send_state(sock, addr, state):
-    ptype = protocol.PKT_HEARTBEAT if state["match_ended"] else protocol.PKT_STATE_UPDATE
+    in_replay = state.get("mode") == "replay"
+    ptype = protocol.PKT_HEARTBEAT if (state["match_ended"] or in_replay) else protocol.PKT_STATE_UPDATE
+    movement_mode = protocol.MOVEMENT_MODE_INTENT_ONLY if in_replay else protocol.MOVEMENT_MODE_POSE
     pkt = protocol.pack_node_packet(
         pkt_type=ptype, seq=state["seq"],
         x=state["x"], y=state["y"], angle=state["angle"],
-        flags=state["input_flags"], movement_mode=protocol.MOVEMENT_MODE_POSE,
+        flags=state["input_flags"], movement_mode=movement_mode,
     )
     if _send(sock, pkt, addr):
         state["seq"]           = (state["seq"] + 1) & 0xFFFF
@@ -581,7 +583,7 @@ def _handle(data, state, bram):
             return
         state["last_mode_ts"] = ts
         mode_byte = protocol.unpack_node_mode_packet(data)
-        new_mode  = "auto" if mode_byte == protocol.NODE_CONTROL_MODE_AUTO else "manual"
+        new_mode  = protocol.decode_node_control_mode(mode_byte)
         if new_mode != state["mode"]:
             print(f"[CTRL] mode {state['mode']} -> {new_mode} (server request)")
             state["mode"] = new_mode
@@ -687,7 +689,11 @@ def _update_local_pose_from_server(state, players):
         elif was_ended and not state["match_ended"]:
             print("[MATCH_RESET] movement re-enabled for new match")
 
-        should_snap = bool(player["flags"] & protocol.FLAG_TAGGED) or bool(state.get("force_server_pose_sync"))
+        should_snap = (
+            state.get("mode") == "replay"
+            or bool(player["flags"] & protocol.FLAG_TAGGED)
+            or bool(state.get("force_server_pose_sync"))
+        )
         if not should_snap and state["mode"] == "auto":
             distance_error = math.hypot(server_x - state["x"], server_y - state["y"])
             angle_error = abs(_wrap(server_angle - state["angle"]))
@@ -759,7 +765,7 @@ def main():
     parser.add_argument("--port",           type=int, default=SERVER_PORT)
     parser.add_argument("--overlay",        default=OVERLAY_PATH)
     parser.add_argument("--username",       default=os.environ.get("PYNQ_USERNAME", ""))
-    parser.add_argument("--mode",           choices=["manual","auto"],
+    parser.add_argument("--mode",           choices=["manual","auto","replay"],
                         default=os.environ.get("PYNQ_MODE", "manual"),
                         help="Initial mode; server can override via PKT_NODE_MODE")
     parser.add_argument("--role",           choices=["any","runner","tagger"], default="any")
@@ -864,6 +870,8 @@ def main():
 
             if state["match_ended"]:
                 # halted — just keep the BRAM current and send heartbeats
+                _write_pose(bram, state)
+            elif state["mode"] == "replay":
                 _write_pose(bram, state)
             elif state["mode"] == "auto":
                 _apply_auto_input(state)

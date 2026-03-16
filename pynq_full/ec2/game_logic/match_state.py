@@ -33,6 +33,7 @@ class MatchState:
         self.spawn_positions = list(SPAWN_POSITIONS)
         self.slot_modes = {1: "manual", 2: "manual"}
         self.reconnect_blocked_until = {}
+        self.board_replays = {}
         self.ghost_profiles = {
             slot: self.default_ghost_profile(slot)
             for slot in range(1, MAX_GHOSTS + 1)

@@ -26,11 +26,13 @@ def pynq_import_context():
             "test_package_v3",
             "test_package_v4",
             "t2_packet_handler",
+            "t2_game_tick",
             "match_state",
             "game_logic.match_state",
             "player_profiles",
             "t2_constants",
             "t2_map_loader",
+            "replay_store",
         }:
             sys.modules.pop(name, None)
     try:
@@ -44,11 +46,13 @@ def pynq_import_context():
                 "test_package_v3",
                 "test_package_v4",
                 "t2_packet_handler",
+                "t2_game_tick",
                 "match_state",
                 "game_logic.match_state",
                 "player_profiles",
                 "t2_constants",
                 "t2_map_loader",
+                "replay_store",
             }:
                 sys.modules.pop(name, None)
 
@@ -180,6 +184,74 @@ def test_test_package_v4_manual_turns_match_dashboard_left_right():
         right_state = dict(base_state)
         test_package._apply_manual_input(right_state, FakeButtons(test_package.BTN_RIGHT))
         assert right_state["angle_raw"] == 64
+
+
+def test_test_package_v4_replay_mode_snaps_to_server_pose_every_frame():
+    with pynq_import_context():
+        protocol = importlib.import_module("protocol")
+        test_package = importlib.import_module("test_package_v4")
+
+        state = {
+            "player_id": 1,
+            "mode": "replay",
+            "x": 10.0,
+            "y": 20.0,
+            "angle": 0.5,
+            "angle_raw": test_package._hw_angle(0.5),
+            "match_ended": False,
+            "force_server_pose_sync": False,
+            "server_pose_snap_distance": 99.0,
+            "server_pose_snap_angle": 99.0,
+        }
+
+        test_package._update_local_pose_from_server(state, [{
+            "player_id": 1,
+            "x": 10.2,
+            "y": 20.1,
+            "angle": 0.62,
+            "flags": protocol.FLAG_MATCH_END,
+        }])
+
+        assert state["x"] == 10.2
+        assert state["y"] == 20.1
+        assert state["angle"] == 0.62
+        assert state["angle_raw"] == test_package._hw_angle(0.62)
+        assert state["match_ended"] is True
+
+
+def test_test_package_v4_replay_mode_sends_heartbeat_with_intent_only():
+    with pynq_import_context():
+        protocol = importlib.import_module("protocol")
+        test_package = importlib.import_module("test_package_v4")
+
+        class CaptureSock:
+            def __init__(self):
+                self.sent = []
+
+            def sendto(self, packet, addr):
+                self.sent.append((packet, addr))
+
+        sock = CaptureSock()
+        state = {
+            "mode": "replay",
+            "match_ended": False,
+            "seq": 5,
+            "x": 4.0,
+            "y": 8.0,
+            "angle": 0.25,
+            "input_flags": 0,
+            "last_state_tx": 0.0,
+        }
+
+        test_package._send_state(sock, ("127.0.0.1", 9000), state)
+
+        assert len(sock.sent) == 1
+        packet, addr = sock.sent[0]
+        unpacked = protocol.unpack_node_packet(packet)
+        assert addr == ("127.0.0.1", 9000)
+        assert unpacked["pkt_type"] == protocol.PKT_HEARTBEAT
+        assert unpacked["movement_mode"] == protocol.MOVEMENT_MODE_INTENT_ONLY
+        assert state["seq"] == 6
 
 
 def test_test_package_v3_tick_rate_scaling_preserves_20hz_baseline():

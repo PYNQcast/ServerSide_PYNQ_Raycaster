@@ -29,6 +29,7 @@ from monitor_map_store import (
     load_map_entry,
     save_map_entry,
 )
+from replay_store import ReplayNotFoundError, load_replay_payload
 
 REDIS_HOST   = "127.0.0.1"
 REDIS_PORT   = 6379
@@ -410,6 +411,36 @@ def handle_control_command(payload_or_cmd):
                 "tag_radius": payload.get("tag_radius"),
             }))
             _service_message = f"ghost {slot} traits updated"
+    elif cmd == "start_board_replay":
+        try:
+            board_slot = int(payload.get("board_slot", 0) or 0)
+        except (TypeError, ValueError):
+            board_slot = 0
+        match_id = str(payload.get("match_id", "") or "").strip()
+        if board_slot not in (1, 2):
+            _service_message = f"invalid board slot: {board_slot}"
+        elif not match_id:
+            _service_message = "missing match_id for board replay"
+        else:
+            r.publish("game:control", json.dumps({
+                "cmd": "start_board_replay",
+                "board_slot": board_slot,
+                "match_id": match_id,
+            }))
+            _service_message = f"board {board_slot} replay requested for {match_id}"
+    elif cmd == "stop_board_replay":
+        try:
+            board_slot = int(payload.get("board_slot", 0) or 0)
+        except (TypeError, ValueError):
+            board_slot = 0
+        if board_slot not in (1, 2):
+            _service_message = f"invalid board slot: {board_slot}"
+        else:
+            r.publish("game:control", json.dumps({
+                "cmd": "stop_board_replay",
+                "board_slot": board_slot,
+            }))
+            _service_message = f"board {board_slot} replay stop requested"
     elif cmd.startswith("kick_board:"):
         try:
             board_slot = int(cmd.split(":", 1)[1])
@@ -623,6 +654,23 @@ def collect_state():
             ]
         except Exception:
             ghost_profiles = []
+    board_replays = []
+    if game_raw and game_raw.get("board_replays"):
+        try:
+            board_replays = [
+                {
+                    "board_slot": _as_int(raw.get("board_slot", index), index),
+                    "match_id": str(raw.get("match_id", "") or ""),
+                    "status": str(raw.get("status", "idle") or "idle"),
+                    "frame_index": _as_int(raw.get("frame_index", 0), 0),
+                    "frame_count": _as_int(raw.get("frame_count", 0), 0),
+                    "view_player_id": _as_int(raw.get("view_player_id", index), index),
+                    "message": str(raw.get("message", "") or ""),
+                }
+                for index, raw in enumerate(json.loads(game_raw["board_replays"]), start=1)
+            ]
+        except Exception:
+            board_replays = []
     queued_players = []
     if game_raw and game_raw.get("queued_players"):
         try:
@@ -728,6 +776,7 @@ def collect_state():
         "active_map": active_map,
         "selected_map": selected_map,
         "slot_modes": slot_modes,
+        "board_replays": board_replays,
         "ghost_profiles": ghost_profiles,
         "match": {
             "started": match_started,
@@ -761,43 +810,15 @@ async def state_cache_loop():
 
 
 def fetch_replay(match_id: str):
-    if match_id in _replay_cache:
-        return _replay_cache[match_id]
-
-    resp = dyndb.get_item(Key={"match_id": match_id, "record_type": "META"})
-    item = resp.get("Item")
-    if not item:
-        raise web.HTTPNotFound(text=f"unknown match_id: {match_id}")
-
-    bucket = item.get("replay_s3_bucket")
-    key = item.get("replay_s3_key")
-    if not bucket or not key:
-        raise web.HTTPNotFound(text=f"no replay stored for {match_id}")
-
-    obj = s3.get_object(Bucket=bucket, Key=key)
-    body = obj["Body"].read()
-    if key.endswith(".gz"):
-        body = gzip.decompress(body)
-
-    events = []
-    for line in body.decode("utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        events.append(json.loads(line))
-
-    payload = {
-        "match_id": match_id,
-        "bucket": bucket,
-        "key": key,
-        "events": events,
-    }
-    _replay_cache[match_id] = payload
-    if len(_replay_cache) > 8:
-        oldest = next(iter(_replay_cache))
-        if oldest != match_id:
-            _replay_cache.pop(oldest, None)
-    return payload
+    try:
+        return load_replay_payload(
+            match_id,
+            cache=_replay_cache,
+            dynamo_table=dyndb,
+            s3_client=s3,
+        )
+    except ReplayNotFoundError as exc:
+        raise web.HTTPNotFound(text=str(exc))
 
 
 def fetch_players():
@@ -861,7 +882,7 @@ async def ws_handler(request):
                     data = json.loads(msg.data)
                     cmd = data.get("cmd")
                     if cmd:
-                        result = await asyncio.to_thread(handle_control_command, cmd)
+                        result = await asyncio.to_thread(handle_control_command, data)
                         print(f"[monitor] command {cmd}: {result}")
             except asyncio.TimeoutError:
                 pass  # normal — no message from browser this tick
