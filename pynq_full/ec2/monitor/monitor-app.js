@@ -129,18 +129,29 @@ function stopReplay(statusText = 'replay stopped') {
   replayState.frames = [];
   replayState.frameIndex = 0;
   replayState.matchId = null;
+  replayState.mapName = null;
   setArenaReplayOverlay(false);
   if (wasActive) {
     window.resetTransientArenaState?.();
     setReplayStatus(statusText);
+    updateCanvasLabel?.();
+    if (_activeMapName) {
+      loadMap(_activeMapName, { force: true });
+    }
     if (latestState) {
       updatePlayers(latestState.players);
       updateNodeLinks(latestState);
+      updateBitsPanel(latestState);
     }
   }
 }
 
-function startReplayPlayback(matchId, events) {
+function replayMapNameFromEvents(events) {
+  const eventWithMap = (events || []).find((ev) => ev?.map);
+  return eventWithMap?.map || null;
+}
+
+function startReplayPlayback(matchId, events, mapName = null) {
   stopReplay();
   window.resetTransientArenaState?.();
   const frames = events.filter((ev) => ev.event === 'state_snapshot');
@@ -153,8 +164,10 @@ function startReplayPlayback(matchId, events) {
   replayState.frames = frames;
   replayState.frameIndex = 0;
   replayState.matchId = matchId;
+  replayState.mapName = mapName || replayMapNameFromEvents(events);
   setArenaReplayOverlay(true, matchId);
   setReplayStatus(`playing ${matchId.replace(/^match-/, '')} from S3 (${frames.length} frames)`);
+  updateCanvasLabel?.();
   updatePlayers(frames[0].players);
   updateBitsPanel({ bits: frames[0].bits || [], bits_mask: frames[0].bits_mask ?? 0xFFFF, game_mode: frames[0].game_mode ?? 0 });
 
@@ -165,6 +178,7 @@ function startReplayPlayback(matchId, events) {
       return;
     }
     const frame = replayState.frames[replayState.frameIndex];
+    updateCanvasLabel?.();
     updatePlayers(frame.players);
     // Keep the bits panel in sync with each replay frame so it shows correct collection state.
     updateBitsPanel({ bits: frame.bits || [], bits_mask: frame.bits_mask ?? 0xFFFF, game_mode: frame.game_mode ?? 0 });
@@ -184,7 +198,11 @@ async function loadReplay(matchId) {
       throw new Error(msg || `HTTP ${resp.status}`);
     }
     const payload = await resp.json();
-    startReplayPlayback(matchId, payload.events || []);
+    const replayMapName = replayMapNameFromEvents(payload.events || []);
+    if (replayMapName) {
+      await loadMap(replayMapName, { force: true });
+    }
+    startReplayPlayback(matchId, payload.events || [], replayMapName);
   } catch (err) {
     setReplayStatus(`replay load failed: ${err.message}`);
   } finally {
