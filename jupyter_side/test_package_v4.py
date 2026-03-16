@@ -470,6 +470,31 @@ def _send_register(sock, addr, state):
         state["seq"]        = (state["seq"] + 1) & 0xFFFF
         state["last_reg_tx"] = time.monotonic()
 
+def _read_cpu_temp():
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp") as f:
+            return int(f.read().strip()) // 1000
+    except Exception:
+        return 0
+
+
+def _send_perf(sock, addr, state):
+    pkt = protocol.pack_perf_packet(
+        seq=state["seq"],
+        tick_rate_hz=state["perf_tick_count"],
+        cpu_temp_c=_read_cpu_temp(),
+        bram_write_us=int(state["perf_bram_write_us"]),
+        worst_overrun_us=int(state["perf_worst_overrun_us"]),
+    )
+    if _send(sock, pkt, addr):
+        state["seq"] = (state["seq"] + 1) & 0xFFFF
+    # reset window counters
+    state["perf_tick_count"]       = 0
+    state["perf_worst_overrun_us"] = 0
+    state["perf_bram_write_us"]    = 0
+    state["last_perf_tx"]          = time.monotonic()
+
+
 def _send_state(sock, addr, state):
     in_replay = state.get("mode") == "replay"
     ptype = protocol.PKT_HEARTBEAT if (state["match_ended"] or in_replay) else protocol.PKT_STATE_UPDATE
@@ -842,6 +867,11 @@ def main():
         "last_game_state_seq": None,
         "tick":           0,
         "sprites_dirty":  True,  # flush once at startup, then on PKT_GAME_STATE / PKT_BITS_INIT
+        # perf telemetry window (reset after each PKT_PERF send)
+        "last_perf_tx":          0.0,
+        "perf_tick_count":       0,
+        "perf_worst_overrun_us": 0,
+        "perf_bram_write_us":    0,
     }
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -868,6 +898,7 @@ def main():
                 state["players"]       = []
                 state["sprites_dirty"] = True
 
+            bram_t0 = time.monotonic()
             if state["match_ended"]:
                 # halted — just keep the BRAM current and send heartbeats
                 _write_pose(bram, state)
@@ -886,6 +917,9 @@ def main():
             if state["sprites_dirty"]:
                 _write_sprites(bram, state)
                 state["sprites_dirty"] = False
+            state["perf_bram_write_us"] = int((time.monotonic() - bram_t0) * 1e6)
+
+            state["perf_tick_count"] += 1
 
             if not state["registered"]:
                 if now - state["last_reg_tx"] >= REGISTER_RETRY_S:
@@ -893,8 +927,13 @@ def main():
             else:
                 if now - state["last_state_tx"] >= send_interval:
                     _send_state(sock, addr, state)
+                if now - state["last_perf_tx"] >= 2.0:
+                    _send_perf(sock, addr, state)
 
             sleep = next_tick - time.monotonic()
+            overrun_us = int(-sleep * 1e6)  # positive = overran, negative = slack
+            if overrun_us > state["perf_worst_overrun_us"]:
+                state["perf_worst_overrun_us"] = overrun_us
             if sleep > 0:
                 time.sleep(sleep)
             elif sleep < -tick_interval:

@@ -26,6 +26,10 @@ PKT_BITS_INIT    = 0x0050   # server → node:  bit positions, sent once at matc
                              #   header (8 bytes) + count (1 byte) + N × BitEntry (6 bytes each)
                              #   node stores positions; server sends bitmask each tick to flag collection.
 PKT_NODE_MODE    = 0x0060   # server → node:  runtime control mode switch (manual/auto/replay)
+PKT_PERF         = 0x0070   # node  → server: board performance telemetry (sent ~every 2 s)
+                             #   header (8 bytes) + PerfPayload (8 bytes)
+                             #   fields: tick_rate_hz(B) cpu_temp_c(B) bram_write_us(H)
+                             #           worst_overrun_us(h — signed) pad(2x)
 
 # ── Flags bitmask (uint8 flags field) ─────────────────────────────────────────
 #
@@ -394,3 +398,45 @@ def unpack_server_packet(data):
     # Legacy / non-game-state packets — no extension
     players = unpack_player_entries(payload)
     return pkt_type, seq, timestamp, GAME_MODE_CHASE, players, 0xFFFF
+
+
+# ── PKT_PERF pack / unpack ─────────────────────────────────────────────────────
+# PerfPayload (8 bytes, follows the 8-byte header):
+#   B  tick_rate_hz      — achieved tick rate over the last reporting window
+#   B  cpu_temp_c        — CPU temperature in °C (0 if unavailable)
+#   H  bram_write_us     — last BRAM write duration in microseconds
+#   h  worst_overrun_us  — worst tick overrun (signed; negative = on time, positive = late)
+#   xx pad               — 2 reserved bytes, zero
+
+PERF_FMT  = '<BBHhxx'
+PERF_SIZE = struct.calcsize(PERF_FMT)
+assert PERF_SIZE == 8, f"PerfPayload must be 8 bytes, got {PERF_SIZE}"
+
+
+def pack_perf_packet(seq, *, tick_rate_hz, cpu_temp_c, bram_write_us, worst_overrun_us):
+    timestamp = int(time.time() * 1000) & 0xFFFFFFFF
+    header = struct.pack(HEADER_FMT, PKT_PERF, seq & 0xFFFF, timestamp)
+    payload = struct.pack(
+        PERF_FMT,
+        min(255, max(0, int(tick_rate_hz))),
+        min(255, max(0, int(cpu_temp_c))),
+        min(65535, max(0, int(bram_write_us))),
+        max(-32768, min(32767, int(worst_overrun_us))),
+    )
+    return header + payload
+
+
+def unpack_perf_packet(data):
+    if len(data) < HEADER_SIZE + PERF_SIZE:
+        raise ValueError(f"PKT_PERF too short: {len(data)} bytes")
+    pkt_type, seq, timestamp = struct.unpack_from(HEADER_FMT, data, 0)
+    tick_rate_hz, cpu_temp_c, bram_write_us, worst_overrun_us = struct.unpack_from(PERF_FMT, data, HEADER_SIZE)
+    return {
+        "pkt_type": pkt_type,
+        "seq": seq,
+        "timestamp": timestamp,
+        "tick_rate_hz": tick_rate_hz,
+        "cpu_temp_c": cpu_temp_c,
+        "bram_write_us": bram_write_us,
+        "worst_overrun_us": worst_overrun_us,
+    }

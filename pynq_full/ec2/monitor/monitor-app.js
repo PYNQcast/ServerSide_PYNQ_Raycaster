@@ -23,6 +23,11 @@ function updatePlayers(players) {
     const roleColour = isQueued ? '#7dc3ff' : (isGhost ? '#666' : (p.id === 1) ? '#888' : '#ffaa00');
     const statusText = isQueued ? 'CONNECTED' : (tagged ? '★ TAGGED' : (matchEnded ? 'MATCH END' : '—'));
     const idLabel = isQueued ? `Q${p.queueSlot ?? 0}` : `P${p.id}`;
+    const perf = p.perf;
+    const perfText = perf
+      ? `${perf.cpu_temp_c}°C ${perf.tick_rate_hz}Hz${perf.worst_overrun_us > 0 ? ` +${perf.worst_overrun_us}μs` : ''}`
+      : (p.boardSlot ? '—' : '');
+    const perfColour = perf && perf.worst_overrun_us > 500 ? '#ff6666' : perf && perf.cpu_temp_c > 70 ? '#ffaa00' : '#558899';
     tr.innerHTML = `
       <td class="pid" style="color:${colour}">${idLabel}</td>
       <td style="color:${roleColour};font-size:10px">${role}${roleDetail}</td>
@@ -31,6 +36,7 @@ function updatePlayers(players) {
       <td>${(p.angle * 180/Math.PI).toFixed(0)}°</td>
       <td>${!isQueued && p.entityKey === firstActiveKey ? dist : ''}</td>
       <td class="${tagged ? 'tagged' : ''}">${statusText}</td>
+      <td style="color:${perfColour};font-size:10px">${perfText}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -585,12 +591,18 @@ function connect() {
       const transitMs = Math.max(0, window._lastStateReceivedWallMs - Number(state.server_sent_at));
       const parseMs = Math.max(0, performance.now() - now);
       const intervalMs = wsLastMsgAt > 0 ? Math.min(now - wsLastMsgAt, 200) : 1000 / 30;
-      const idleMs = Math.max(0, intervalMs - transitMs - parseMs);
+      // FPGA slot: max BRAM write time across all connected boards (in ms), or 0 if none.
+      const normalisedNow = normalisePlayers(state.players || []);
+      const bramMs = normalisedNow.reduce((max, p) => {
+        const bram = p.perf?.bram_write_us;
+        return bram ? Math.max(max, bram / 1000) : max;
+      }, 0);
+      const idleMs = Math.max(0, intervalMs - transitMs - parseMs - bramMs);
       pushStackedFrame({
         total_ms: intervalMs,
         stages: {
           dispatch_ms: idleMs,       // time between messages (server cadence)
-          compute_ms: 0,             // reserved for future FPGA compute telemetry
+          compute_ms: bramMs,        // BRAM write time reported by PYNQ board
           network_ms: transitMs,     // server → browser WS transit
           composite_ms: parseMs,     // JS parse + DOM update
         },

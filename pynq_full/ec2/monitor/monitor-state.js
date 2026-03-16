@@ -33,8 +33,9 @@ let _activePage = 'game';
 let _archiveDrawerOpen = false;
 const frameTimeHistory = [];
 const STACKED_BUFFER_SIZE = 120;
-const STACKED_MAX_MS = 50;
+const STACKED_MAX_MS = 35;   // ~33ms at 30 Hz push rate — bars fill chart height
 const STACKED_CHART_HEIGHT = 160;
+let _lastStackedRender = 0;
 const stackedFrameBuffer = [];
 let stackedFrameId = 0;
 let lastRenderSampleAt = performance.now();
@@ -378,6 +379,13 @@ function pushStackedFrame(frame) {
   if (stackedFrameBuffer.length > STACKED_BUFFER_SIZE) {
     stackedFrameBuffer.shift();
   }
+  // Rendering is driven by the render loop — no DOM rebuild here.
+}
+
+function maybeRenderStackedFrameChart() {
+  const now = performance.now();
+  if (now - _lastStackedRender < 100) return;  // cap redraws at ~10 Hz
+  _lastStackedRender = now;
   renderStackedFrameChart();
 }
 
@@ -566,6 +574,7 @@ function normalisePlayers(players) {
     controllerKey: p.controller_key ?? p.controllerKey ?? '',
     boardSlot: p.board_slot ?? p.boardSlot ?? null,
     controlMode: p.control_mode ?? p.controlMode ?? 'manual',
+    perf: (() => { try { return p.perf ? (typeof p.perf === 'string' ? JSON.parse(p.perf) : p.perf) : null; } catch { return null; } })(),
   }));
 }
 

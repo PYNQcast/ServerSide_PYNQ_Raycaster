@@ -105,6 +105,7 @@ class RedisIO:
                     "speed":           _redis_scalar(round(float(p.get("speed")), 4) if p.get("speed") is not None else ""),
                     "tag_radius":      _redis_scalar(round(float(p.get("tag_radius")), 4) if p.get("tag_radius") is not None else ""),
                     "is_ghost":        int(bool(p["flags"] & FLAG_GHOST)),
+                    "perf":            json.dumps(p["perf"]) if p.get("perf") else "",
                 },
             })
         queued_players = [

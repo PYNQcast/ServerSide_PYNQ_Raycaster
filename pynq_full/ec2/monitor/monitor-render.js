@@ -270,6 +270,7 @@ function renderLoop() {
   lastRenderSampleAt = now;
   pushFrameSample(frameDelta);
   drawFrameChart();
+  maybeRenderStackedFrameChart();
 
   if (replayState.active && replayState.frames.length) {
     const frame = replayState.frames[Math.min(replayState.frameIndex, replayState.frames.length - 1)];
