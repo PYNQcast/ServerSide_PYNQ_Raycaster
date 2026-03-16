@@ -89,7 +89,8 @@ function worldToCanvas(wx, wy) {
   const rx  = maxX - minX;
   const ry  = maxY - minY;
   const sc  = Math.min((W - pad*2) / rx, (H - pad*2) / ry);
-  return [(pad + (wx - minX) * sc), (pad + (wy - minY) * sc), sc];
+  // World Y increases upward; canvas Y increases downward — flip Y axis.
+  return [(pad + (wx - minX) * sc), (pad + (maxY - wy) * sc), sc];
 }
 
 function drawArena(players, bits, bitsMask) {
@@ -238,7 +239,7 @@ function drawArena(players, bits, bitsMask) {
     // Direction arrow
     ctx.strokeStyle = colour; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.moveTo(cx, cy);
-    ctx.lineTo(cx + Math.cos(drawAngle) * arrowLen, cy + Math.sin(drawAngle) * arrowLen);
+    ctx.lineTo(cx + Math.cos(drawAngle) * arrowLen, cy - Math.sin(drawAngle) * arrowLen);
     ctx.stroke();
 
     // Player dot — smoothly scales up on tag
