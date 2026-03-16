@@ -16,13 +16,14 @@ import time
 
 from protocol import (
     # constants
-    NODE_SIZE, PKT_REGISTER, PKT_ACK, HEADER_FMT,
+    NODE_SIZE, PKT_REGISTER, PKT_ACK, PKT_PERF, HEADER_FMT, HEADER_SIZE,
     CLIENT_INPUT_FLAGS, SERVER_STATE_FLAGS, MOVEMENT_MODE_INTENT_ONLY,
     ROLE_ANY, ROLE_RUNNER, ROLE_TAGGER,
     GAME_MODE_CHASE, GAME_MODE_CHASE_BITS, FLAG_GHOST,
     NODE_CONTROL_MODE_MANUAL, NODE_CONTROL_MODE_AUTO, NODE_CONTROL_MODE_REPLAY,
     # functions
     decode_movement_mode, unpack_node_packet, unpack_register_packet,
+    unpack_perf_packet,
     pack_map_packet, pack_bits_init_packet, pack_node_mode_packet,
 )
 from t2_constants import (
@@ -146,6 +147,13 @@ class PacketHandler:
         data = raw["data"]
         addr = raw["addr"]
 
+        # PKT_PERF is shorter than NODE_SIZE — handle before the length check.
+        if len(data) >= HEADER_SIZE:
+            pkt_type_peek = struct.unpack_from('<H', data, 0)[0]
+            if pkt_type_peek == PKT_PERF:
+                self._handle_perf(data, addr)
+                return
+
         if len(data) < NODE_SIZE:
             return
 
@@ -227,6 +235,21 @@ class PacketHandler:
         self._maybe_resume_match()
 
     # ── Player registration ───────────────────────────────────────────────────
+    def _handle_perf(self, data: bytes, addr):
+        try:
+            pkt = unpack_perf_packet(data)
+        except Exception:
+            return
+        p = self.state.players.get(addr)
+        if p is None:
+            return
+        p["perf"] = {
+            "tick_rate_hz":      pkt["tick_rate_hz"],
+            "cpu_temp_c":        pkt["cpu_temp_c"],
+            "bram_write_us":     pkt["bram_write_us"],
+            "worst_overrun_us":  pkt["worst_overrun_us"],
+        }
+
     # Record preferred role and keep humans in the lobby until the monitor sends Start.
     # Queued humans get ACK(0) so clients can move before the match begins.
 

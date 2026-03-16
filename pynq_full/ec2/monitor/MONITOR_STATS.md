@@ -25,12 +25,12 @@
 
 Stacked bar chart — one bar per incoming WS message, showing how each inter-message interval was spent.
 
-| Legend label       | Field            | Meaning |
-|--------------------|------------------|---------|
-| **Server cadence** | `dispatch_ms`    | Idle time between consecutive WS messages arriving at the browser. Equals the inter-message gap minus transit and parse time. Represents server scheduling + network idle time. |
-| **FPGA (reserved)**| `compute_ms`     | Reserved slot for future FPGA pipeline telemetry. Always 0 until FPGA timing is plumbed through the server push. |
-| **WS transit**     | `network_ms`     | Same measurement as WS Latency card — `Date.now()` receive minus `server_sent_at`. |
-| **JS parse**       | `composite_ms`   | Time from WS message receipt to completion of JSON parse + state update in `ws.onmessage` (`performance.now()` delta). |
+| Legend label    | Field            | Meaning |
+|-----------------|------------------|---------|
+| **Server cadence** | `dispatch_ms` | Idle time between consecutive WS messages arriving at the browser. Equals the inter-message gap minus all other segments. Represents server scheduling + network idle time. |
+| **FPGA**        | `compute_ms`     | BRAM write time (µs → ms) reported by the PYNQ board in `PKT_PERF`. This is the time spent writing pose + sprite data to the FPGA BRAM each tick. Shows 0 if no board is connected or no `PKT_PERF` has been received yet. When multiple boards are connected, shows the worst (max) across all boards. |
+| **WS transit**  | `network_ms`     | Same measurement as WS Latency card — `Date.now()` receive minus `server_sent_at`. |
+| **JS parse**    | `composite_ms`   | Time from WS message receipt to completion of JSON parse + state update in `ws.onmessage` (`performance.now()` delta). |
 
 **Note**: the bars are updated in real-time only during a live session. During replay, the chart freezes (no new WS messages arrive while replaying).
 
@@ -39,8 +39,19 @@ Stacked bar chart — one bar per incoming WS message, showing how each inter-me
 ## Player Table
 
 - **Data source**: Redis `player:{id}` hashes, updated each server tick and included in the `game:state` WS push payload.
-- **Columns**: Player ID, role (runner/tagger/ghost/queued), position (x, y), flags bitmask.
-- **Flag bits**: `FLAG_TAGGED=0x01`, `FLAG_MATCH_END=0x04`, `FLAG_GHOST=0x08`.
+- **Columns**: Player ID, role (runner/tagger/ghost/queued), position (x, y), angle, distance, status, **board perf**.
+- **Flag bits**: `FLAG_TAGGED=0x02`, `FLAG_MATCH_END=0x04`, `FLAG_GHOST=0x08`.
+
+### Board Perf column
+Populated only for PYNQ hardware nodes (not simulator). Sent via `PKT_PERF` (0x0070) from the board every ~2 seconds.
+
+| Value | Meaning |
+|-------|---------|
+| `NN°C` | Zynq CPU temperature from `/sys/class/thermal/thermal_zone0/temp` |
+| `NNHz` | Achieved tick rate over the last 2-second window (target: 60 Hz) |
+| `+NNµs` | Worst tick overrun in the last window (positive = late; absent if on time) |
+
+Colour coding: orange if CPU temp > 70°C, red if worst overrun > 500 µs.
 
 ---
 
