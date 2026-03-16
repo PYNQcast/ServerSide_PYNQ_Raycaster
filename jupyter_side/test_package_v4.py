@@ -495,9 +495,12 @@ def _read_cpu_temp():
 
 
 def _send_perf(sock, addr, state):
+    now = time.monotonic()
+    elapsed = now - state["last_perf_tx"]
+    tick_hz = int(round(state["perf_tick_count"] / elapsed)) if elapsed > 0 else 0
     pkt = protocol.pack_perf_packet(
         seq=state["seq"],
-        tick_rate_hz=state["perf_tick_count"],
+        tick_rate_hz=tick_hz,
         cpu_temp_c=_read_cpu_temp(),
         bram_write_us=int(state["perf_bram_write_us"]),
         worst_overrun_us=int(state["perf_worst_overrun_us"]),
@@ -508,7 +511,7 @@ def _send_perf(sock, addr, state):
     state["perf_tick_count"]       = 0
     state["perf_worst_overrun_us"] = 0
     state["perf_bram_write_us"]    = 0
-    state["last_perf_tx"]          = time.monotonic()
+    state["last_perf_tx"]          = now
 
 
 def _send_state(sock, addr, state):

@@ -86,30 +86,39 @@ function updateNodeLinks(stateOrPlayers) {
 function updateBoardStats(players) {
   const normalised = normalisePlayers(players || []);
   [1, 2].forEach((slot) => {
-    // Show perf for any player in this board slot (active or queued in lobby)
     const p = normalised.find((pl) => pl.boardSlot === slot);
     const perf = p?.perf;
-    const tempEl    = document.getElementById(`bs-p${slot}-temp`);
-    const hzEl      = document.getElementById(`bs-p${slot}-hz`);
-    const bramEl    = document.getElementById(`bs-p${slot}-bram`);
-    const overrunEl = document.getElementById(`bs-p${slot}-overrun`);
-    if (!tempEl) return;
+    const rowsEl = document.getElementById(`node${slot}-perf-rows`);
+    if (!rowsEl) return;
+
+    const tempEl    = document.getElementById(`bs-p${slot}-temp-inline`);
+    const hzEl      = document.getElementById(`bs-p${slot}-hz-inline`);
+    const bramEl    = document.getElementById(`bs-p${slot}-bram-inline`);
+    const overrunEl = document.getElementById(`bs-p${slot}-overrun-inline`);
+
     if (!perf) {
-      tempEl.textContent = hzEl.textContent = bramEl.textContent = overrunEl.textContent = '—';
-      tempEl.style.color = hzEl.style.color = bramEl.style.color = overrunEl.style.color = '';
+      rowsEl.hidden = true;
       return;
     }
-    tempEl.textContent = perf.cpu_temp_c > 0 ? `${perf.cpu_temp_c} °C` : 'N/A';
-    tempEl.style.color = perf.cpu_temp_c > 80 ? '#ff6666' : perf.cpu_temp_c > 70 ? '#ffaa00' : '';
+    rowsEl.hidden = false;
 
-    hzEl.textContent = `${perf.tick_rate_hz} Hz`;
-    hzEl.style.color = perf.tick_rate_hz < 55 ? '#ffaa00' : '';
+    const temp = perf.cpu_temp_c > 0 ? `${perf.cpu_temp_c}°C` : 'N/A';
+    const tempColor = perf.cpu_temp_c > 80 ? '#ff6666' : perf.cpu_temp_c > 70 ? '#ffaa00' : '#aabbcc';
+    tempEl.textContent = temp;
+    tempEl.style.color = tempColor;
 
-    bramEl.textContent = `${perf.bram_write_us} µs`;
-    bramEl.style.color = perf.bram_write_us > 500 ? '#ffaa00' : '';
+    const hz = `${perf.tick_rate_hz}Hz`;
+    const hzColor = perf.tick_rate_hz < 55 ? '#ffaa00' : '#aabbcc';
+    hzEl.textContent = hz;
+    hzEl.style.color = hzColor;
+
+    const bram = `${perf.bram_write_us}µs`;
+    const bramColor = perf.bram_write_us > 500 ? '#ffaa00' : '#aabbcc';
+    bramEl.textContent = bram;
+    bramEl.style.color = bramColor;
 
     const overrun = perf.worst_overrun_us;
-    overrunEl.textContent = overrun > 0 ? `+${overrun} µs` : 'on time';
+    overrunEl.textContent = overrun > 0 ? `+${overrun}µs` : 'ok';
     overrunEl.style.color = overrun > 1000 ? '#ff6666' : overrun > 200 ? '#ffaa00' : '#00ff88';
   });
 }
