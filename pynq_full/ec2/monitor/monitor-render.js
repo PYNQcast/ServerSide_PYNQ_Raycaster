@@ -117,14 +117,12 @@ function drawArena(players, bits, bitsMask) {
     // floating-point drift, so adjacent wall tiles share exact pixel edges (no corner gaps).
     const [originPx, originPy] = worldToCanvas(-mw / 2 * tileWu, -mh / 2 * tileWu);
     ctx.fillStyle = '#1a1730';
-    const numCols = mapData.width;
     mapData.tiles.forEach((row, ri) => {
       row.forEach((cell, ci) => {
         if (!cell) return;
-        const flippedCi = numCols - 1 - ci;
-        const px = Math.round(originPx + flippedCi * ts);
+        const px = Math.round(originPx + ci * ts);
         const py = Math.round(originPy + ri * ts);
-        const tw = Math.round(originPx + (flippedCi + 1) * ts) - px;
+        const tw = Math.round(originPx + (ci + 1) * ts) - px;
         const th = Math.round(originPy + (ri + 1) * ts) - py;
         ctx.fillRect(px, py, tw, th);
       });
@@ -240,7 +238,7 @@ function drawArena(players, bits, bitsMask) {
     // Direction arrow
     ctx.strokeStyle = colour; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.moveTo(cx, cy);
-    ctx.lineTo(cx + Math.cos(drawAngle) * arrowLen, cy + Math.sin(drawAngle) * arrowLen);
+    ctx.lineTo(cx + Math.cos(drawAngle) * arrowLen, cy - Math.sin(drawAngle) * arrowLen);
     ctx.stroke();
 
     // Player dot — smoothly scales up on tag
