@@ -3088,12 +3088,13 @@
 }
 
 /* ── Node health inline perf ─────────────────────────────────────────────── */
-.node-perf-card { flex-direction: column; gap: 6px; min-height: 90px; }
+.node-perf-card { flex-direction: column; gap: 6px; min-height: 90px; grid-column: 1 / -1; }
 .node-perf-head { display: flex; justify-content: space-between; align-items: baseline; width: 100%; }
 .node-perf-rows {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 4px;
+  width: 100%;
   margin-top: 6px;
   padding-top: 8px;
   border-top: 1px solid rgba(255,255,255,0.06);

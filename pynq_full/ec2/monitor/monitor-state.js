@@ -332,6 +332,7 @@ function drawFrameChart() {
 function pushBoardHzSample(hz) {
   boardHzHistory.push(hz);
   if (boardHzHistory.length > BOARD_HZ_BUFFER_SIZE) boardHzHistory.shift();
+  _lastLatencyRender = 0; // force chart redraw on next render loop tick
 }
 
 function maybeRenderLatencyChart() {
