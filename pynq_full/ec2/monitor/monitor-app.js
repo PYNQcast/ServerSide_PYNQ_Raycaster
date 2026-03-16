@@ -616,28 +616,9 @@ function connect() {
     );
     wsUpdateCount++;
     const now = performance.now();
-    // Push a real pipeline frame: transit = server wall-clock → browser wall-clock,
-    // remainder = JS parse + update overhead this message.
     if (state.server_sent_at) {
       const transitMs = Math.max(0, window._lastStateReceivedWallMs - Number(state.server_sent_at));
-      const parseMs = Math.max(0, performance.now() - now);
-      const intervalMs = wsLastMsgAt > 0 ? Math.min(now - wsLastMsgAt, 200) : 1000 / 30;
-      // FPGA slot: max BRAM write time across all connected boards (in ms), or 0 if none.
-      const normalisedNow = normalisePlayers(state.players || []);
-      const bramMs = normalisedNow.reduce((max, p) => {
-        const bram = p.perf?.bram_write_us;
-        return bram ? Math.max(max, bram / 1000) : max;
-      }, 0);
-      const idleMs = Math.max(0, intervalMs - transitMs - parseMs - bramMs);
-      pushStackedFrame({
-        total_ms: intervalMs,
-        stages: {
-          dispatch_ms: idleMs,       // time between messages (server cadence)
-          compute_ms: bramMs,        // BRAM write time reported by PYNQ board
-          network_ms: transitMs,     // server → browser WS transit
-          composite_ms: parseMs,     // JS parse + DOM update
-        },
-      });
+      if (transitMs < 2000) pushLatencySample(transitMs);
     }
     wsLastMsgAt = now;
     if (now - wsLastTime >= 1000) {

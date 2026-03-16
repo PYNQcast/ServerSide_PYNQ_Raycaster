@@ -139,35 +139,16 @@
         <div class="game-sidebar">
           <div class="panel-raised frame-panel sidebar-profiler-panel">
             <div class="panel-head">
-              <h2>Pipeline Frame Timing</h2>
-              <span class="micro-chip">stacked profiler</span>
+              <h2>WS Latency</h2>
+              <span class="micro-chip" id="latency-chart-current">— ms</span>
             </div>
-            <div class="frame-chart-container">
-              <div class="target-lines">
-                <div class="target-line target-60fps">
-                  <span class="target-label">16.7MS (60FPS)</span>
-                </div>
-                <div class="target-line target-30fps">
-                  <span class="target-label">33.3MS (30FPS)</span>
-                </div>
-              </div>
-
-              <div class="stacked-bars" id="stacked-frame-chart"></div>
-
-              <div class="bar-time-axis">
-                <span>oldest</span>
-                <span>newest</span>
-              </div>
+            <canvas id="latency-chart" width="260" height="120" style="width:100%;display:block;"></canvas>
+            <div class="bar-time-axis">
+              <span>120 msgs ago</span>
+              <span id="latency-chart-avg">avg — ms</span>
+              <span>now</span>
             </div>
-
-            <div class="legend">
-              <div class="legend-item"><span class="legend-swatch" style="background:var(--stage-dispatch)"></span>Server cadence</div>
-              <div class="legend-item"><span class="legend-swatch" style="background:var(--stage-compute)"></span>FPGA BRAM</div>
-              <div class="legend-item"><span class="legend-swatch" style="background:var(--stage-network)"></span>WS transit</div>
-              <div class="legend-item"><span class="legend-swatch" style="background:var(--stage-composite)"></span>JS parse</div>
-            </div>
-
-            <div class="metric-note profiler-note">Real per-message pipeline timing. Transit = server wall-clock → browser wall-clock (requires clocks in sync on same LAN). FPGA BRAM = board BRAM write time from PKT_PERF (µs). See Board Stats on Server Monitoring tab.</div>
+            <div class="metric-note profiler-note">Server → browser WS transit per message (server_sent_at wall-clock vs Date.now()). Green &lt;20 ms · yellow &lt;60 ms · red ≥60 ms.</div>
           </div>
 
           <div class="panel-raised player-panel">
