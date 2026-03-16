@@ -536,14 +536,17 @@ class GameTick:
         )
         self.packets.udp_transport.sendto(pkt, session["addr"])
         session["frame_index"] = frame_index + 1
-        self._set_board_replay_summary(
-            int(session["board_slot"]),
-            match_id=session.get("match_id", ""),
-            status="playing",
-            frame_index=session["frame_index"],
-            frame_count=int(session.get("frame_count", 0) or 0),
-            view_player_id=int(session.get("view_player_id", session["board_slot"])),
-        )
+        # Update the Redis-visible summary at ~10 Hz (every 6 frames) to avoid
+        # serialising the board_replays dict to Redis 60 times per second.
+        if session["frame_index"] % 6 == 0:
+            self._set_board_replay_summary(
+                int(session["board_slot"]),
+                match_id=session.get("match_id", ""),
+                status="playing",
+                frame_index=session["frame_index"],
+                frame_count=int(session.get("frame_count", 0) or 0),
+                view_player_id=int(session.get("view_player_id", session["board_slot"])),
+            )
         return True
 
     def _advance_board_replays(self):
@@ -591,7 +594,7 @@ class GameTick:
             }
             for p in sorted(self.state.players.values(), key=lambda player: player["player_id"])
         ]
-        asyncio.ensure_future(self._push_event({
+        self.redis_io.push_event({
             "event": "match_start",
             "players": len(self.state.players),
             "human_players": human_players,
@@ -600,25 +603,25 @@ class GameTick:
             "bits": bits,
             "map": self.map_state.get("name"),
             "player_snapshot": player_snapshot,
-        }))
+        })
 
     def _on_match_abort(self, event=None):
         payload = {"event": "match_aborted"}
         if event:
             payload.update(event)
-        asyncio.ensure_future(self._push_event(payload))
+        self.redis_io.push_event(payload)
 
     def _on_match_pause(self, event=None):
         payload = {"event": "match_paused"}
         if event:
             payload.update(event)
-        asyncio.ensure_future(self._push_event(payload))
+        self.redis_io.push_event(payload)
 
     def _on_match_resume(self, event=None):
         payload = {"event": "match_resumed"}
         if event:
             payload.update(event)
-        asyncio.ensure_future(self._push_event(payload))
+        self.redis_io.push_event(payload)
 
     async def _push_event(self, event: dict):
         self.redis_io.push_event(event)
