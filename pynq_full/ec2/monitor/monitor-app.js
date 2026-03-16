@@ -117,7 +117,7 @@ function setBoardReplayStatus(text) {
   if (el) el.textContent = text;
 }
 
-const REPLAY_FPS = 20;
+const REPLAY_FPS = 60;  // server records at 60 Hz — match for real-time playback
 
 function stopReplay(statusText = 'replay stopped') {
   if (replayState.timer) {
@@ -562,7 +562,7 @@ function connect() {
     updateGameHud(state);
     if (!replayState.active) updatePlayers(state.players);
     updateNodeLinks(state);
-    updateBitsPanel(state);
+    if (!replayState.active) updateBitsPanel(state);
     updateRedis(state.redis);
     updateServices(state.services);
     updatePipeline(state.pipeline);
