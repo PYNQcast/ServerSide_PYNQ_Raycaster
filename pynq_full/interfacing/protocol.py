@@ -25,7 +25,7 @@ PKT_MAP          = 0x0040   # server → node:  map tile data, sent once after P
 PKT_BITS_INIT    = 0x0050   # server → node:  bit positions, sent once at match start
                              #   header (8 bytes) + count (1 byte) + N × BitEntry (6 bytes each)
                              #   node stores positions; server sends bitmask each tick to flag collection.
-PKT_NODE_MODE    = 0x0060   # server → node:  runtime control mode switch (manual/auto)
+PKT_NODE_MODE    = 0x0060   # server → node:  runtime control mode switch (manual/auto/replay)
 
 # ── Flags bitmask (uint8 flags field) ─────────────────────────────────────────
 #
@@ -70,6 +70,7 @@ MOVEMENT_MODE_INTENT_WITH_PREDICTION = 0x02  # Node sends inputs plus its locall
 
 NODE_CONTROL_MODE_MANUAL = 0x00
 NODE_CONTROL_MODE_AUTO   = 0x01
+NODE_CONTROL_MODE_REPLAY = 0x02
 
 # ── Wire format ───────────────────────────────────────────────────────────────
 #
@@ -197,7 +198,7 @@ def pack_node_mode_packet(seq, mode):
     return header + struct.pack(NODE_MODE_FMT, mode & 0xFF)
 
 
-# Unpack PKT_NODE_MODE — returns NODE_CONTROL_MODE_MANUAL/AUTO.
+# Unpack PKT_NODE_MODE — returns NODE_CONTROL_MODE_MANUAL/AUTO/REPLAY.
 def unpack_node_mode_packet(data):
     if len(data) < HEADER_SIZE + NODE_MODE_SIZE:
         raise ValueError(f"PKT_NODE_MODE too short: {len(data)} bytes")
@@ -209,6 +210,31 @@ def pack_map_packet(seq, width, height, tile_scale, tiles):
     header    = struct.pack(HEADER_FMT, PKT_MAP, seq & 0xFFFF, timestamp)
     map_hdr   = struct.pack(MAP_HEADER_FMT, width & 0xFF, height & 0xFF, tile_scale & 0xFF)
     return header + map_hdr + bytes(tiles)
+
+
+# Build PKT_GAME_STATE: header + ext + N player entries.
+def pack_game_state_packet(seq, game_mode, players, bits_mask, *, timestamp=None):
+    if timestamp is None:
+        timestamp = int(time.time() * 1000) & 0xFFFFFFFF
+    header = struct.pack(HEADER_FMT, PKT_GAME_STATE, seq & 0xFFFF, int(timestamp) & 0xFFFFFFFF)
+    ext = struct.pack(
+        GAME_STATE_EXT_FMT,
+        int(game_mode) & 0xFF,
+        len(players) & 0xFF,
+        int(bits_mask) & 0xFFFF,
+    )
+    entries = b"".join(
+        struct.pack(
+            PLAYER_FMT,
+            int(player["player_id"]) & 0xFF,
+            float(player["x"]),
+            float(player["y"]),
+            float(player["angle"]),
+            int(player["flags"]) & 0xFF,
+        )
+        for player in players
+    )
+    return header + ext + entries
 
 # Pack a 24-byte NodePacket for sending to the server
 def pack_node_packet(pkt_type, seq, x, y, angle, flags=0,
@@ -277,6 +303,7 @@ def decode_node_control_mode(mode):
     return {
         NODE_CONTROL_MODE_MANUAL: "manual",
         NODE_CONTROL_MODE_AUTO: "auto",
+        NODE_CONTROL_MODE_REPLAY: "replay",
     }.get(mode, f"unknown({mode})")
 
 

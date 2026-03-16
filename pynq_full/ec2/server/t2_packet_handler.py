@@ -20,6 +20,7 @@ from protocol import (
     CLIENT_INPUT_FLAGS, SERVER_STATE_FLAGS, MOVEMENT_MODE_INTENT_ONLY,
     ROLE_ANY, ROLE_RUNNER, ROLE_TAGGER,
     GAME_MODE_CHASE, GAME_MODE_CHASE_BITS, FLAG_GHOST,
+    NODE_CONTROL_MODE_MANUAL, NODE_CONTROL_MODE_AUTO, NODE_CONTROL_MODE_REPLAY,
     # functions
     decode_movement_mode, unpack_node_packet, unpack_register_packet,
     pack_map_packet, pack_bits_init_packet, pack_node_mode_packet,
@@ -115,7 +116,11 @@ class PacketHandler:
         if not player or str(addr).startswith("ghost:"):
             return
         control_mode = str(player.get("control_mode") or "manual").lower()
-        mode_value = 1 if control_mode == "auto" else 0
+        mode_value = {
+            "manual": NODE_CONTROL_MODE_MANUAL,
+            "auto": NODE_CONTROL_MODE_AUTO,
+            "replay": NODE_CONTROL_MODE_REPLAY,
+        }.get(control_mode, NODE_CONTROL_MODE_MANUAL)
         pkt = pack_node_mode_packet(0, mode_value)
         try:
             self.udp_transport.sendto(pkt, addr)
@@ -497,7 +502,13 @@ class PacketHandler:
     # Update the desired runtime mode for one stable board slot and notify it if connected.
     def set_node_mode(self, board_slot: int, mode: str):
         target_slot = int(board_slot)
-        target_mode = "auto" if str(mode).lower() == "auto" else "manual"
+        requested_mode = str(mode).lower()
+        if requested_mode == "auto":
+            target_mode = "auto"
+        elif requested_mode == "replay":
+            target_mode = "replay"
+        else:
+            target_mode = "manual"
         self.state.slot_modes[target_slot] = target_mode
         addr = self._addr_for_board_slot(target_slot)
         if addr is None:
@@ -559,10 +570,12 @@ class PacketHandler:
             print(f"[T2] failed to send ACK to {addr}: {e}")
 
     # Send PKT_MAP so the node can load tile data into FPGA DRAM
-    def _send_map(self, addr):
-        if self.udp_transport is None or not self.map_state["tiles"]:
+    def _send_map(self, addr, map_state=None):
+        if self.udp_transport is None:
             return
-        ms  = self.map_state
+        ms = map_state or self.map_state
+        if not ms.get("tiles"):
+            return
         pkt = pack_map_packet(0, ms["width"], ms["height"], ms["tile_scale"], ms["tiles"])
         try:
             self.udp_transport.sendto(pkt, addr)
@@ -571,14 +584,14 @@ class PacketHandler:
             print(f"[T2] failed to send PKT_MAP to {addr}: {e}")
 
     # Send PKT_BITS_INIT so the node knows the current bit layout — including zero bits.
-    def _send_bits_init(self, addr):
+    def _send_bits_init(self, addr, bits=None):
         if self.udp_transport is None:
             return
-        bits = self.map_state.get("bits", [])
-        pkt = pack_bits_init_packet(0, bits)
+        bits_payload = self.map_state.get("bits", []) if bits is None else bits
+        pkt = pack_bits_init_packet(0, bits_payload)
         try:
             self.udp_transport.sendto(pkt, addr)
-            print(f"[T2] sent PKT_BITS_INIT ({len(bits)} bits) to {addr}")
+            print(f"[T2] sent PKT_BITS_INIT ({len(bits_payload)} bits) to {addr}")
         except Exception as e:
             print(f"[T2] failed to send PKT_BITS_INIT to {addr}: {e}")
 

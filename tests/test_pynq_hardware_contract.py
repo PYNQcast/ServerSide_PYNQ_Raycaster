@@ -18,7 +18,8 @@ def pynq_import_context():
     for name in list(sys.modules):
         if name in {
             "t2_constants", "t2_map_loader", "pynq_client", "protocol", "test_package_v2",
-            "player_profiles", "t2_packet_handler", "t2_redis_io",
+            "player_profiles", "t2_packet_handler", "t2_redis_io", "t2_game_tick",
+            "replay_store", "game_logic.match_state",
         }:
             sys.modules.pop(name, None)
     try:
@@ -28,7 +29,8 @@ def pynq_import_context():
         for name in list(sys.modules):
             if name in {
                 "t2_constants", "t2_map_loader", "pynq_client", "protocol", "test_package_v2",
-                "player_profiles", "t2_packet_handler", "t2_redis_io",
+                "player_profiles", "t2_packet_handler", "t2_redis_io", "t2_game_tick",
+                "replay_store", "game_logic.match_state",
             }:
                 sys.modules.pop(name, None)
 
@@ -346,6 +348,22 @@ def test_node_mode_packet_round_trips_auto_control():
         assert seq == 7
         assert protocol.unpack_node_mode_packet(packet) == protocol.NODE_CONTROL_MODE_AUTO
         assert protocol.decode_node_control_mode(protocol.unpack_node_mode_packet(packet)) == "auto"
+
+
+def test_node_mode_packet_round_trips_replay_control():
+    with pynq_import_context():
+        protocol = importlib.import_module("protocol")
+
+        packet = protocol.pack_node_mode_packet(
+            seq=11,
+            mode=protocol.NODE_CONTROL_MODE_REPLAY,
+        )
+        pkt_type, seq, _ = protocol.unpack_header(packet)
+
+        assert pkt_type == protocol.PKT_NODE_MODE
+        assert seq == 11
+        assert protocol.unpack_node_mode_packet(packet) == protocol.NODE_CONTROL_MODE_REPLAY
+        assert protocol.decode_node_control_mode(protocol.unpack_node_mode_packet(packet)) == "replay"
 
 
 def test_player_identity_falls_back_to_controller_key_without_username():
@@ -1476,3 +1494,165 @@ def test_pynq_game_tick_kick_board_removes_target_and_returns_remaining_players_
         assert game_tick.state.players["ghost:1"]["player_id"] == 3
         assert game_tick.state.players["ghost:1"]["flags"] == protocol.FLAG_GHOST
         assert game_tick.state.pending_roles == {("runner", 1): protocol.ROLE_RUNNER}
+
+
+def test_pynq_game_tick_start_board_replay_streams_setup_and_first_frame():
+    with pynq_import_context():
+        import asyncio
+        import queue
+
+        protocol = importlib.import_module("protocol")
+        game_tick_mod = importlib.import_module("t2_game_tick")
+
+        class DummyTransport:
+            def __init__(self):
+                self.sent = []
+
+            def sendto(self, data, addr):
+                self.sent.append((data, addr))
+
+        async def exercise():
+            packet_queue = asyncio.Queue()
+            broadcast_queue = asyncio.Queue()
+            write_queue = queue.SimpleQueue()
+            transport = DummyTransport()
+            game_tick = game_tick_mod.GameTick(
+                packet_queue,
+                broadcast_queue,
+                write_queue,
+                udp_transport=transport,
+            )
+
+            addr = ("runner", 1)
+            game_tick.state.players = {
+                addr: {
+                    "player_id": 0,
+                    "x": 0.0,
+                    "y": 0.0,
+                    "angle": 0.0,
+                    "flags": 0,
+                    "last_seen": 0.0,
+                    "last_seq": None,
+                    "movement_mode": 0,
+                    "protocol_version": 1,
+                    "timed_out": False,
+                    "preferred_role": protocol.ROLE_ANY,
+                    "board_slot": 1,
+                    "control_mode": "manual",
+                    "display_name": "runner",
+                    "username": "runner",
+                    "profile_key": "runner",
+                    "controller_key": "controller-runner",
+                    "identity_source": "username",
+                },
+            }
+            game_tick.tick_count = 42
+            game_tick._load_board_replay = lambda match_id: {
+                "match_id": match_id,
+                "events": [
+                    {"event": "match_start", "map": "chase", "bits": [[8.0, 8.0]]},
+                    {
+                        "event": "state_snapshot",
+                        "map": "chase",
+                        "game_mode": protocol.GAME_MODE_CHASE_BITS,
+                        "bits_mask": 0x0001,
+                        "bits": [[8.0, 8.0]],
+                        "players": [
+                            {"player_id": 1, "x": 4.0, "y": 5.0, "angle": 0.25, "flags": 0},
+                            {"player_id": 2, "x": 10.0, "y": 5.0, "angle": 3.14, "flags": 0},
+                        ],
+                    },
+                ],
+            }
+
+            started, message = game_tick._request_board_replay(1, "match-abc")
+
+            assert started is True
+            assert "loading" in message
+            await game_tick._board_replay_tasks[1]
+
+            packet_types = [protocol.unpack_header(data)[0] for data, _ in transport.sent]
+            assert packet_types[:5] == [
+                protocol.PKT_ACK,
+                protocol.PKT_MAP,
+                protocol.PKT_BITS_INIT,
+                protocol.PKT_NODE_MODE,
+                protocol.PKT_GAME_STATE,
+            ]
+            assert protocol.unpack_node_mode_packet(transport.sent[3][0]) == protocol.NODE_CONTROL_MODE_REPLAY
+            _, seq, _, game_mode, players, bits_mask = protocol.unpack_server_packet(transport.sent[4][0])
+            assert seq == 42
+            assert game_mode == protocol.GAME_MODE_CHASE_BITS
+            assert bits_mask == 0x0001
+            assert [player["player_id"] for player in players] == [1, 2]
+            assert game_tick.state.slot_modes[1] == "replay"
+            assert game_tick.state.players[addr]["control_mode"] == "replay"
+            assert game_tick.state.board_replays[1]["status"] == "playing"
+            assert game_tick.state.board_replays[1]["frame_index"] == 1
+
+        asyncio.run(exercise())
+
+
+def test_pynq_game_tick_stop_board_replay_restores_board_contract():
+    with pynq_import_context():
+        import asyncio
+        import queue
+
+        protocol = importlib.import_module("protocol")
+        game_tick_mod = importlib.import_module("t2_game_tick")
+
+        class DummyTransport:
+            def __init__(self):
+                self.sent = []
+
+            def sendto(self, data, addr):
+                self.sent.append((data, addr))
+
+        packet_queue = asyncio.Queue()
+        broadcast_queue = asyncio.Queue()
+        write_queue = queue.SimpleQueue()
+        transport = DummyTransport()
+        game_tick = game_tick_mod.GameTick(
+            packet_queue,
+            broadcast_queue,
+            write_queue,
+            udp_transport=transport,
+        )
+
+        addr = ("runner", 1)
+        game_tick.state.players = {
+            addr: {
+                "player_id": 0,
+                "x": 0.0,
+                "y": 0.0,
+                "angle": 0.0,
+                "flags": 0,
+                "last_seen": 0.0,
+                "last_seq": None,
+                "movement_mode": 0,
+                "protocol_version": 1,
+                "timed_out": False,
+                "preferred_role": protocol.ROLE_ANY,
+                "board_slot": 1,
+                "control_mode": "replay",
+                "display_name": "runner",
+                "username": "runner",
+                "profile_key": "runner",
+                "controller_key": "controller-runner",
+                "identity_source": "username",
+            },
+        }
+        game_tick.state.slot_modes[1] = "replay"
+
+        game_tick._restore_board_after_replay(1, "manual")
+
+        packet_types = [protocol.unpack_header(data)[0] for data, _ in transport.sent]
+        assert packet_types == [
+            protocol.PKT_ACK,
+            protocol.PKT_MAP,
+            protocol.PKT_BITS_INIT,
+            protocol.PKT_NODE_MODE,
+        ]
+        assert protocol.unpack_node_mode_packet(transport.sent[-1][0]) == protocol.NODE_CONTROL_MODE_MANUAL
+        assert game_tick.state.slot_modes[1] == "manual"
+        assert game_tick.state.players[addr]["control_mode"] == "manual"

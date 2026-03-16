@@ -1,6 +1,6 @@
 # Replay Notes
 
-## Hardware Replay Removed
+## Legacy Hardware Replay Removed
 
 We intentionally removed the old "auto play" / hardware replay button from the
 monitor and kept replay as a browser minimap feature only.
@@ -17,8 +17,23 @@ Why:
    confuse debugging, and make playback look wrong even when the replay artifact
    itself was correct.
 
-Until we build a true server-driven replay mode that streams recorded
-`state_snapshot` frames over UDP, replay should stay monitor-only.
+## Current Replay Split
+
+Replay is now split into two separate paths:
+
+1. `Monitor Replay`
+   - browser/minimap only
+   - reads replay data from S3
+   - never affects live boards or match state
+
+2. `Replay To Board`
+   - separate control path for P1 / P2
+   - server fetches the replay, sends `ACK + MAP + BITS_INIT + PKT_NODE_MODE(replay)`
+   - then streams recorded `state_snapshot` frames back over UDP as synthetic `PKT_GAME_STATE`
+   - the board ignores buttons in replay mode and trusts the streamed server pose
+
+This keeps replay honest: the minimap stays UI-only, while board replay is now a
+true frame stream instead of a fresh auto-played match.
 
 ## Why Replay Was Flaky Before
 

@@ -42,6 +42,13 @@ class RedisIO:
         if not self.state.players:
             return
 
+        replay_slots = {
+            int(slot)
+            for slot in getattr(self.state, "board_replays", {})
+            if str(getattr(self.state, "board_replays", {}).get(slot, {}).get("status", "")).lower()
+            in {"loading", "playing"}
+        }
+
         if self.state.match_started:
             players = list(self.state.players.values())
         else:
@@ -52,7 +59,16 @@ class RedisIO:
             ]
         if not players:
             return
-        human_addrs = [a for a in self.state.players if not str(a).startswith("ghost:")]
+        human_addrs = [
+            addr
+            for addr, player in self.state.players.items()
+            if (
+                not str(addr).startswith("ghost:")
+                and int(player.get("board_slot") or 0) not in replay_slots
+            )
+        ]
+        if not human_addrs:
+            return
         header  = struct.pack('<HHI', 0x0002, tick_count & 0xFFFF,
                               int(time.time() * 1000) & 0xFFFFFFFF)
         ext     = struct.pack(GAME_STATE_EXT_FMT,
@@ -139,6 +155,10 @@ class RedisIO:
             "pause_remaining_s": "" if pause_remaining_s is None else round(pause_remaining_s, 2),
             "queued_players":    json.dumps(queued_players),
             "slot_modes":        json.dumps(getattr(self.state, "slot_modes", {1: "manual", 2: "manual"})),
+            "board_replays":     json.dumps([
+                getattr(self.state, "board_replays", {})[slot]
+                for slot in sorted(getattr(self.state, "board_replays", {}))
+            ]),
             "ghost_profiles":    json.dumps([
                 self.state.ghost_profile(slot)
                 for slot in sorted(getattr(self.state, "ghost_profiles", {}))

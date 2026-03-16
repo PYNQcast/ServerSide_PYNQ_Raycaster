@@ -93,6 +93,7 @@ Error generating stack: `+n.message+`
             </div>
           </div>
           <div class="viewport-wrap">
+            <div id="arena-replay-overlay" class="arena-replay-overlay" hidden>IN REPLAY MODE</div>
             <canvas id="arena" width="480" height="480"></canvas>
           </div>
           <aside id="archive-drawer" class="panel-raised archive-drawer" hidden>
@@ -116,11 +117,14 @@ Error generating stack: `+n.message+`
                   <span class="micro-chip">S3</span>
                 </div>
                 <div class="metric-note" id="replay-status">no replay loaded</div>
+                <div class="metric-note" id="board-replay-status">no board replay active</div>
                 <div class="replay-list" id="replay-list">
                   <button class="replay-btn empty" disabled>waiting for replayable matches...</button>
                 </div>
                 <div class="control-stack">
                   <button class="control-btn stop" type="button" onclick="stopReplay()">Stop Replay</button>
+                  <button class="control-btn restart" type="button" onclick="stopBoardReplayStream(1)">Stop P1 Screen</button>
+                  <button class="control-btn restart" type="button" onclick="stopBoardReplayStream(2)">Stop P2 Screen</button>
                 </div>
               </div>
             </div>
