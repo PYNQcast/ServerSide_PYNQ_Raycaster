@@ -75,6 +75,8 @@ function setReplayStatus(text) {
   document.getElementById('replay-status').textContent = text;
 }
 
+const REPLAY_FPS = 20;
+
 function stopReplay() {
   if (replayState.timer) {
     clearInterval(replayState.timer);
@@ -117,7 +119,7 @@ function startReplayPlayback(matchId, events) {
     }
     const frame = replayState.frames[replayState.frameIndex];
     updatePlayers(frame.players);
-  }, 1000 / 20);
+  }, 1000 / REPLAY_FPS);
 }
 
 async function loadReplay(matchId) {

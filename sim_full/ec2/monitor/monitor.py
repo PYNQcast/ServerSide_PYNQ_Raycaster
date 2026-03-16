@@ -33,7 +33,7 @@ from monitor_map_store import (
 REDIS_HOST   = "127.0.0.1"
 REDIS_PORT   = 6379
 HTTP_PORT    = 8080
-PUSH_RATE_HZ = 20   # push to browser at 20 Hz (match game tick rate)
+PUSH_RATE_HZ = 20   # push to browser at 20 Hz for a calmer live UI
 DDB_POLL_INTERVAL_S = 2.0
 SERVICE_POLL_INTERVAL_S = 1.0
 REDIS_STATS_POLL_INTERVAL_S = 1.0
@@ -335,8 +335,15 @@ def _stop_service(name: str):
             pass
     return f"{name} killed"
 
-def handle_control_command(cmd: str):
+def handle_control_command(payload_or_cmd):
     global _service_message
+
+    if isinstance(payload_or_cmd, dict):
+        payload = payload_or_cmd
+        cmd = str(payload.get("cmd", "") or "").strip()
+    else:
+        cmd = str(payload_or_cmd or "").strip()
+        payload = {"cmd": cmd}
 
     def publish_node_mode(node_index: int, mode: str):
         payload = json.dumps({"cmd": "set_mode", "mode": mode, "node_index": node_index})
@@ -348,7 +355,7 @@ def handle_control_command(cmd: str):
         _service_message = "force_end sent — session will return to the lobby after the end hold"
     elif cmd == "start_match":
         r.publish("game:control", json.dumps({"cmd": "start_match"}))
-        _service_message = "start_match sent — queued lobby players will be promoted if enough participants exist"
+        _service_message = "start_match sent — queued lobby players will be promoted if at least one human is connected"
     elif cmd == "restart":
         payload = json.dumps({"cmd": "restart"})
         r.publish("game:control", payload)
@@ -393,6 +400,21 @@ def handle_control_command(cmd: str):
         count = int(cmd.split("_")[-1])
         r.publish("game:control", json.dumps({"cmd": "set_ghost_count", "count": count}))
         _service_message = f"ghost count → {count} sent"
+    elif cmd == "set_ghost_profile":
+        try:
+            slot = int(payload.get("slot", 0) or 0)
+        except (TypeError, ValueError):
+            slot = 0
+        if slot not in (1, 2, 3):
+            _service_message = f"invalid ghost slot: {slot}"
+        else:
+            r.publish("game:control", json.dumps({
+                "cmd": "set_ghost_profile",
+                "slot": slot,
+                "speed": payload.get("speed"),
+                "tag_radius": payload.get("tag_radius"),
+            }))
+            _service_message = f"ghost {slot} traits updated"
     elif cmd.startswith("set_map:"):
         global _active_map
         map_name = cmd[len("set_map:"):]
@@ -543,6 +565,9 @@ def collect_state():
             "controller_key":  raw.get("controller_key", ""),
             "identity_source": raw.get("identity_source", ""),
             "sim_slot":        _as_optional_int(raw.get("sim_slot")),
+            "ghost_slot":      _as_optional_int(raw.get("ghost_slot")),
+            "speed":           _as_float(raw.get("speed"), 0.0),
+            "tag_radius":      _as_float(raw.get("tag_radius"), 0.0),
             "is_ghost":        bool(_as_int(raw.get("is_ghost", 0), 0)),
             "queued":          False,
             "queue_slot":      None,
@@ -559,11 +584,24 @@ def collect_state():
     pause_reason = (game_raw.get("pause_reason") or None) if game_raw else None
     pause_remaining_s = _as_float(game_raw.get("pause_remaining_s"), 0.0) if game_raw else 0.0
     paused_player_ids = []
+    ghost_profiles = []
     if game_raw and game_raw.get("paused_player_ids"):
         try:
             paused_player_ids = json.loads(game_raw["paused_player_ids"])
         except Exception:
             paused_player_ids = []
+    if game_raw and game_raw.get("ghost_profiles"):
+        try:
+            ghost_profiles = [
+                {
+                    "slot": _as_int(raw.get("slot", index), index),
+                    "speed": _as_float(raw.get("speed"), 0.0),
+                    "tag_radius": _as_float(raw.get("tag_radius"), 0.0),
+                }
+                for index, raw in enumerate(json.loads(game_raw["ghost_profiles"]), start=1)
+            ]
+        except Exception:
+            ghost_profiles = []
     queued_players = []
     if game_raw and game_raw.get("queued_players"):
         try:
@@ -665,6 +703,7 @@ def collect_state():
         "active_map": active_map,          # name of the currently loaded map
         "selected_map": selected_map,      # chosen real map even when orbit is active
         "sim_view_mode": sim_view_mode,
+        "ghost_profiles": ghost_profiles,
         "match": {
             "started": match_started,
             "ended": match_ended,
@@ -883,6 +922,15 @@ async def player_handler(request):
     return web.json_response(payload)
 
 
+async def state_handler(request):
+    try:
+        payload = await asyncio.to_thread(refresh_state_cache)
+    except Exception as e:
+        print(f"[monitor] state fetch error: {e}")
+        raise web.HTTPInternalServerError(text="failed to load live state")
+    return web.json_response(payload)
+
+
 async def control_handler(request):
     try:
         data = await request.json()
@@ -894,11 +942,11 @@ async def control_handler(request):
         raise web.HTTPBadRequest(text="missing cmd")
 
     try:
-        await asyncio.to_thread(handle_control_command, cmd)
+        message = await asyncio.to_thread(handle_control_command, data)
     except Exception as exc:
         print(f"[monitor] control error for {cmd}: {exc}")
         raise web.HTTPInternalServerError(text="failed to apply control")
-    return web.json_response({"ok": True, "cmd": cmd})
+    return web.json_response({"ok": True, "cmd": cmd, "message": message})
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
@@ -941,8 +989,8 @@ async def map_save_handler(request):
     apply_map = bool(data.get("apply"))
     try:
         payload = await asyncio.to_thread(save_map_entry, MAPS_DIR, data, map_dyndb)
-        if apply_map and len(payload.get("spawns", [])) < 2:
-            raise MapStorageError("pushing live requires two spawn points")
+        if apply_map and len(payload.get("spawns", [])) < 1:
+            raise MapStorageError("pushing live requires at least one spawn point")
         if apply_map:
             await asyncio.to_thread(handle_control_command, f"set_map:{payload['map_id']}")
     except MapStorageError as exc:
@@ -996,6 +1044,7 @@ async def main():
         app.router.add_get(f"/{logo_asset_name}", asset_handler)
     app.router.add_get("/ws", ws_handler)
     app.router.add_get("/api/replay/{match_id}", replay_handler)
+    app.router.add_get("/api/state", state_handler)
     app.router.add_get("/api/players", players_handler)
     app.router.add_get("/api/players/{player_key}", player_handler)
     app.router.add_post("/api/control", control_handler)

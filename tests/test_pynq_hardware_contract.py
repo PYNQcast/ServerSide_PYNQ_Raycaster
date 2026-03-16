@@ -18,7 +18,8 @@ def pynq_import_context():
     for name in list(sys.modules):
         if name in {
             "t2_constants", "t2_map_loader", "pynq_client", "protocol", "test_package_v2",
-            "player_profiles", "t2_packet_handler", "t2_redis_io",
+            "player_profiles", "t2_packet_handler", "t2_redis_io", "t2_game_tick",
+            "replay_store", "game_logic.match_state",
         }:
             sys.modules.pop(name, None)
     try:
@@ -28,7 +29,8 @@ def pynq_import_context():
         for name in list(sys.modules):
             if name in {
                 "t2_constants", "t2_map_loader", "pynq_client", "protocol", "test_package_v2",
-                "player_profiles", "t2_packet_handler", "t2_redis_io",
+                "player_profiles", "t2_packet_handler", "t2_redis_io", "t2_game_tick",
+                "replay_store", "game_logic.match_state",
             }:
                 sys.modules.pop(name, None)
 
@@ -348,6 +350,22 @@ def test_node_mode_packet_round_trips_auto_control():
         assert protocol.decode_node_control_mode(protocol.unpack_node_mode_packet(packet)) == "auto"
 
 
+def test_node_mode_packet_round_trips_replay_control():
+    with pynq_import_context():
+        protocol = importlib.import_module("protocol")
+
+        packet = protocol.pack_node_mode_packet(
+            seq=11,
+            mode=protocol.NODE_CONTROL_MODE_REPLAY,
+        )
+        pkt_type, seq, _ = protocol.unpack_header(packet)
+
+        assert pkt_type == protocol.PKT_NODE_MODE
+        assert seq == 11
+        assert protocol.unpack_node_mode_packet(packet) == protocol.NODE_CONTROL_MODE_REPLAY
+        assert protocol.decode_node_control_mode(protocol.unpack_node_mode_packet(packet)) == "replay"
+
+
 def test_player_identity_falls_back_to_controller_key_without_username():
     with pynq_import_context():
         player_profiles = importlib.import_module("player_profiles")
@@ -429,12 +447,19 @@ def test_pynq_packet_handler_queues_single_player_lobby_session():
             def sendto(self, data, addr):
                 self.sent.append((data, addr))
 
+        class DummyQueue:
+            def __init__(self):
+                self.items = []
+
+            def put(self, item):
+                self.items.append(item)
+
         state = match_state_mod.MatchState()
         transport = DummyTransport()
         handler = packet_handler_mod.PacketHandler(
             state=state,
             packet_queue=asyncio.Queue(),
-            write_queue=[],
+            write_queue=DummyQueue(),
             udp_transport=transport,
             map_state={
                 "name": "lobby",
@@ -468,15 +493,18 @@ def test_pynq_packet_handler_queues_single_player_lobby_session():
         assert state.players[addr]["player_id"] == 0
         assert state.players[addr]["board_slot"] == 1
         assert state.players[addr]["control_mode"] == "manual"
-        assert len(transport.sent) == 3
+        assert len(transport.sent) == 4
         ack_type, _, _ = protocol.unpack_header(transport.sent[0][0])
         assert ack_type == protocol.PKT_ACK
         assert transport.sent[0][0][protocol.HEADER_SIZE] == 0
         map_width, map_height, _, _ = protocol.unpack_map_packet(transport.sent[1][0])
         assert (map_width, map_height) == (32, 32)
-        mode_type, _, _ = protocol.unpack_header(transport.sent[2][0])
+        bits_type, _, _ = protocol.unpack_header(transport.sent[2][0])
+        assert bits_type == protocol.PKT_BITS_INIT
+        assert protocol.unpack_bits_init_packet(transport.sent[2][0]) == []
+        mode_type, _, _ = protocol.unpack_header(transport.sent[3][0])
         assert mode_type == protocol.PKT_NODE_MODE
-        assert protocol.unpack_node_mode_packet(transport.sent[2][0]) == protocol.NODE_CONTROL_MODE_MANUAL
+        assert protocol.unpack_node_mode_packet(transport.sent[3][0]) == protocol.NODE_CONTROL_MODE_MANUAL
         assert not any(str(player_addr).startswith("ghost:") for player_addr in state.players)
 
 
@@ -553,12 +581,19 @@ def test_pynq_packet_handler_runtime_mode_switch_targets_connected_board_slot():
             def sendto(self, data, addr):
                 self.sent.append((data, addr))
 
+        class DummyQueue:
+            def __init__(self):
+                self.items = []
+
+            def put(self, item):
+                self.items.append(item)
+
         state = match_state_mod.MatchState()
         transport = DummyTransport()
         handler = packet_handler_mod.PacketHandler(
             state=state,
             packet_queue=asyncio.Queue(),
-            write_queue=[],
+            write_queue=DummyQueue(),
             udp_transport=transport,
             map_state={
                 "name": "lobby",
@@ -600,6 +635,64 @@ def test_pynq_packet_handler_runtime_mode_switch_targets_connected_board_slot():
         assert mode_type == protocol.PKT_NODE_MODE
         assert protocol.unpack_node_mode_packet(transport.sent[-1][0]) == protocol.NODE_CONTROL_MODE_AUTO
         assert transport.sent[-1][1] == addr
+
+
+def test_pynq_packet_handler_registration_sends_empty_bits_init_for_lobby_sync():
+    with pynq_import_context():
+        import asyncio
+
+        protocol = importlib.import_module("protocol")
+        packet_handler_mod = importlib.import_module("t2_packet_handler")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+
+        class DummyTransport:
+            def __init__(self):
+                self.sent = []
+
+            def sendto(self, data, addr):
+                self.sent.append((data, addr))
+
+        state = match_state_mod.MatchState()
+        transport = DummyTransport()
+        handler = packet_handler_mod.PacketHandler(
+            state=state,
+            packet_queue=asyncio.Queue(),
+            write_queue=[],
+            udp_transport=transport,
+            map_state={
+                "name": "lobby",
+                "width": 32,
+                "height": 32,
+                "tile_scale": 8,
+                "tiles": bytearray(32 * 32),
+                "bits": [],
+                "spawn_positions": [(0.0, 0.0), (8.0, 0.0)],
+            },
+            on_match_start=lambda: None,
+            on_match_abort=lambda event=None: None,
+            on_match_pause=lambda event=None: None,
+            on_match_resume=lambda event=None: None,
+            on_event=lambda event=None: None,
+        )
+
+        addr = ("192.168.2.10", 40000)
+        packet = protocol.pack_register_packet(
+            seq=1,
+            x=0.0,
+            y=0.0,
+            angle=0.0,
+            preferred_role=protocol.ROLE_ANY,
+            username="solo",
+            movement_mode=protocol.MOVEMENT_MODE_POSE,
+        )
+        handler._process_packet({"data": packet, "addr": addr})
+
+        packet_types = [protocol.unpack_header(data)[0] for data, _ in transport.sent]
+        assert protocol.PKT_ACK in packet_types
+        assert protocol.PKT_MAP in packet_types
+        assert protocol.PKT_BITS_INIT in packet_types
+        bits_packet = next(data for data, _ in transport.sent if protocol.unpack_header(data)[0] == protocol.PKT_BITS_INIT)
+        assert protocol.unpack_bits_init_packet(bits_packet) == []
 
 
 def test_pynq_packet_handler_start_match_supports_one_human_plus_ghost():
@@ -705,6 +798,47 @@ def test_pynq_packet_handler_monitor_ghost_requests_do_not_start_match():
         assert write_queue.items == []
 
 
+def test_pynq_packet_handler_applies_saved_ghost_profile_to_spawned_slot():
+    with pynq_import_context():
+        import asyncio
+
+        packet_handler_mod = importlib.import_module("t2_packet_handler")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+
+        state = match_state_mod.MatchState()
+        handler = packet_handler_mod.PacketHandler(
+            state=state,
+            packet_queue=asyncio.Queue(),
+            write_queue=[],
+            udp_transport=None,
+            map_state={
+                "width": 32,
+                "height": 32,
+                "tile_scale": 8,
+                "tiles": bytearray(32 * 32),
+                "bits": [],
+                "spawn_positions": [(0.0, 0.0), (8.0, 0.0), (16.0, 0.0), (24.0, 0.0)],
+            },
+            on_match_start=lambda: None,
+            on_match_abort=lambda event=None: None,
+            on_match_pause=lambda event=None: None,
+            on_match_resume=lambda event=None: None,
+            on_event=lambda event=None: None,
+        )
+
+        updated, message = handler.set_ghost_profile(2, speed=0.09, tag_radius=10.5)
+        handler.set_ghost_count(2)
+
+        assert updated is True
+        assert "ghost 2 traits" in message
+        assert state.players["ghost:1"]["ghost_slot"] == 1
+        assert state.players["ghost:2"]["ghost_slot"] == 2
+        assert state.players["ghost:2"]["speed"] == 0.09
+        assert state.players["ghost:2"]["tag_radius"] == 10.5
+        assert state.ghost_profile(2)["speed"] == 0.09
+        assert state.ghost_profile(2)["tag_radius"] == 10.5
+
+
 def test_pynq_packet_handler_return_to_lobby_preserves_humans_and_ghosts():
     with pynq_import_context():
         import asyncio
@@ -799,6 +933,436 @@ def test_pynq_packet_handler_return_to_lobby_preserves_humans_and_ghosts():
         assert [item["key"] for item in write_queue.items] == ["player:1", "player:2", "player:3"]
 
 
+def test_pynq_packet_handler_return_to_lobby_sends_empty_bits_init_to_clear_clients():
+    with pynq_import_context():
+        import asyncio
+
+        protocol = importlib.import_module("protocol")
+        packet_handler_mod = importlib.import_module("t2_packet_handler")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+
+        class DummyTransport:
+            def __init__(self):
+                self.sent = []
+
+            def sendto(self, data, addr):
+                self.sent.append((data, addr))
+
+        class DummyQueue:
+            def __init__(self):
+                self.items = []
+
+            def put(self, item):
+                self.items.append(item)
+
+        state = match_state_mod.MatchState()
+        transport = DummyTransport()
+        handler = packet_handler_mod.PacketHandler(
+            state=state,
+            packet_queue=asyncio.Queue(),
+            write_queue=DummyQueue(),
+            udp_transport=transport,
+            map_state={
+                "name": "lobby",
+                "width": 32,
+                "height": 32,
+                "tile_scale": 8,
+                "tiles": bytearray(32 * 32),
+                "bits": [],
+                "spawn_positions": [(0.0, 0.0), (8.0, 0.0), (16.0, 0.0)],
+            },
+            on_match_start=lambda: None,
+            on_match_abort=lambda event=None: None,
+            on_match_pause=lambda event=None: None,
+            on_match_resume=lambda event=None: None,
+            on_event=lambda event=None: None,
+        )
+
+        state.players = {
+            ("runner", 1): {
+                "player_id": 1,
+                "x": 4.0,
+                "y": 4.0,
+                "angle": 0.5,
+                "flags": protocol.FLAG_MATCH_END,
+                "last_seen": 0.0,
+                "last_seq": 2,
+                "movement_mode": 0,
+                "protocol_version": 1,
+                "timed_out": False,
+                "preferred_role": protocol.ROLE_RUNNER,
+                "board_slot": 1,
+                "control_mode": "manual",
+                "username": "runner",
+                "display_name": "runner",
+                "profile_key": "runner",
+                "controller_key": "controller-runner",
+                "identity_source": "username",
+            },
+            ("tagger", 2): {
+                "player_id": 2,
+                "x": 12.0,
+                "y": 4.0,
+                "angle": 1.0,
+                "flags": protocol.FLAG_TAGGED,
+                "last_seen": 0.0,
+                "last_seq": 3,
+                "movement_mode": 0,
+                "protocol_version": 1,
+                "timed_out": False,
+                "preferred_role": protocol.ROLE_TAGGER,
+                "board_slot": 2,
+                "control_mode": "auto",
+                "username": "tagger",
+                "display_name": "tagger",
+                "profile_key": "tagger",
+                "controller_key": "controller-tagger",
+                "identity_source": "username",
+            },
+        }
+        state.match_started = True
+        state.match_ended = True
+        state.pending_roles = {
+            ("runner", 1): protocol.ROLE_RUNNER,
+            ("tagger", 2): protocol.ROLE_TAGGER,
+        }
+
+        handler.return_players_to_lobby()
+
+        bits_packets = [
+            data for data, _ in transport.sent
+            if protocol.unpack_header(data)[0] == protocol.PKT_BITS_INIT
+        ]
+        assert len(bits_packets) == 2
+        assert all(protocol.unpack_bits_init_packet(packet) == [] for packet in bits_packets)
+
+
+def test_pynq_packet_handler_start_match_prefers_board_slot_order_when_roles_are_unspecified():
+    with pynq_import_context():
+        import asyncio
+
+        protocol = importlib.import_module("protocol")
+        packet_handler_mod = importlib.import_module("t2_packet_handler")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+
+        state = match_state_mod.MatchState()
+        handler = packet_handler_mod.PacketHandler(
+            state=state,
+            packet_queue=asyncio.Queue(),
+            write_queue=asyncio.Queue(),
+            udp_transport=None,
+            map_state={
+                "name": "ghost_chase",
+                "width": 32,
+                "height": 32,
+                "tile_scale": 8,
+                "tiles": bytearray(32 * 32),
+                "bits": [],
+                "spawn_positions": [(-24.0, 0.0), (24.0, 0.0)],
+            },
+            on_match_start=lambda: None,
+            on_match_abort=lambda event=None: None,
+            on_match_pause=lambda event=None: None,
+            on_match_resume=lambda event=None: None,
+            on_event=lambda event=None: None,
+        )
+
+        # Insert board 2 first to prove role/spawn order is not driven by dict history.
+        state.players = {
+            ("board2", 2): {
+                "player_id": 0,
+                "x": 9.0,
+                "y": 1.0,
+                "angle": 0.0,
+                "flags": 0,
+                "last_seen": 0.0,
+                "last_seq": None,
+                "movement_mode": 0,
+                "protocol_version": 1,
+                "timed_out": False,
+                "preferred_role": protocol.ROLE_ANY,
+                "board_slot": 2,
+                "control_mode": "manual",
+            },
+            ("board1", 1): {
+                "player_id": 0,
+                "x": -9.0,
+                "y": 1.0,
+                "angle": 0.0,
+                "flags": 0,
+                "last_seen": 0.0,
+                "last_seq": None,
+                "movement_mode": 0,
+                "protocol_version": 1,
+                "timed_out": False,
+                "preferred_role": protocol.ROLE_ANY,
+                "board_slot": 1,
+                "control_mode": "manual",
+            },
+        }
+        state.pending_roles = {
+            ("board2", 2): protocol.ROLE_ANY,
+            ("board1", 1): protocol.ROLE_ANY,
+        }
+
+        started, _ = handler.start_match_from_lobby()
+
+        assert started is True
+        assert state.players[("board1", 1)]["player_id"] == 1
+        assert state.players[("board2", 2)]["player_id"] == 2
+        assert state.players[("board1", 1)]["x"] == -24.0
+        assert state.players[("board2", 2)]["x"] == 24.0
+
+
+def test_pynq_packet_handler_return_to_lobby_requeues_humans_by_board_slot():
+    with pynq_import_context():
+        import asyncio
+
+        protocol = importlib.import_module("protocol")
+        packet_handler_mod = importlib.import_module("t2_packet_handler")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+
+        class DummyQueue:
+            def __init__(self):
+                self.items = []
+
+            def put(self, item):
+                self.items.append(item)
+
+        state = match_state_mod.MatchState()
+        handler = packet_handler_mod.PacketHandler(
+            state=state,
+            packet_queue=asyncio.Queue(),
+            write_queue=DummyQueue(),
+            udp_transport=None,
+            map_state={
+                "name": "lobby",
+                "width": 32,
+                "height": 32,
+                "tile_scale": 8,
+                "tiles": bytearray(32 * 32),
+                "bits": [],
+                "spawn_positions": [(-24.0, 0.0), (24.0, 0.0), (0.0, 24.0)],
+            },
+            on_match_start=lambda: None,
+            on_match_abort=lambda event=None: None,
+            on_match_pause=lambda event=None: None,
+            on_match_resume=lambda event=None: None,
+            on_event=lambda event=None: None,
+        )
+
+        state.players = {
+            ("board2", 2): {
+                "player_id": 2,
+                "x": 12.0,
+                "y": 8.0,
+                "angle": 1.0,
+                "flags": 0,
+                "last_seen": 0.0,
+                "last_seq": 7,
+                "movement_mode": 0,
+                "protocol_version": 1,
+                "timed_out": False,
+                "preferred_role": protocol.ROLE_TAGGER,
+                "board_slot": 2,
+                "control_mode": "manual",
+            },
+            ("board1", 1): {
+                "player_id": 1,
+                "x": 4.0,
+                "y": 8.0,
+                "angle": 0.25,
+                "flags": 0,
+                "last_seen": 0.0,
+                "last_seq": 5,
+                "movement_mode": 0,
+                "protocol_version": 1,
+                "timed_out": False,
+                "preferred_role": protocol.ROLE_RUNNER,
+                "board_slot": 1,
+                "control_mode": "manual",
+            },
+        }
+        state.match_started = True
+
+        handler.return_players_to_lobby()
+
+        assert state.players[("board1", 1)]["player_id"] == 0
+        assert state.players[("board2", 2)]["player_id"] == 0
+        assert state.players[("board1", 1)]["x"] == -24.0
+        assert state.players[("board2", 2)]["x"] == 24.0
+
+
+def test_pynq_redis_broadcast_hides_ghosts_while_waiting_in_lobby():
+    with pynq_import_context():
+        import asyncio
+        import queue
+
+        protocol = importlib.import_module("protocol")
+        redis_io_mod = importlib.import_module("t2_redis_io")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+
+        state = match_state_mod.MatchState()
+        state.match_started = False
+        state.players = {
+            ("board1", 1): {
+                "player_id": 0,
+                "x": -24.0,
+                "y": 0.0,
+                "angle": 0.0,
+                "flags": 0,
+                "last_seen": 0.0,
+                "last_seq": None,
+                "movement_mode": 0,
+                "protocol_version": 1,
+                "timed_out": False,
+                "board_slot": 1,
+            },
+            "ghost:1": {
+                "player_id": 3,
+                "x": 24.0,
+                "y": 0.0,
+                "angle": 0.0,
+                "flags": protocol.FLAG_GHOST,
+                "last_seen": 0.0,
+                "last_seq": None,
+                "movement_mode": 0,
+                "protocol_version": 1,
+                "timed_out": False,
+            },
+        }
+        broadcast_queue = asyncio.Queue()
+        redis_io = redis_io_mod.RedisIO(
+            state=state,
+            map_state={"name": "lobby", "bits": []},
+            broadcast_queue=broadcast_queue,
+            write_queue=queue.SimpleQueue(),
+        )
+
+        asyncio.run(redis_io.push_broadcast(11))
+
+        payload = broadcast_queue.get_nowait()
+        _, _, _, _, players, _ = protocol.unpack_server_packet(payload["data"])
+
+        assert payload["targets"] == [("board1", 1)]
+        assert [player["player_id"] for player in players] == [0]
+        assert not any(player["flags"] & protocol.FLAG_GHOST for player in players)
+
+
+def test_pynq_redis_writes_include_ghost_profiles():
+    with pynq_import_context():
+        import json
+        import queue
+
+        protocol = importlib.import_module("protocol")
+        redis_io_mod = importlib.import_module("t2_redis_io")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+
+        state = match_state_mod.MatchState()
+        state.game_mode = protocol.GAME_MODE_CHASE
+        state.set_ghost_profile(1, speed=0.11, tag_radius=9.0)
+        state.set_ghost_profile(3, speed=0.07, tag_radius=6.5)
+
+        write_queue = queue.SimpleQueue()
+        redis_io = redis_io_mod.RedisIO(
+            state=state,
+            map_state={"name": "lobby", "bits": []},
+            broadcast_queue=None,
+            write_queue=write_queue,
+        )
+
+        redis_io.push_redis_writes(7, 3)
+
+        writes = []
+        while True:
+            try:
+                writes.append(write_queue.get_nowait())
+            except Exception:
+                break
+
+        game_state_write = next(msg for msg in writes if msg.get("key") == "game:state")
+        ghost_profiles = json.loads(game_state_write["mapping"]["ghost_profiles"])
+
+        assert ghost_profiles[0]["slot"] == 1
+        assert ghost_profiles[0]["speed"] == 0.11
+        assert ghost_profiles[0]["tag_radius"] == 9.0
+        assert ghost_profiles[2]["slot"] == 3
+        assert ghost_profiles[2]["speed"] == 0.07
+        assert ghost_profiles[2]["tag_radius"] == 6.5
+
+
+def test_pynq_packet_handler_kicked_board_is_temporarily_blocked_from_rejoining():
+    with pynq_import_context():
+        import asyncio
+
+        protocol = importlib.import_module("protocol")
+        packet_handler_mod = importlib.import_module("t2_packet_handler")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+
+        class DummyTransport:
+            def __init__(self):
+                self.sent = []
+
+            def sendto(self, data, addr):
+                self.sent.append((data, addr))
+
+        class DummyQueue:
+            def __init__(self):
+                self.items = []
+
+            def put(self, item):
+                self.items.append(item)
+
+        state = match_state_mod.MatchState()
+        transport = DummyTransport()
+        write_queue = DummyQueue()
+        handler = packet_handler_mod.PacketHandler(
+            state=state,
+            packet_queue=asyncio.Queue(),
+            write_queue=write_queue,
+            udp_transport=transport,
+            map_state={
+                "name": "lobby",
+                "width": 32,
+                "height": 32,
+                "tile_scale": 8,
+                "tiles": bytearray(32 * 32),
+                "bits": [],
+                "spawn_positions": [(0.0, 0.0), (8.0, 0.0)],
+            },
+            on_match_start=lambda: None,
+            on_match_abort=lambda event=None: None,
+            on_match_pause=lambda event=None: None,
+            on_match_resume=lambda event=None: None,
+            on_event=lambda event=None: None,
+        )
+
+        addr = ("192.168.2.10", 40000)
+        packet = protocol.pack_register_packet(
+            seq=1,
+            x=0.0,
+            y=0.0,
+            angle=0.0,
+            preferred_role=protocol.ROLE_ANY,
+            username="solo",
+            movement_mode=protocol.MOVEMENT_MODE_POSE,
+        )
+
+        handler._process_packet({"data": packet, "addr": addr})
+        sent_before_kick = len(transport.sent)
+
+        kicked, _ = handler.evict_board_slot(1)
+
+        assert kicked is True
+        assert addr not in state.players
+        assert state.reconnect_block_remaining(addr) > 0
+
+        handler._process_packet({"data": packet, "addr": addr})
+
+        assert addr not in state.players
+        assert len(transport.sent) == sent_before_kick
+
+
 def test_pynq_game_tick_set_map_returns_players_to_lobby_on_new_map():
     with pynq_import_context():
         import asyncio
@@ -853,3 +1417,242 @@ def test_pynq_game_tick_set_map_returns_players_to_lobby_on_new_map():
         assert game_tick.state.players["ghost:1"]["flags"] == protocol.FLAG_GHOST
         assert packet_queue.empty()
         assert broadcast_queue.empty()
+
+
+def test_pynq_game_tick_kick_board_removes_target_and_returns_remaining_players_to_lobby():
+    with pynq_import_context():
+        import asyncio
+        import queue
+
+        protocol = importlib.import_module("protocol")
+        game_tick_mod = importlib.import_module("t2_game_tick")
+
+        packet_queue = asyncio.Queue()
+        broadcast_queue = asyncio.Queue()
+        write_queue = queue.SimpleQueue()
+        game_tick = game_tick_mod.GameTick(packet_queue, broadcast_queue, write_queue)
+
+        game_tick.state.players = {
+            ("runner", 1): {
+                "player_id": 1,
+                "x": 4.0,
+                "y": 8.0,
+                "angle": 0.25,
+                "flags": 0,
+                "last_seen": 0.0,
+                "last_seq": 5,
+                "movement_mode": 0,
+                "protocol_version": 1,
+                "timed_out": False,
+                "preferred_role": protocol.ROLE_RUNNER,
+                "board_slot": 1,
+                "control_mode": "manual",
+                "display_name": "runner",
+            },
+            ("tagger", 2): {
+                "player_id": 2,
+                "x": 12.0,
+                "y": 8.0,
+                "angle": 1.0,
+                "flags": 0,
+                "last_seen": 0.0,
+                "last_seq": 7,
+                "movement_mode": 0,
+                "protocol_version": 1,
+                "timed_out": False,
+                "preferred_role": protocol.ROLE_TAGGER,
+                "board_slot": 2,
+                "control_mode": "manual",
+                "display_name": "tagger",
+            },
+            "ghost:1": {
+                "player_id": 3,
+                "x": 20.0,
+                "y": 8.0,
+                "angle": 1.57,
+                "flags": protocol.FLAG_GHOST,
+                "last_seen": 0.0,
+                "last_seq": None,
+                "movement_mode": 0,
+                "protocol_version": 1,
+                "timed_out": False,
+            },
+        }
+        game_tick.state.match_started = True
+        game_tick.state.pending_roles = {
+            ("runner", 1): protocol.ROLE_RUNNER,
+            ("tagger", 2): protocol.ROLE_TAGGER,
+        }
+
+        game_tick._apply_control_command({"cmd": "kick_board", "board_slot": 2})
+
+        assert ("tagger", 2) not in game_tick.state.players
+        assert game_tick.state.match_started is False
+        assert game_tick.state.match_ended is False
+        assert game_tick.state.players[("runner", 1)]["player_id"] == 0
+        assert game_tick.state.players[("runner", 1)]["control_mode"] == "manual"
+        assert game_tick.state.players["ghost:1"]["player_id"] == 3
+        assert game_tick.state.players["ghost:1"]["flags"] == protocol.FLAG_GHOST
+        assert game_tick.state.pending_roles == {("runner", 1): protocol.ROLE_RUNNER}
+
+
+def test_pynq_game_tick_start_board_replay_streams_setup_and_first_frame():
+    with pynq_import_context():
+        import asyncio
+        import queue
+
+        protocol = importlib.import_module("protocol")
+        game_tick_mod = importlib.import_module("t2_game_tick")
+
+        class DummyTransport:
+            def __init__(self):
+                self.sent = []
+
+            def sendto(self, data, addr):
+                self.sent.append((data, addr))
+
+        async def exercise():
+            packet_queue = asyncio.Queue()
+            broadcast_queue = asyncio.Queue()
+            write_queue = queue.SimpleQueue()
+            transport = DummyTransport()
+            game_tick = game_tick_mod.GameTick(
+                packet_queue,
+                broadcast_queue,
+                write_queue,
+                udp_transport=transport,
+            )
+
+            addr = ("runner", 1)
+            game_tick.state.players = {
+                addr: {
+                    "player_id": 0,
+                    "x": 0.0,
+                    "y": 0.0,
+                    "angle": 0.0,
+                    "flags": 0,
+                    "last_seen": 0.0,
+                    "last_seq": None,
+                    "movement_mode": 0,
+                    "protocol_version": 1,
+                    "timed_out": False,
+                    "preferred_role": protocol.ROLE_ANY,
+                    "board_slot": 1,
+                    "control_mode": "manual",
+                    "display_name": "runner",
+                    "username": "runner",
+                    "profile_key": "runner",
+                    "controller_key": "controller-runner",
+                    "identity_source": "username",
+                },
+            }
+            game_tick.tick_count = 42
+            game_tick._load_board_replay = lambda match_id: {
+                "match_id": match_id,
+                "events": [
+                    {"event": "match_start", "map": "chase", "bits": [[8.0, 8.0]]},
+                    {
+                        "event": "state_snapshot",
+                        "map": "chase",
+                        "game_mode": protocol.GAME_MODE_CHASE_BITS,
+                        "bits_mask": 0x0001,
+                        "bits": [[8.0, 8.0]],
+                        "players": [
+                            {"player_id": 1, "x": 4.0, "y": 5.0, "angle": 0.25, "flags": 0},
+                            {"player_id": 2, "x": 10.0, "y": 5.0, "angle": 3.14, "flags": 0},
+                        ],
+                    },
+                ],
+            }
+
+            started, message = game_tick._request_board_replay(1, "match-abc")
+
+            assert started is True
+            assert "loading" in message
+            await game_tick._board_replay_tasks[1]
+
+            packet_types = [protocol.unpack_header(data)[0] for data, _ in transport.sent]
+            assert packet_types[:5] == [
+                protocol.PKT_ACK,
+                protocol.PKT_MAP,
+                protocol.PKT_BITS_INIT,
+                protocol.PKT_NODE_MODE,
+                protocol.PKT_GAME_STATE,
+            ]
+            assert protocol.unpack_node_mode_packet(transport.sent[3][0]) == protocol.NODE_CONTROL_MODE_REPLAY
+            _, seq, _, game_mode, players, bits_mask = protocol.unpack_server_packet(transport.sent[4][0])
+            assert seq == 42
+            assert game_mode == protocol.GAME_MODE_CHASE_BITS
+            assert bits_mask == 0x0001
+            assert [player["player_id"] for player in players] == [1, 2]
+            assert game_tick.state.slot_modes[1] == "replay"
+            assert game_tick.state.players[addr]["control_mode"] == "replay"
+            assert game_tick.state.board_replays[1]["status"] == "playing"
+            assert game_tick.state.board_replays[1]["frame_index"] == 1
+
+        asyncio.run(exercise())
+
+
+def test_pynq_game_tick_stop_board_replay_restores_board_contract():
+    with pynq_import_context():
+        import asyncio
+        import queue
+
+        protocol = importlib.import_module("protocol")
+        game_tick_mod = importlib.import_module("t2_game_tick")
+
+        class DummyTransport:
+            def __init__(self):
+                self.sent = []
+
+            def sendto(self, data, addr):
+                self.sent.append((data, addr))
+
+        packet_queue = asyncio.Queue()
+        broadcast_queue = asyncio.Queue()
+        write_queue = queue.SimpleQueue()
+        transport = DummyTransport()
+        game_tick = game_tick_mod.GameTick(
+            packet_queue,
+            broadcast_queue,
+            write_queue,
+            udp_transport=transport,
+        )
+
+        addr = ("runner", 1)
+        game_tick.state.players = {
+            addr: {
+                "player_id": 0,
+                "x": 0.0,
+                "y": 0.0,
+                "angle": 0.0,
+                "flags": 0,
+                "last_seen": 0.0,
+                "last_seq": None,
+                "movement_mode": 0,
+                "protocol_version": 1,
+                "timed_out": False,
+                "preferred_role": protocol.ROLE_ANY,
+                "board_slot": 1,
+                "control_mode": "replay",
+                "display_name": "runner",
+                "username": "runner",
+                "profile_key": "runner",
+                "controller_key": "controller-runner",
+                "identity_source": "username",
+            },
+        }
+        game_tick.state.slot_modes[1] = "replay"
+
+        game_tick._restore_board_after_replay(1, "manual")
+
+        packet_types = [protocol.unpack_header(data)[0] for data, _ in transport.sent]
+        assert packet_types == [
+            protocol.PKT_ACK,
+            protocol.PKT_MAP,
+            protocol.PKT_BITS_INIT,
+            protocol.PKT_NODE_MODE,
+        ]
+        assert protocol.unpack_node_mode_packet(transport.sent[-1][0]) == protocol.NODE_CONTROL_MODE_MANUAL
+        assert game_tick.state.slot_modes[1] == "manual"
+        assert game_tick.state.players[addr]["control_mode"] == "manual"

@@ -15,7 +15,7 @@ except ImportError:
     Overlay = None
     Clocks = None
 
-import protocol
+import protocol_1 as protocol
 
 
 # Keep protocol.py beside this file on the board.
@@ -704,6 +704,11 @@ def main():
         f"auto_runner_speed={args.auto_runner_speed:.3f} "
         f"auto_tagger_speed={args.auto_tagger_speed:.3f} "
         f"auto_fallback_speed={args.auto_fallback_speed:.3f}"
+    )
+    print(
+        f"[CFG] protocol={getattr(protocol, '__file__', '<unknown>')} "
+        f"node_size={protocol.NODE_SIZE} pkt_register=0x{protocol.PKT_REGISTER:04x} "
+        f"protocol_version={protocol.NODE_PROTOCOL_VERSION}"
     )
 
     USERNAME = args.username

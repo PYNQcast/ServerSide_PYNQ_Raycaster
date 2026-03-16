@@ -3,7 +3,7 @@ import math
 
 # ── Tag / match rules ─────────────────────────────────────────────────────────
 
-TAG_RADIUS       = 20.0   # world-unit proximity that counts as a tag
+TAG_RADIUS       = 16.0   # tighter live tag proximity; easy to tune before per-ghost traits
 MATCH_PLAYERS    = 2      # players required to start a match
 MAX_PLAYERS      = 4      # raised to 2 humans + up to 3 ghosts (tagger slots)
 TAGS_TO_WIN      = 2      # runner must be tagged this many times to end the match
@@ -12,12 +12,12 @@ TAGS_TO_WIN      = 2      # runner must be tagged this many times to end the mat
 # Spawned when both humans declare RUNNER — max 3 to keep the match fair.
 
 MAX_GHOSTS       = 3
-GHOST_SPEED      = 0.6    # world units per tick (~12 wu/s at 20 Hz — intentionally slow early-game pressure)
+GHOST_SPEED      = 0.15   # world units per tick (~9 wu/s at 60 Hz — tuned down to match pynq)
 
 # ── Bits (GAME_MODE_CHASE_BITS) ───────────────────────────────────────────────
 
-BIT_COLLECT_RADIUS = 10.0   # world units — smaller than TAG_RADIUS
-PLAYER_COLLISION_RADIUS = 2.5
+BIT_COLLECT_RADIUS = 8.0    # smaller collect radius to match tighter gameplay
+PLAYER_COLLISION_RADIUS = 2.0
 SPAWN_CLEARANCE_RADIUS = 3.25
 
 # ── Timing (seconds) ──────────────────────────────────────────────────────────
@@ -31,7 +31,7 @@ PAUSE_ABORT_S    = 60.0   # abort only if a paused match stays disconnected this
 # ── Grace period after tag reset ─────────────────────────────────────────────
 # Players are teleported to spawn after each tag, so proximity detection is
 # paused for GRACE_TICKS to let them reach their orbits.
-GRACE_TICKS      = 10     # 0.5 s at 20 Hz
+GRACE_TICKS      = 30     # 0.5 s at 60 Hz
 
 # ── Spawn geometry ────────────────────────────────────────────────────────────
 # Map-relative spawn points for a 32×32 tile map at MAP_TILE_SCALE=8 (256×256 wu).

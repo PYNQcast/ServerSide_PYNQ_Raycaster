@@ -81,7 +81,7 @@ The replay path now works like this:
 3. The replay is stored in S3 as compressed NDJSON
 4. DynamoDB `META` stores the replay key and frame counts
 5. The monitor fetches the replay from S3 by `match_id`
-6. The browser plays back `state_snapshot` frames at 20 Hz
+6. The browser plays back `state_snapshot` frames at the current monitor replay cadence
 
 ## Remaining Nice-to-Haves
 
