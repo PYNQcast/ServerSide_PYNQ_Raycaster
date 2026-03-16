@@ -125,7 +125,7 @@ function drawArena(players, bits, bitsMask) {
         const px = Math.round(originPx + ci * ts);
         const py = Math.round(originPy + drawRi * ts);
         const tw = Math.round(originPx + (ci + 1) * ts) - px;
-        const th = Math.round(originPy + (ri + 1) * ts) - py;
+        const th = Math.round(originPy + (drawRi + 1) * ts) - py;
         ctx.fillRect(px, py, tw, th);
       });
     });
