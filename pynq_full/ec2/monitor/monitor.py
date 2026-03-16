@@ -29,7 +29,7 @@ from monitor_map_store import (
     load_map_entry,
     save_map_entry,
 )
-from replay_store import ReplayNotFoundError, load_replay_payload
+from pynq_full.ec2.replay_store import ReplayNotFoundError, load_replay_payload
 
 REDIS_HOST   = "127.0.0.1"
 REDIS_PORT   = 6379
