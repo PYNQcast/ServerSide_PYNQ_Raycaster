@@ -671,9 +671,9 @@ def _apply_manual_input(state, buttons):
         return
     raw = buttons.read() & 0xF
     if raw & BTN_LEFT:
-        state["angle_raw"] = (state["angle_raw"] + state["turn_step"]) % ANGLE_STEPS
-    if raw & BTN_RIGHT:
         state["angle_raw"] = (state["angle_raw"] - state["turn_step"]) % ANGLE_STEPS
+    if raw & BTN_RIGHT:
+        state["angle_raw"] = (state["angle_raw"] + state["turn_step"]) % ANGLE_STEPS
     state["angle"] = (state["angle_raw"] * 2.0 * math.pi / ANGLE_STEPS) % (2.0 * math.pi)
 
     move = 0.0
