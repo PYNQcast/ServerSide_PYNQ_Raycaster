@@ -3,15 +3,15 @@
 #
 # Adds over basic:
 #   - Sprite BRAM: remote entities (other players/ghosts) + collectible bits
-#   - Auto mode: server-driven steering — position comes from server in auto,
-#     local buttons own position in manual. No fighting, no blending.
+#   - Auto mode: local board steering from authoritative server world snapshots
 #   - Anticheat-aware: FLAG_TAGGED triggers a spawn snap; FLAG_MATCH_END halts
 #     movement and sends heartbeats until next match.
 #   - PKT_BITS_INIT handled: bit positions cached, bitmask updated each tick.
 #   - PKT_NODE_MODE honoured: server can switch manual ↔ auto at runtime.
 #
 # Design principle: manual mode = 100% local authority.
-#                   auto mode   = 100% server authority on position/angle.
+#                   auto mode   = local board steering with server resync on
+#                                 tagged/map-reset/large divergence.
 #                   Both modes  = local collision + BRAM writes every tick.
 #
 # Hardware note (design_1_wrapper.bit / design_1.hwh):
@@ -30,6 +30,7 @@
 
 import argparse
 import errno
+import heapq
 import math
 import os
 import socket
@@ -85,6 +86,16 @@ TURN_STEP    = 26      # angle units per tick at 50 Hz, manual
 COLLISION_R  = 2.0
 AUTO_SPEED   = 0.10    # world units per tick for auto steering
 AUTO_TURN    = 80      # angle units per tick for auto steering
+AUTO_RUNNER_SPEED = AUTO_SPEED
+AUTO_TAGGER_SPEED = 0.11
+AUTO_FALLBACK_SPEED = 0.09
+AUTO_RUNNER_EVADE_DISTANCE = 42.0
+AUTO_TAGGER_SHOOT_RANGE = 26.0
+AUTO_TAGGER_SHOOT_ARC = 0.4
+AUTO_TAGGER_SHOOT_PERIOD_TICKS = 4
+SERVER_POSE_SNAP_DISTANCE = 8.0
+SERVER_POSE_SNAP_ANGLE = 0.75
+MAP_SYNC_INPUT_GRACE_S = 0.35
 BTN_RIGHT    = 1 << 0  # axi_gpio_0 C_GPIO_WIDTH=4 → 4-bit button input
 BTN_BACK     = 1 << 1
 BTN_FWD      = 1 << 2
@@ -127,13 +138,22 @@ def _xy_word(x, y, ts, w, h):
 
 # ── BRAM writes ───────────────────────────────────────────────────────────────
 def _write_map(bram, tiles, w, h):
-    for row in range(h):
+    if w <= 0 or h <= 0 or len(tiles) < (w * h):
+        print(f"[HW] ignored malformed map write ({w}x{h}, tiles={len(tiles)})")
+        return False
+
+    for row in range(MAP_ROWS):
+        bram.write(row * 4, 0)
+
+    for row in range(min(h, MAP_ROWS)):
         word = 0
-        for col in range(w):
-            if tiles[row * w + col]:
-                word |= 1 << (w - 1 - col)
+        base = row * w
+        for col in range(min(w, MAP_COLS)):
+            if tiles[base + col]:
+                word |= 1 << (MAP_COLS - 1 - col)
         bram.write(row * 4, word & 0xFFFFFFFF)
     print(f"[HW] map written ({w}x{h})")
+    return True
 
 def _write_pose(bram, state):
     ts = state["tile_scale"]
@@ -219,6 +239,205 @@ def _resolve_move(state, nx, ny):
     if _walkable(state, state["x"], ny):  return state["x"], ny
     return state["x"], state["y"]
 
+
+def _cell_to_world(col, row, width, height, tile_scale):
+    return (
+        (col - width / 2.0 + 0.5) * tile_scale,
+        (row - height / 2.0 + 0.5) * tile_scale,
+    )
+
+
+def _world_to_cell(state, x, y):
+    map_w = state["map_w"]
+    map_h = state["map_h"]
+    tile_scale = state["tile_scale"]
+    if map_w <= 0 or map_h <= 0 or tile_scale <= 0:
+        return None
+    col = int(math.floor((x / tile_scale) + (map_w / 2.0)))
+    row = int(math.floor((y / tile_scale) + (map_h / 2.0)))
+    if col < 0 or row < 0 or col >= map_w or row >= map_h:
+        return None
+    return (col, row)
+
+
+def _cell_is_open(state, col, row):
+    map_w = state["map_w"]
+    map_h = state["map_h"]
+    tiles = state["tiles"]
+    if col < 0 or row < 0 or col >= map_w or row >= map_h:
+        return False
+    if not tiles:
+        return True
+    return tiles[row * map_w + col] == 0
+
+
+def _nearest_open_cell(state, x, y):
+    origin = _world_to_cell(state, x, y)
+    map_w = state["map_w"]
+    map_h = state["map_h"]
+    tile_scale = state["tile_scale"]
+    if map_w <= 0 or map_h <= 0:
+        return None
+
+    if origin and _cell_is_open(state, origin[0], origin[1]):
+        return origin
+
+    if origin is None:
+        guess_col = min(map_w - 1, max(0, int(round((x / tile_scale) + (map_w / 2.0) - 0.5))))
+        guess_row = min(map_h - 1, max(0, int(round((y / tile_scale) + (map_h / 2.0) - 0.5))))
+        origin = (guess_col, guess_row)
+
+    max_radius = max(map_w, map_h)
+    for radius in range(1, max_radius + 1):
+        row_min = max(0, origin[1] - radius)
+        row_max = min(map_h - 1, origin[1] + radius)
+        col_min = max(0, origin[0] - radius)
+        col_max = min(map_w - 1, origin[0] + radius)
+        for row in range(row_min, row_max + 1):
+            for col in range(col_min, col_max + 1):
+                if abs(col - origin[0]) != radius and abs(row - origin[1]) != radius:
+                    continue
+                if _cell_is_open(state, col, row):
+                    return (col, row)
+    return None
+
+
+def _build_cell_path(state, start_cell, goal_cell):
+    if start_cell is None or goal_cell is None:
+        return []
+    if start_cell == goal_cell:
+        return [start_cell]
+
+    map_w = state["map_w"]
+    map_h = state["map_h"]
+    if map_w <= 0 or map_h <= 0:
+        return []
+
+    open_heap = []
+    heapq.heappush(open_heap, (0, 0, start_cell))
+    came_from = {}
+    g_score = {start_cell: 0}
+    closed = set()
+
+    while open_heap:
+        _, cost_so_far, current = heapq.heappop(open_heap)
+        if current in closed:
+            continue
+        if current == goal_cell:
+            path = [current]
+            while current in came_from:
+                current = came_from[current]
+                path.append(current)
+            path.reverse()
+            return path
+
+        closed.add(current)
+        col, row = current
+        for next_col, next_row in (
+            (col + 1, row),
+            (col - 1, row),
+            (col, row + 1),
+            (col, row - 1),
+        ):
+            if not _cell_is_open(state, next_col, next_row):
+                continue
+            neighbour = (next_col, next_row)
+            next_cost = cost_so_far + 1
+            if next_cost >= g_score.get(neighbour, 1_000_000):
+                continue
+            came_from[neighbour] = current
+            g_score[neighbour] = next_cost
+            heuristic = abs(goal_cell[0] - next_col) + abs(goal_cell[1] - next_row)
+            heapq.heappush(open_heap, (next_cost + heuristic, next_cost, neighbour))
+
+    return []
+
+
+def _path_step_target(state, current_x, current_y, target_x, target_y):
+    if state["map_w"] <= 0 or not state["tiles"]:
+        return (target_x, target_y)
+
+    start_cell = _nearest_open_cell(state, current_x, current_y)
+    goal_cell = _nearest_open_cell(state, target_x, target_y)
+    path = _build_cell_path(state, start_cell, goal_cell)
+    if len(path) >= 2:
+        return _cell_to_world(path[1][0], path[1][1], state["map_w"], state["map_h"], state["tile_scale"])
+    if len(path) == 1:
+        return _cell_to_world(path[0][0], path[0][1], state["map_w"], state["map_h"], state["tile_scale"])
+    return (target_x, target_y)
+
+
+def _active_bit_positions(state):
+    positions = []
+    for index, bit in enumerate(state["bits"]):
+        if bit is None:
+            continue
+        if (state["bits_mask"] & (1 << index)) == 0:
+            continue
+        positions.append(bit)
+    return positions
+
+
+def _compute_evade_target(x, y, threat_x, threat_y, distance):
+    away_x = x - threat_x
+    away_y = y - threat_y
+    length = math.hypot(away_x, away_y)
+    if length < 0.001:
+        away_x, away_y, length = 1.0, 0.0, 1.0
+    away_x /= length
+    away_y /= length
+    lateral_x = -away_y
+    lateral_y = away_x
+    return (
+        x + away_x * distance + lateral_x * (distance * 0.35),
+        y + away_y * distance + lateral_y * (distance * 0.2),
+    )
+
+
+def _choose_auto_objective(state):
+    player_id = state["player_id"]
+    players = [
+        player for player in state["players"]
+        if not (player.get("flags", 0) & protocol.FLAG_MATCH_END)
+    ]
+    runner = next((player for player in players if player.get("player_id") == 1), None)
+    tagger = next((player for player in players if player.get("player_id") == 2), None)
+    x = state["x"]
+    y = state["y"]
+
+    if player_id == 2 and runner:
+        return {"mode": "chase", "target": (float(runner["x"]), float(runner["y"]))}
+
+    if player_id == 1:
+        if tagger:
+            tagger_dx = float(tagger["x"]) - x
+            tagger_dy = float(tagger["y"]) - y
+            tagger_dist = math.hypot(tagger_dx, tagger_dy)
+            if tagger_dist <= AUTO_RUNNER_EVADE_DISTANCE:
+                return {
+                    "mode": "evade",
+                    "target": _compute_evade_target(
+                        x, y, float(tagger["x"]), float(tagger["y"]), AUTO_RUNNER_EVADE_DISTANCE,
+                    ),
+                }
+        if state["game_mode"] == protocol.GAME_MODE_CHASE_BITS:
+            candidates = _active_bit_positions(state)
+            if candidates:
+                target = min(
+                    candidates,
+                    key=lambda bit: (float(bit[0]) - x) ** 2 + (float(bit[1]) - y) ** 2,
+                )
+                return {"mode": "collect", "target": (float(target[0]), float(target[1]))}
+        if tagger:
+            return {
+                "mode": "kite",
+                "target": _compute_evade_target(
+                    x, y, float(tagger["x"]), float(tagger["y"]), AUTO_RUNNER_EVADE_DISTANCE * 0.7,
+                ),
+            }
+
+    return {"mode": "roam", "target": None}
+
 # ── fallback map ──────────────────────────────────────────────────────────────
 def _fallback_map():
     tiles = bytearray(MAP_ROWS * MAP_COLS)
@@ -261,6 +480,19 @@ def _send_state(sock, addr, state):
         state["last_state_tx"] = time.monotonic()
         state["input_flags"]   = 0   # consume shoot flag after sending
 
+
+def _is_newer_seq(prev_seq, seq):
+    if prev_seq is None:
+        return True
+    delta = (int(seq) - int(prev_seq)) & 0xFFFF
+    return delta != 0 and delta <= 0x7FFF
+
+
+def _is_newer_timestamp(prev_ts, timestamp):
+    if prev_ts is None:
+        return True
+    return int(timestamp) >= int(prev_ts)
+
 # ── packet handling ───────────────────────────────────────────────────────────
 def _handle(data, state, bram):
     if len(data) < protocol.HEADER_SIZE:
@@ -269,6 +501,9 @@ def _handle(data, state, bram):
     state["last_rx"] = time.monotonic()
 
     if pkt_type == protocol.PKT_ACK:
+        if not _is_newer_timestamp(state.get("last_ack_ts"), ts):
+            return
+        state["last_ack_ts"] = ts
         if len(data) < protocol.HEADER_SIZE + 1:
             return
         pid = struct.unpack_from("<B", data, protocol.HEADER_SIZE)[0]
@@ -280,6 +515,9 @@ def _handle(data, state, bram):
         state["bits_mask"]   = 0
         state["players"]     = []
         state["input_flags"] = 0
+        state["force_server_pose_sync"] = True
+        state["input_suspended_until"] = time.monotonic() + MAP_SYNC_INPUT_GRACE_S
+        state["last_game_state_seq"] = None
         # hard snap to origin on (re)registration
         state["x"] = state["y"] = 0.0
         state["angle"] = 0.0; state["angle_raw"] = 0
@@ -292,14 +530,26 @@ def _handle(data, state, bram):
             print(f"[ACK] re-ack player_id={pid} role={role} mode={state['mode']}")
 
     elif pkt_type == protocol.PKT_MAP:
+        if not _is_newer_timestamp(state.get("last_map_ts"), ts):
+            return
+        state["last_map_ts"] = ts
         w, h, tile_scale, tiles = protocol.unpack_map_packet(data)
+        if w <= 0 or h <= 0 or tile_scale <= 0 or len(tiles) != (w * h):
+            print(f"[HW] ignored malformed PKT_MAP ({w}x{h}, tiles={len(tiles)})")
+            return
         state["map_w"] = w; state["map_h"] = h
         state["tile_scale"] = tile_scale
         state["tiles"]      = tiles
         state["match_ended"] = False
         state["bits"]        = []
         state["bits_mask"]   = 0
-        _write_map(bram, tiles, w, h)
+        state["players"]     = []
+        state["input_flags"] = 0
+        state["force_server_pose_sync"] = True
+        state["input_suspended_until"] = time.monotonic() + MAP_SYNC_INPUT_GRACE_S
+        state["last_game_state_seq"] = None
+        if not _write_map(bram, tiles, w, h):
+            return
         if not _walkable(state, state["x"], state["y"]):
             state["x"] = state["y"] = 0.0
             state["angle"] = 0.0; state["angle_raw"] = 0
@@ -308,6 +558,9 @@ def _handle(data, state, bram):
         _write_sprites(bram, state)
 
     elif pkt_type == protocol.PKT_BITS_INIT:
+        if not _is_newer_timestamp(state.get("last_bits_ts"), ts):
+            return
+        state["last_bits_ts"] = ts
         raw_bits = protocol.unpack_bits_init_packet(data)
         if raw_bits:
             max_id = max(b[0] for b in raw_bits)
@@ -322,6 +575,9 @@ def _handle(data, state, bram):
         print(f"[BITS_INIT] count={len(raw_bits)}")
 
     elif pkt_type == protocol.PKT_NODE_MODE:
+        if not _is_newer_timestamp(state.get("last_mode_ts"), ts):
+            return
+        state["last_mode_ts"] = ts
         mode_byte = protocol.unpack_node_mode_packet(data)
         new_mode  = "auto" if mode_byte == protocol.NODE_CONTROL_MODE_AUTO else "manual"
         if new_mode != state["mode"]:
@@ -332,37 +588,15 @@ def _handle(data, state, bram):
 
     elif pkt_type == protocol.PKT_GAME_STATE:
         _, rx_seq, rx_ts, game_mode, players, bits_mask = protocol.unpack_server_packet(data)
+        if not _is_newer_seq(state.get("last_game_state_seq"), rx_seq):
+            return
+        state["last_game_state_seq"] = rx_seq
         state["game_mode"]  = game_mode
         state["bits_mask"]  = bits_mask
         state["players"]    = players
         state["sprites_dirty"] = True  # entity positions + bits_mask changed
 
-        # anticheat: detect FLAG_TAGGED on self → server will move us to spawn
-        # trust that snap; do not fight it.
-        for p in players:
-            if p["player_id"] != state["player_id"]:
-                continue
-            was_ended = state["match_ended"]
-            state["match_ended"] = bool(p["flags"] & protocol.FLAG_MATCH_END)
-            if state["match_ended"] and not was_ended:
-                print("[MATCH_END] halting movement")
-            elif was_ended and not state["match_ended"]:
-                # Match restarted mid-session (replay) — re-enable movement
-                print("[MATCH_RESET] movement re-enabled for new match")
-            if p["flags"] & protocol.FLAG_TAGGED:
-                # Server has authority on tagged position — accept regardless of mode
-                state["x"]         = float(p["x"])
-                state["y"]         = float(p["y"])
-                state["angle"]     = float(p["angle"])
-                state["angle_raw"] = _hw_angle(state["angle"])
-                print(f"[TAGGED] snapped to spawn ({state['x']:.1f},{state['y']:.1f})")
-            elif state["mode"] == "auto":
-                # Auto mode: accept server position every tick (server is authoritative)
-                state["x"]         = float(p["x"])
-                state["y"]         = float(p["y"])
-                state["angle"]     = float(p["angle"])
-                state["angle_raw"] = _hw_angle(state["angle"])
-            break
+        _update_local_pose_from_server(state, players)
 
         now = time.monotonic()
         if now - state["last_log"] >= LOG_PERIOD_S:
@@ -384,6 +618,9 @@ def _drain(sock, state, bram):
 # ── manual input ──────────────────────────────────────────────────────────────
 def _apply_manual_input(state, buttons):
     """Buttons own angle and position entirely — server never overrides this."""
+    state["input_flags"] = 0
+    if _input_is_temporarily_suspended(state):
+        return
     raw = buttons.read() & 0xF
     if raw & BTN_LEFT:
         state["angle_raw"] = (state["angle_raw"] + state["turn_step"]) % ANGLE_STEPS
@@ -404,30 +641,114 @@ def _wrap(a):
     """Wrap angle to [-pi, pi]."""
     return (a + math.pi) % (2 * math.pi) - math.pi
 
-def _apply_auto_input(state):
-    """
-    In auto mode the server sends us our own position each tick (accepted in
-    _handle above). This function just computes the shoot flag if we are the
-    tagger and the runner is in range/arc. Position steering is server-driven.
-    """
-    state["input_flags"] = 0
-    if state["match_ended"] or state["player_id"] not in (1, 2):
+
+def _input_is_temporarily_suspended(state):
+    return time.monotonic() < float(state.get("input_suspended_until", 0.0) or 0.0)
+
+
+def _choose_best_step_towards(state, x, y, angle, target, move_speed):
+    desired_angle = math.atan2(target[1] - y, target[0] - x)
+    best = None
+    offsets = (0.0, 0.35, -0.35, 0.7, -0.7, 1.05, -1.05, math.pi)
+    for offset in offsets:
+        candidate_angle = _wrap(desired_angle + offset)
+        desired_x = x + move_speed * math.cos(candidate_angle)
+        desired_y = y + move_speed * math.sin(candidate_angle)
+        next_x, next_y = _resolve_move(state, desired_x, desired_y)
+        blocked = next_x == x and next_y == y
+        score = ((next_x - target[0]) ** 2 + (next_y - target[1]) ** 2) + (abs(offset) * 3.0)
+        if blocked:
+            score += 1_000_000
+        candidate = (score, next_x, next_y, candidate_angle)
+        if best is None or candidate < best:
+            best = candidate
+    if best is None:
+        return x, y, angle, desired_angle
+    return best[1], best[2], best[3], desired_angle
+
+
+def _update_local_pose_from_server(state, players):
+    player_id = state["player_id"]
+    if player_id is None:
         return
 
-    pid = state["player_id"]
-    players = state["players"]
+    for player in players:
+        if player["player_id"] != player_id:
+            continue
+        server_x = float(player["x"])
+        server_y = float(player["y"])
+        server_angle = float(player["angle"])
+        was_ended = state["match_ended"]
+        state["match_ended"] = bool(player["flags"] & protocol.FLAG_MATCH_END)
+        if state["match_ended"] and not was_ended:
+            print("[MATCH_END] halting movement")
+        elif was_ended and not state["match_ended"]:
+            print("[MATCH_RESET] movement re-enabled for new match")
 
-    if pid == 2:   # TAGGER — shoot if runner is in arc
-        runner = next((p for p in players if p["player_id"] == 1), None)
-        if runner:
-            dx = float(runner["x"]) - state["x"]
-            dy = float(runner["y"]) - state["y"]
-            dist = math.hypot(dx, dy)
-            if dist < 30.0:
-                desired = math.atan2(dy, dx)
-                arc_err = abs(_wrap(desired - state["angle"]))
-                if arc_err < 0.5:
-                    state["input_flags"] = protocol.FLAG_INPUT_SHOOT
+        should_snap = bool(player["flags"] & protocol.FLAG_TAGGED) or bool(state.get("force_server_pose_sync"))
+        if not should_snap and state["mode"] == "auto":
+            distance_error = math.hypot(server_x - state["x"], server_y - state["y"])
+            angle_error = abs(_wrap(server_angle - state["angle"]))
+            should_snap = (
+                distance_error >= float(state.get("server_pose_snap_distance", SERVER_POSE_SNAP_DISTANCE))
+                or angle_error >= float(state.get("server_pose_snap_angle", SERVER_POSE_SNAP_ANGLE))
+            )
+
+        if should_snap:
+            state["x"] = server_x
+            state["y"] = server_y
+            state["angle"] = server_angle
+            state["angle_raw"] = _hw_angle(server_angle)
+            state["force_server_pose_sync"] = False
+            if player["flags"] & protocol.FLAG_TAGGED:
+                print(f"[TAGGED] snapped to spawn ({state['x']:.1f},{state['y']:.1f})")
+        return
+
+
+def _apply_auto_input(state):
+    state["input_flags"] = 0
+    if not state["registered"] or state["match_ended"] or state["player_id"] in (None, 0):
+        return
+
+    objective = _choose_auto_objective(state)
+    mode = objective["mode"]
+    target = objective["target"]
+
+    if mode == "chase":
+        move_speed = float(state.get("auto_tagger_speed", AUTO_TAGGER_SPEED))
+    elif mode in {"evade", "collect", "kite"}:
+        move_speed = float(state.get("auto_runner_speed", AUTO_RUNNER_SPEED))
+    else:
+        move_speed = float(state.get("auto_fallback_speed", AUTO_FALLBACK_SPEED))
+
+    if target is None:
+        roam_target = (
+            state["x"] + move_speed * 3.0 * math.cos(state["angle"]),
+            state["y"] + move_speed * 3.0 * math.sin(state["angle"]),
+        )
+        next_x, next_y, next_angle, _ = _choose_best_step_towards(
+            state, state["x"], state["y"], state["angle"], roam_target, move_speed,
+        )
+        state["x"], state["y"], state["angle"] = next_x, next_y, next_angle
+        state["angle_raw"] = _hw_angle(next_angle)
+        return
+
+    nav_target = _path_step_target(state, state["x"], state["y"], target[0], target[1])
+    next_x, next_y, next_angle, desired_angle = _choose_best_step_towards(
+        state, state["x"], state["y"], state["angle"], nav_target, move_speed,
+    )
+    state["x"], state["y"], state["angle"] = next_x, next_y, next_angle
+    state["angle_raw"] = _hw_angle(next_angle)
+
+    if mode == "chase":
+        distance = math.hypot(target[0] - state["x"], target[1] - state["y"])
+        aligned = abs(_wrap(desired_angle - next_angle)) <= float(
+            state.get("auto_tagger_shoot_arc", AUTO_TAGGER_SHOOT_ARC)
+        )
+        shoot_range = float(state.get("auto_tagger_shoot_range", AUTO_TAGGER_SHOOT_RANGE))
+        shoot_period = int(state.get("auto_tagger_shoot_period_ticks", AUTO_TAGGER_SHOOT_PERIOD_TICKS))
+        if aligned and distance <= shoot_range and (int(state.get("tick", 0)) % max(1, shoot_period) == 0):
+            state["input_flags"] = protocol.FLAG_INPUT_SHOOT
 
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
@@ -492,10 +813,26 @@ def main():
         "bits_mask":      0,
         "move_speed":     move_speed,
         "turn_step":      turn_step,
+        "auto_runner_speed": AUTO_RUNNER_SPEED,
+        "auto_tagger_speed": AUTO_TAGGER_SPEED,
+        "auto_fallback_speed": AUTO_FALLBACK_SPEED,
+        "auto_tagger_shoot_range": AUTO_TAGGER_SHOOT_RANGE,
+        "auto_tagger_shoot_arc": AUTO_TAGGER_SHOOT_ARC,
+        "auto_tagger_shoot_period_ticks": AUTO_TAGGER_SHOOT_PERIOD_TICKS,
+        "server_pose_snap_distance": SERVER_POSE_SNAP_DISTANCE,
+        "server_pose_snap_angle": SERVER_POSE_SNAP_ANGLE,
+        "force_server_pose_sync": True,
+        "input_suspended_until": 0.0,
         "last_rx":        None,
         "last_reg_tx":    0.0,
         "last_state_tx":  0.0,
         "last_log":       0.0,
+        "last_ack_ts":    None,
+        "last_map_ts":    None,
+        "last_bits_ts":   None,
+        "last_mode_ts":   None,
+        "last_game_state_seq": None,
+        "tick":           0,
         "sprites_dirty":  True,  # flush once at startup, then on PKT_GAME_STATE / PKT_BITS_INIT
     }
 
@@ -510,6 +847,7 @@ def main():
         while True:
             next_tick += tick_interval
             now = time.monotonic()
+            state["tick"] += 1
 
             _drain(sock, state, bram)
 
@@ -527,7 +865,7 @@ def main():
                 _write_pose(bram, state)
             elif state["mode"] == "auto":
                 _apply_auto_input(state)
-                # position already updated by server in _handle — just write it
+                # auto mode steers locally and only snaps from server on big mismatches
                 _write_pose(bram, state)
             else:
                 _apply_manual_input(state, buttons)

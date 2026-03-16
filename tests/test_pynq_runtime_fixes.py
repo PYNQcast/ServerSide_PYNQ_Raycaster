@@ -24,6 +24,7 @@ def pynq_import_context():
             "protocol",
             "test_package_v2",
             "test_package_v3",
+            "test_package_v4",
             "t2_packet_handler",
             "match_state",
             "game_logic.match_state",
@@ -41,6 +42,7 @@ def pynq_import_context():
                 "protocol",
                 "test_package_v2",
                 "test_package_v3",
+                "test_package_v4",
                 "t2_packet_handler",
                 "match_state",
                 "game_logic.match_state",
@@ -266,6 +268,137 @@ def test_test_package_v3_map_packet_clears_stale_end_and_bits_state():
         assert state["bits"] == []
         assert state["tiles"] == tiles
         assert len(bram.writes) == 32
+
+
+def test_test_package_v4_write_map_clears_stale_rows_before_short_update():
+    with pynq_import_context():
+        test_package = importlib.import_module("test_package_v4")
+
+        bram = DummyBram()
+        old_tiles = bytearray(32 * 32)
+        old_tiles[31 * 32] = 1
+        test_package._write_map(bram, old_tiles, 32, 32)
+
+        short_tiles = bytearray(8 * 8)
+        short_tiles[0] = 1
+        test_package._write_map(bram, short_tiles, 8, 8)
+
+        assert bram.writes[0] == (1 << 31)
+        assert bram.writes[31 * 4] == 0
+
+
+def test_test_package_v4_ignores_stale_map_packets():
+    with pynq_import_context():
+        protocol = importlib.import_module("protocol")
+        test_package = importlib.import_module("test_package_v4")
+
+        def pack_map(timestamp, tiles):
+            header = struct.pack(protocol.HEADER_FMT, protocol.PKT_MAP, 0, timestamp)
+            map_header = struct.pack(protocol.MAP_HEADER_FMT, 32, 32, 8)
+            return header + map_header + bytes(tiles)
+
+        bram = DummyBram()
+        state = {
+            "registered": True,
+            "player_id": 1,
+            "mode": "manual",
+            "x": 0.0,
+            "y": 0.0,
+            "angle": 0.0,
+            "angle_raw": 0,
+            "match_ended": False,
+            "map_w": 32,
+            "map_h": 32,
+            "tile_scale": 8,
+            "tiles": bytearray(32 * 32),
+            "game_mode": protocol.GAME_MODE_CHASE,
+            "bits_mask": 0,
+            "bits": [],
+            "players": [],
+            "input_flags": 0,
+            "last_log": 0.0,
+            "sprites_dirty": False,
+            "force_server_pose_sync": False,
+            "input_suspended_until": 0.0,
+            "last_map_ts": None,
+        }
+
+        fresh_tiles = bytearray(32 * 32)
+        fresh_tiles[0] = 1
+        stale_tiles = bytearray(32 * 32)
+        stale_tiles[(10 * 32) + 10] = 1
+
+        test_package._handle(pack_map(2000, fresh_tiles), state, bram)
+        test_package._handle(pack_map(1000, stale_tiles), state, bram)
+
+        assert state["tiles"] == fresh_tiles
+        assert bram.writes[0] == (1 << 31)
+        assert bram.writes[10 * 4] == 0
+
+
+def test_test_package_v4_auto_runner_prefers_nearest_active_bit_in_bits_mode():
+    with pynq_import_context():
+        protocol = importlib.import_module("protocol")
+        test_package = importlib.import_module("test_package_v4")
+
+        state = {
+            "registered": True,
+            "player_id": 1,
+            "x": 0.0,
+            "y": 0.0,
+            "angle": 0.0,
+            "angle_raw": 0,
+            "input_flags": 0,
+            "match_ended": False,
+            "map_w": 32,
+            "map_h": 32,
+            "tile_scale": 8,
+            "tiles": bytearray(32 * 32),
+            "game_mode": protocol.GAME_MODE_CHASE_BITS,
+            "bits_mask": 0b11,
+            "bits": [(-8.0, 0.0), (24.0, 0.0)],
+            "players": [{"player_id": 1, "x": 0.0, "y": 0.0, "flags": 0}],
+            "tick": 1,
+        }
+
+        test_package._apply_auto_input(state)
+
+        assert state["x"] < 0.0
+        assert (state["input_flags"] & protocol.FLAG_INPUT_SHOOT) == 0
+
+
+def test_test_package_v4_auto_tagger_chases_runner_and_shoots_when_aligned():
+    with pynq_import_context():
+        protocol = importlib.import_module("protocol")
+        test_package = importlib.import_module("test_package_v4")
+
+        state = {
+            "registered": True,
+            "player_id": 2,
+            "x": 0.0,
+            "y": 0.0,
+            "angle": 0.0,
+            "angle_raw": 0,
+            "input_flags": 0,
+            "match_ended": False,
+            "map_w": 32,
+            "map_h": 32,
+            "tile_scale": 8,
+            "tiles": bytearray(32 * 32),
+            "game_mode": protocol.GAME_MODE_CHASE,
+            "bits_mask": 0,
+            "bits": [],
+            "players": [
+                {"player_id": 1, "x": 16.0, "y": 0.0, "flags": 0},
+                {"player_id": 2, "x": 0.0, "y": 0.0, "flags": 0},
+            ],
+            "tick": 0,
+        }
+
+        test_package._apply_auto_input(state)
+
+        assert state["x"] > 0.0
+        assert state["input_flags"] & protocol.FLAG_INPUT_SHOOT
 
 
 def test_test_package_v3_ignores_stale_game_state_packets():
