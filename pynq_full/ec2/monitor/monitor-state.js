@@ -4,10 +4,10 @@ const frameChartCanvas = document.getElementById('frame-chart');
 const frameChartCtx = frameChartCanvas.getContext('2d');
 const stackedFrameChart = document.getElementById('stacked-frame-chart');
 const W = canvas.width, H = canvas.height;
-const TAG_RADIUS     = 20.0;   // must match t2_game_tick.py TAG_RADIUS
+const TAG_RADIUS     = 16.0;   // must match t2_constants.py TAG_RADIUS
 const WORLD_LIMIT    = 80.0;   // fallback half-extent when no map is loaded
 const TILE_SCALE     = 8;      // world units per tile — must match MAP_TILE_SCALE
-const PLAYER_COLLISION_RADIUS = 2.5;
+const PLAYER_COLLISION_RADIUS = 2.0;
 const FLAG_TAGGED    = 0x02;
 const FLAG_MATCH_END = 0x04;
 const MAP_VIEW_PAD  = 24;
@@ -223,13 +223,27 @@ function setMapFilterText(value) {
 
 function updateCanvasLabel() {
   const el = document.getElementById('canvas-label');
+  const replayMapName = replayState?.mapName || _activeMapName;
+  const replayFrame = replayState?.active && replayState.frames.length
+    ? replayState.frames[Math.min(replayState.frameIndex, replayState.frames.length - 1)]
+    : null;
   if (mapData) {
-    const totalBits = latestState?.bits?.length || 0;
-    const remainingBits = countActiveBits(latestState?.bits_mask ?? 0, totalBits);
+    const totalBits = replayFrame ? (replayFrame.bits?.length || 0) : (latestState?.bits?.length || 0);
+    const remainingBits = replayFrame
+      ? countActiveBits(replayFrame.bits_mask ?? 0, totalBits)
+      : countActiveBits(latestState?.bits_mask ?? 0, totalBits);
     const bitText = totalBits ? ` · bits ${remainingBits}/${totalBits}` : '';
-    el.textContent = `fpga live · ${_activeMapName} · ${mapData.width}×${mapData.height} tiles${bitText}`;
+    if (replayState?.active) {
+      el.textContent = `monitor replay · ${replayMapName} · ${mapData.width}×${mapData.height} tiles${bitText}`;
+    } else {
+      el.textContent = `fpga live · ${_activeMapName} · ${mapData.width}×${mapData.height} tiles${bitText}`;
+    }
   } else {
-    el.textContent = `fpga live · ${_activeMapName} · loading map…`;
+    if (replayState?.active) {
+      el.textContent = `monitor replay · ${replayMapName} · loading map…`;
+    } else {
+      el.textContent = `fpga live · ${_activeMapName} · loading map…`;
+    }
   }
 }
 
@@ -460,7 +474,7 @@ function updateMapSelector(activeMap, selectedMap = activeMap) {
     }
   }
   renderMapButtons();
-  if (!mapData || mapData.name !== _activeMapName || activeChanged) {
+  if (!replayState.active && (!mapData || mapData.name !== _activeMapName || activeChanged)) {
     loadMap(_activeMapName);
   }
 }
@@ -500,6 +514,10 @@ async function deleteMapFromControls(mapId) {
 // ── State ──────────────────────────────────────────────────────────────────
 let latestState    = null;
 window.latestState = latestState;
+let latestStateVersion = 0;
+let latestStateReceivedAt = performance.now();
+window.latestStateVersion = latestStateVersion;
+window.latestStateReceivedAt = latestStateReceivedAt;
 let wsHz = 0, wsUpdateCount = 0, wsLastTime = performance.now();
 let renderCount = 0, renderLastTime = performance.now();
 
@@ -518,7 +536,18 @@ let replayState = {
   frameIndex: 0,
   timer: null,
   matchId: null,
+  mapName: null,
 };
+
+function resetTransientArenaState() {
+  for (const key of Object.keys(tagFlash)) delete tagFlash[key];
+  for (const key of Object.keys(tagPos)) delete tagPos[key];
+  for (const key of Object.keys(lastLivePos)) delete lastLivePos[key];
+  for (const key of Object.keys(prevFlags)) delete prevFlags[key];
+  if (window.resetMonitorInterpolationState) {
+    window.resetMonitorInterpolationState();
+  }
+}
 
 function normalisePlayers(players) {
   return (players || []).map((p) => ({
@@ -560,3 +589,4 @@ window.deleteMapFromControls = deleteMapFromControls;
 window.loadMapList = loadMapList;
 window.requestMapListRefresh = requestMapListRefresh;
 window.invalidateMonitorMapCache = invalidateMapCache;
+window.resetTransientArenaState = resetTransientArenaState;

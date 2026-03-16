@@ -20,6 +20,7 @@ from protocol import (
     CLIENT_INPUT_FLAGS, SERVER_STATE_FLAGS, MOVEMENT_MODE_INTENT_ONLY,
     ROLE_ANY, ROLE_RUNNER, ROLE_TAGGER,
     GAME_MODE_CHASE, GAME_MODE_CHASE_BITS, FLAG_GHOST,
+    NODE_CONTROL_MODE_MANUAL, NODE_CONTROL_MODE_AUTO, NODE_CONTROL_MODE_REPLAY,
     # functions
     decode_movement_mode, unpack_node_packet, unpack_register_packet,
     pack_map_packet, pack_bits_init_packet, pack_node_mode_packet,
@@ -27,7 +28,9 @@ from protocol import (
 from t2_constants import (
     MATCH_PLAYERS,
     NODE_TIMEOUT_S,
+    LOBBY_TIMEOUT_S,
     PAUSE_ABORT_S,
+    KICK_RECONNECT_BLOCK_S,
     MAX_GHOSTS,
     PLAYER_COLLISION_RADIUS,
     SPAWN_ANGLES,
@@ -35,6 +38,12 @@ from t2_constants import (
 from game_logic.match_state import MatchState
 from t2_map_loader import resolve_walkable_world
 from player_profiles import build_player_identity
+
+
+# Reject a stale or replayed 16-bit client sequence number with wraparound handling.
+def _validate_seq(prev_seq, seq):
+    delta = (int(seq) - int(prev_seq)) & 0xFFFF
+    return delta != 0 and delta <= 0x7FFF
 
 
 # Drains the inbound packet queue, registers players, sends ACK+MAP on registration
@@ -77,6 +86,28 @@ class PacketHandler:
                 return addr
         return None
 
+    # Remove the human currently occupying a board slot.
+    def evict_board_slot(self, board_slot: int):
+        addr = self._addr_for_board_slot(board_slot)
+        if addr is None:
+            return False, f"board {board_slot} not connected"
+
+        self.state.block_reconnect(addr, KICK_RECONNECT_BLOCK_S)
+        player = self.state.players.pop(addr)
+        self.state.pending_roles.pop(addr, None)
+
+        player_id = int(player.get("player_id", 0) or 0)
+        self.write_queue.put({"op": "del", "key": f"player:{player_id}"})
+
+        label = player.get("display_name") or player.get("username") or (
+            f"player {player_id}" if player_id > 0 else "queued player"
+        )
+        print(
+            f"[T2] evicted board {board_slot} from {addr} "
+            f"(player_id={player_id}, label={label})"
+        )
+        return True, f"board {board_slot} kicked ({label}); reconnect blocked for {KICK_RECONNECT_BLOCK_S:.0f}s"
+
     # Send the runtime control mode packet to one connected board.
     def _send_control_mode(self, addr):
         if self.udp_transport is None:
@@ -85,7 +116,11 @@ class PacketHandler:
         if not player or str(addr).startswith("ghost:"):
             return
         control_mode = str(player.get("control_mode") or "manual").lower()
-        mode_value = 1 if control_mode == "auto" else 0
+        mode_value = {
+            "manual": NODE_CONTROL_MODE_MANUAL,
+            "auto": NODE_CONTROL_MODE_AUTO,
+            "replay": NODE_CONTROL_MODE_REPLAY,
+        }.get(control_mode, NODE_CONTROL_MODE_MANUAL)
         pkt = pack_node_mode_packet(0, mode_value)
         try:
             self.udp_transport.sendto(pkt, addr)
@@ -162,6 +197,15 @@ class PacketHandler:
             self._maybe_resume_match()
             return
 
+        last = p["last_seq"]
+        if last is not None and not _validate_seq(last, seq):
+            last_log = float(p.get("_last_invalid_seq_log_at", 0.0) or 0.0)
+            now = time.monotonic()
+            if (now - last_log) >= 0.5:
+                p["_last_invalid_seq_log_at"] = now
+                print(f"[T2] dropped stale seq for {addr}: prev={last} next={seq}")
+            return
+
         next_x, next_y = x, y
         if movement_mode != MOVEMENT_MODE_INTENT_ONLY:
             next_x, next_y = resolve_walkable_world(
@@ -188,12 +232,50 @@ class PacketHandler:
 
     def _register_player(self, addr, x=0.0, y=0.0, angle=0.0,
                          preferred_role=ROLE_ANY, username=""):
+        remaining = self.state.reconnect_block_remaining(addr)
+        if remaining > 0:
+            print(f"[T2] rejected {addr} — reconnect blocked for {remaining:.1f}s after kick")
+            return
         if self.state.is_in_lockout():
             return
         if self.state.match_started:
             print(f"[T2] rejected {addr} — match already started")
             return
-        # Count only human players (not ghost sentinels) for the cap check
+
+        # ── Dedup: evict stale entry from the same physical board ─────────────
+        # A reconnecting board arrives from a new (ip, port) but keeps the same
+        # IP → same controller_key.  If username is set, profile_key (derived
+        # from username) survives IP changes across WiFi networks.
+        identity = build_player_identity(username, addr)
+        new_ck = identity.get("controller_key", "")
+        new_pk = identity.get("profile_key", "")
+
+        stale_addrs = []
+        for existing_addr, existing_p in list(self.state.players.items()):
+            if str(existing_addr).startswith("ghost:"):
+                continue
+            if existing_addr == addr:
+                continue
+            ex_ck = existing_p.get("controller_key", "")
+            ex_pk = existing_p.get("profile_key", "")
+            # Same IP → same controller_key: definitive match.
+            # Same username-derived profile_key: match when both sides are username-sourced.
+            if new_ck and ex_ck == new_ck:
+                stale_addrs.append(existing_addr)
+            elif (new_pk and ex_pk == new_pk
+                  and identity.get("identity_source") == "username"
+                  and existing_p.get("identity_source") == "username"):
+                stale_addrs.append(existing_addr)
+
+        for stale_addr in stale_addrs:
+            stale_p = self.state.players.pop(stale_addr)
+            self.state.pending_roles.pop(stale_addr, None)
+            self.write_queue.put({"op": "del", "key": f"player:{stale_p['player_id']}"})
+            print(f"[T2] evicted stale {stale_addr} "
+                  f"(player_id={stale_p['player_id']}, board_slot={stale_p.get('board_slot')}) "
+                  f"— same board reconnected at {addr}")
+
+        # ── Cap check (after dedup so freed slot counts as available) ─────────
         human_count = sum(1 for a in self.state.players if not str(a).startswith("ghost:"))
         if human_count >= MATCH_PLAYERS:
             print(f"[T2] rejected {addr} — already at {MATCH_PLAYERS} human players")
@@ -206,8 +288,6 @@ class PacketHandler:
 
         self.state.clear_lockout()
         self.state.pending_roles[addr] = preferred_role
-
-        identity = build_player_identity(username, addr)
 
         # Placeholder player_id=0 until role assignment resolves both players
         self.state.players[addr] = {
@@ -227,14 +307,52 @@ class PacketHandler:
         human_count = sum(1 for a in self.state.players if not str(a).startswith("ghost:"))
         self._send_ack(addr, 0)
         self._send_map(addr)
+        self._send_bits_init(addr)
         self._send_control_mode(addr)
         print(f"[T2] player queued from {addr} (lobby humans={human_count}, ghosts={self._ghost_count()})")
 
     def _human_addrs(self):
-        return [addr for addr in self.state.players if not str(addr).startswith("ghost:")]
+        humans = [
+            (addr, player)
+            for addr, player in self.state.players.items()
+            if not str(addr).startswith("ghost:")
+        ]
+        humans.sort(
+            key=lambda item: (
+                int(item[1].get("board_slot") or MATCH_PLAYERS + 1),
+                repr(item[0]),
+            )
+        )
+        return [addr for addr, _ in humans]
 
     def _ghost_count(self):
         return sum(1 for addr in self.state.players if str(addr).startswith("ghost:"))
+
+    def _ghost_slot_for_player(self, player: dict) -> int:
+        slot = int(player.get("ghost_slot") or 0)
+        if slot > 0:
+            return slot
+        player_id = int(player.get("player_id") or 0)
+        return max(1, player_id - 2)
+
+    def _apply_ghost_profile(self, slot: int, player: dict):
+        profile = self.state.ghost_profile(slot)
+        player["ghost_slot"] = int(slot)
+        player["speed"] = float(profile["speed"])
+        player["tag_radius"] = float(profile["tag_radius"])
+
+    def set_ghost_profile(self, slot: int, speed=None, tag_radius=None):
+        profile = self.state.set_ghost_profile(slot, speed=speed, tag_radius=tag_radius)
+        if profile is None:
+            return False, f"invalid ghost slot {slot}"
+
+        live_ghost = self.state.players.get(f"ghost:{int(slot)}")
+        if live_ghost is not None:
+            self._apply_ghost_profile(int(slot), live_ghost)
+        return True, (
+            f"ghost {int(slot)} traits -> speed {profile['speed']:.2f}, "
+            f"tag radius {profile['tag_radius']:.1f}"
+        )
 
     def _spawn_pose_for_slot(self, slot_index: int):
         positions = self.state.spawn_positions
@@ -251,6 +369,7 @@ class PacketHandler:
                 self.write_queue.put({"op": "del", "key": f"player:{player['player_id']}"})
 
         self.state.reset_match_runtime(arm_lockout=False)
+        self.state.reset_slot_modes()
         self.state.set_spawn_positions(self.map_state.get("spawn_positions", []))
 
         for queue_slot, addr in enumerate(human_addrs):
@@ -268,6 +387,7 @@ class PacketHandler:
             self.state.pending_roles[addr] = player["preferred_role"]
             self._send_ack(addr, 0)
             self._send_map(addr)
+            self._send_bits_init(addr)
             self._send_control_mode(addr)
 
         for addr, player in self.state.players.items():
@@ -280,6 +400,7 @@ class PacketHandler:
             player["flags"] = FLAG_GHOST
             player["last_seq"] = None
             player["timed_out"] = False
+            self._apply_ghost_profile(self._ghost_slot_for_player(player), player)
 
         self.state.next_id = max(
             (player["player_id"] for player in self.state.players.values()),
@@ -296,8 +417,6 @@ class PacketHandler:
         participant_count = len(addrs) + ghost_count
         if not addrs:
             return False, "no human players in the lobby"
-        if participant_count < 2:
-            return False, "need 2 participants to start (two humans or one human plus a ghost)"
 
         roles = {
             addr: self.state.pending_roles.get(
@@ -329,6 +448,7 @@ class PacketHandler:
         self.state.players[runner_addr]["player_id"] = 1
         self._send_ack(runner_addr, 1)
         self._send_map(runner_addr)
+        self._send_bits_init(runner_addr)
         self._send_control_mode(runner_addr)
         print(f"[T2] assigned RUNNER(1) to {runner_addr}")
 
@@ -336,6 +456,7 @@ class PacketHandler:
             self.state.players[tagger_addr]["player_id"] = 2
             self._send_ack(tagger_addr, 2)
             self._send_map(tagger_addr)
+            self._send_bits_init(tagger_addr)
             self._send_control_mode(tagger_addr)
             print(f"[T2] assigned TAGGER(2) to {tagger_addr}")
 
@@ -351,8 +472,6 @@ class PacketHandler:
             self.state.game_mode  = GAME_MODE_CHASE_BITS
             self.state.bits       = [[x, y, True] for x, y in bits]
             self.state.bits_mask  = (1 << len(bits)) - 1
-            for addr in addrs:
-                self._send_bits_init(addr)
         else:
             self.state.game_mode = GAME_MODE_CHASE
             self.state.bits = []
@@ -362,6 +481,8 @@ class PacketHandler:
         self.state.match_tick    = 0
         self.state.reset_positions()
         self._on_match_start()
+        if participant_count == 1:
+            return True, "single-player match started"
         return True, "match started"
 
     # Adjust ghost count at runtime (e.g. from Monitor "set_ghost_count" control command)
@@ -381,7 +502,13 @@ class PacketHandler:
     # Update the desired runtime mode for one stable board slot and notify it if connected.
     def set_node_mode(self, board_slot: int, mode: str):
         target_slot = int(board_slot)
-        target_mode = "auto" if str(mode).lower() == "auto" else "manual"
+        requested_mode = str(mode).lower()
+        if requested_mode == "auto":
+            target_mode = "auto"
+        elif requested_mode == "replay":
+            target_mode = "replay"
+        else:
+            target_mode = "manual"
         self.state.slot_modes[target_slot] = target_mode
         addr = self._addr_for_board_slot(target_slot)
         if addr is None:
@@ -398,7 +525,8 @@ class PacketHandler:
         if ghost_count >= MAX_GHOSTS:
             return
         import math
-        ghost_addr = f"ghost:{ghost_count + 1}"
+        ghost_slot = ghost_count + 1
+        ghost_addr = f"ghost:{ghost_slot}"
         used_ids   = {player["player_id"] for player in self.state.players.values()}
         ghost_id   = 3
         while ghost_id in used_ids:
@@ -406,7 +534,7 @@ class PacketHandler:
         angle      = math.pi / 2
         spawn_positions = self.state.spawn_positions
         x, y = spawn_positions[ghost_id - 1] if ghost_id - 1 < len(spawn_positions) else (0.0, 0.0)
-        self.state.players[ghost_addr] = {
+        ghost = {
             "player_id":        ghost_id,
             "x":                x, "y":  y, "angle": angle,
             "flags":            FLAG_GHOST,
@@ -423,6 +551,8 @@ class PacketHandler:
             "controller_key":   "",
             "identity_source":  "ghost",
         }
+        self._apply_ghost_profile(ghost_slot, ghost)
+        self.state.players[ghost_addr] = ghost
         print(f"[T2] spawned ghost tagger (player_id={ghost_id}) at {ghost_addr}")
 
     # ── Node-to-node messaging ────────────────────────────────────────────────
@@ -440,10 +570,12 @@ class PacketHandler:
             print(f"[T2] failed to send ACK to {addr}: {e}")
 
     # Send PKT_MAP so the node can load tile data into FPGA DRAM
-    def _send_map(self, addr):
-        if self.udp_transport is None or not self.map_state["tiles"]:
+    def _send_map(self, addr, map_state=None):
+        if self.udp_transport is None:
             return
-        ms  = self.map_state
+        ms = map_state or self.map_state
+        if not ms.get("tiles"):
+            return
         pkt = pack_map_packet(0, ms["width"], ms["height"], ms["tile_scale"], ms["tiles"])
         try:
             self.udp_transport.sendto(pkt, addr)
@@ -451,17 +583,15 @@ class PacketHandler:
         except Exception as e:
             print(f"[T2] failed to send PKT_MAP to {addr}: {e}")
 
-    # Send PKT_BITS_INIT so the node knows where bits are — sent once at match start
-    def _send_bits_init(self, addr):
+    # Send PKT_BITS_INIT so the node knows the current bit layout — including zero bits.
+    def _send_bits_init(self, addr, bits=None):
         if self.udp_transport is None:
             return
-        bits = self.map_state.get("bits", [])
-        if not bits:
-            return
-        pkt = pack_bits_init_packet(0, bits)
+        bits_payload = self.map_state.get("bits", []) if bits is None else bits
+        pkt = pack_bits_init_packet(0, bits_payload)
         try:
             self.udp_transport.sendto(pkt, addr)
-            print(f"[T2] sent PKT_BITS_INIT ({len(bits)} bits) to {addr}")
+            print(f"[T2] sent PKT_BITS_INIT ({len(bits_payload)} bits) to {addr}")
         except Exception as e:
             print(f"[T2] failed to send PKT_BITS_INIT to {addr}: {e}")
 
@@ -523,9 +653,11 @@ class PacketHandler:
         for addr, p in list(self.state.players.items()):
             if str(addr).startswith("ghost:"):
                 continue
-            if now - p["last_seen"] <= NODE_TIMEOUT_S:
+            in_lobby = not self.state.match_started or self.state.match_ended
+            timeout = LOBBY_TIMEOUT_S if in_lobby else NODE_TIMEOUT_S
+            if now - p["last_seen"] <= timeout:
                 continue
-            if not self.state.match_started or self.state.match_ended:
+            if in_lobby:
                 lobby_evicted.append(addr)
                 continue
             if p.get("timed_out"):
@@ -537,7 +669,7 @@ class PacketHandler:
         for addr in lobby_evicted:
             p = self.state.players.pop(addr)
             print(f"[T2] evicted queued player {p['player_id']} from {addr} "
-                  f"— no packets for {NODE_TIMEOUT_S}s")
+                  f"— no packets for {LOBBY_TIMEOUT_S:.0f}s")
             self.write_queue.put({"op": "del", "key": f"player:{p['player_id']}"})
 
         if newly_timed_out:

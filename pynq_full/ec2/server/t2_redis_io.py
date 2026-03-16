@@ -15,6 +15,10 @@ from t2_constants import REPLAY_KEY, EVENTS_KEY
 from game_logic.match_state import MatchState
 
 
+def _redis_scalar(value, default=""):
+    return default if value is None else value
+
+
 # Serialises game state for UDP broadcast and Redis persistence
 class RedisIO:
 
@@ -38,8 +42,33 @@ class RedisIO:
         if not self.state.players:
             return
 
-        players     = list(self.state.players.values())
-        human_addrs = [a for a in self.state.players if not str(a).startswith("ghost:")]
+        replay_slots = {
+            int(slot)
+            for slot in getattr(self.state, "board_replays", {})
+            if str(getattr(self.state, "board_replays", {}).get(slot, {}).get("status", "")).lower()
+            in {"loading", "playing"}
+        }
+
+        if self.state.match_started:
+            players = list(self.state.players.values())
+        else:
+            players = [
+                player
+                for addr, player in self.state.players.items()
+                if not str(addr).startswith("ghost:")
+            ]
+        if not players:
+            return
+        human_addrs = [
+            addr
+            for addr, player in self.state.players.items()
+            if (
+                not str(addr).startswith("ghost:")
+                and int(player.get("board_slot") or 0) not in replay_slots
+            )
+        ]
+        if not human_addrs:
+            return
         header  = struct.pack('<HHI', 0x0002, tick_count & 0xFFFF,
                               int(time.time() * 1000) & 0xFFFFFFFF)
         ext     = struct.pack(GAME_STATE_EXT_FMT,
@@ -65,13 +94,16 @@ class RedisIO:
                     "y":               round(p["y"], 4),
                     "angle":           round(p["angle"], 4),
                     "flags":           p["flags"],
-                    "board_slot":      p.get("board_slot", ""),
-                    "control_mode":    p.get("control_mode", ""),
-                    "username":        p.get("username", ""),
-                    "display_name":    p.get("display_name", ""),
-                    "profile_key":     p.get("profile_key", ""),
-                    "controller_key":  p.get("controller_key", ""),
-                    "identity_source": p.get("identity_source", ""),
+                    "board_slot":      _redis_scalar(p.get("board_slot", "")),
+                    "control_mode":    _redis_scalar(p.get("control_mode", "")),
+                    "username":        _redis_scalar(p.get("username", "")),
+                    "display_name":    _redis_scalar(p.get("display_name", "")),
+                    "profile_key":     _redis_scalar(p.get("profile_key", "")),
+                    "controller_key":  _redis_scalar(p.get("controller_key", "")),
+                    "identity_source": _redis_scalar(p.get("identity_source", "")),
+                    "ghost_slot":      _redis_scalar(p.get("ghost_slot", "")),
+                    "speed":           _redis_scalar(round(float(p.get("speed")), 4) if p.get("speed") is not None else ""),
+                    "tag_radius":      _redis_scalar(round(float(p.get("tag_radius")), 4) if p.get("tag_radius") is not None else ""),
                     "is_ghost":        int(bool(p["flags"] & FLAG_GHOST)),
                 },
             })
@@ -82,13 +114,13 @@ class RedisIO:
                 "y":               round(p["y"], 4),
                 "angle":           round(p["angle"], 4),
                 "flags":           p["flags"],
-                "board_slot":      p.get("board_slot", queue_slot),
-                "control_mode":    p.get("control_mode", ""),
-                "username":        p.get("username", ""),
-                "display_name":    p.get("display_name", ""),
-                "profile_key":     p.get("profile_key", ""),
-                "controller_key":  p.get("controller_key", ""),
-                "identity_source": p.get("identity_source", ""),
+                "board_slot":      _redis_scalar(p.get("board_slot", queue_slot), queue_slot),
+                "control_mode":    _redis_scalar(p.get("control_mode", "")),
+                "username":        _redis_scalar(p.get("username", "")),
+                "display_name":    _redis_scalar(p.get("display_name", "")),
+                "profile_key":     _redis_scalar(p.get("profile_key", "")),
+                "controller_key":  _redis_scalar(p.get("controller_key", "")),
+                "identity_source": _redis_scalar(p.get("identity_source", "")),
             }
             for queue_slot, p in enumerate(
                 (
@@ -117,13 +149,21 @@ class RedisIO:
             "match_started":     int(self.state.match_started),
             "match_ended":       int(self.state.match_ended),
             "match_paused":      int(self.state.match_paused),
-            "selected_map":      getattr(self.state, "selected_map_name", ""),
+            "selected_map":      _redis_scalar(getattr(self.state, "selected_map_name", "")),
             "pause_reason":      self.state.pause_reason or "",
             "paused_player_ids": json.dumps(self.state.paused_player_ids),
             "pause_remaining_s": "" if pause_remaining_s is None else round(pause_remaining_s, 2),
             "queued_players":    json.dumps(queued_players),
             "slot_modes":        json.dumps(getattr(self.state, "slot_modes", {1: "manual", 2: "manual"})),
-            "map":               self.map_state.get("name", ""),
+            "board_replays":     json.dumps([
+                getattr(self.state, "board_replays", {})[slot]
+                for slot in sorted(getattr(self.state, "board_replays", {}))
+            ]),
+            "ghost_profiles":    json.dumps([
+                self.state.ghost_profile(slot)
+                for slot in sorted(getattr(self.state, "ghost_profiles", {}))
+            ]),
+            "map":               _redis_scalar(self.map_state.get("name", "")),
             "bits": json.dumps([[round(b[0], 2), round(b[1], 2)]
                                  for b in self.state.bits]),
         }

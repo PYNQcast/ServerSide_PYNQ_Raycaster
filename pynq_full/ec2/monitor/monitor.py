@@ -29,11 +29,12 @@ from monitor_map_store import (
     load_map_entry,
     save_map_entry,
 )
+from pynq_full.ec2.replay_store import ReplayNotFoundError, load_replay_payload
 
 REDIS_HOST   = "127.0.0.1"
 REDIS_PORT   = 6379
 HTTP_PORT    = 8080
-PUSH_RATE_HZ = 20   # push to browser at 20 Hz (match game tick rate)
+PUSH_RATE_HZ = 30   # push to browser at 30 Hz for a smoother minimap without overwhelming Redis/websocket load
 DDB_POLL_INTERVAL_S = 2.0
 SERVICE_POLL_INTERVAL_S = 1.0
 REDIS_STATS_POLL_INTERVAL_S = 1.0
@@ -338,8 +339,15 @@ def _stop_service(name: str):
             pass
     return f"{name} killed"
 
-def handle_control_command(cmd: str):
+def handle_control_command(payload_or_cmd):
     global _service_message
+
+    if isinstance(payload_or_cmd, dict):
+        payload = payload_or_cmd
+        cmd = str(payload.get("cmd", "") or "").strip()
+    else:
+        cmd = str(payload_or_cmd or "").strip()
+        payload = {"cmd": cmd}
 
     def publish_node_mode(board_slot: int, mode: str):
         payload = json.dumps({"cmd": "set_node_mode", "mode": mode, "board_slot": board_slot})
@@ -351,7 +359,7 @@ def handle_control_command(cmd: str):
         _service_message = "force_end sent — session will return to the lobby after the end hold"
     elif cmd == "start_match":
         r.publish("game:control", json.dumps({"cmd": "start_match"}))
-        _service_message = "start_match sent — queued lobby players will be promoted if enough participants exist"
+        _service_message = "start_match sent — queued lobby players will be promoted if at least one human is connected"
     elif cmd == "restart":
         payload = json.dumps({"cmd": "restart"})
         r.publish("game:control", payload)
@@ -388,6 +396,65 @@ def handle_control_command(cmd: str):
         count = int(cmd.split("_")[-1])
         r.publish("game:control", json.dumps({"cmd": "set_ghost_count", "count": count}))
         _service_message = f"ghost count → {count} sent"
+    elif cmd == "set_ghost_profile":
+        try:
+            slot = int(payload.get("slot", 0) or 0)
+        except (TypeError, ValueError):
+            slot = 0
+        if slot not in (1, 2, 3):
+            _service_message = f"invalid ghost slot: {slot}"
+        else:
+            r.publish("game:control", json.dumps({
+                "cmd": "set_ghost_profile",
+                "slot": slot,
+                "speed": payload.get("speed"),
+                "tag_radius": payload.get("tag_radius"),
+            }))
+            _service_message = f"ghost {slot} traits updated"
+    elif cmd == "start_board_replay":
+        try:
+            board_slot = int(payload.get("board_slot", 0) or 0)
+        except (TypeError, ValueError):
+            board_slot = 0
+        match_id = str(payload.get("match_id", "") or "").strip()
+        if board_slot not in (1, 2):
+            _service_message = f"invalid board slot: {board_slot}"
+        elif not match_id:
+            _service_message = "missing match_id for board replay"
+        else:
+            r.publish("game:control", json.dumps({
+                "cmd": "start_board_replay",
+                "board_slot": board_slot,
+                "match_id": match_id,
+            }))
+            _service_message = f"board {board_slot} replay requested for {match_id}"
+    elif cmd == "stop_board_replay":
+        try:
+            board_slot = int(payload.get("board_slot", 0) or 0)
+        except (TypeError, ValueError):
+            board_slot = 0
+        if board_slot not in (1, 2):
+            _service_message = f"invalid board slot: {board_slot}"
+        else:
+            r.publish("game:control", json.dumps({
+                "cmd": "stop_board_replay",
+                "board_slot": board_slot,
+            }))
+            _service_message = f"board {board_slot} replay stop requested"
+    elif cmd.startswith("kick_board:"):
+        try:
+            board_slot = int(cmd.split(":", 1)[1])
+        except (TypeError, ValueError):
+            _service_message = "invalid board slot for kick"
+        else:
+            if board_slot not in (1, 2):
+                _service_message = f"invalid board slot: {board_slot}"
+            else:
+                # If a sim_full node is still subscribed on this slot, tell it to stop
+                # rejoining before we evict the queued/live slot from the PYNQ server.
+                r.publish("game:control", json.dumps({"cmd": "disconnect", "node_index": board_slot - 1}))
+                r.publish("game:control", json.dumps({"cmd": "kick_board", "board_slot": board_slot}))
+                _service_message = f"disconnect + kick sent for board {board_slot}"
     elif cmd == "restart_stack":
         _stop_service("sidecar")
         _stop_service("server")
@@ -520,22 +587,31 @@ def collect_state():
     for pid, raw in enumerate(redis_rows[:9], start=1):
         if not raw:
             continue
+        board_slot = _as_optional_int(raw.get("board_slot"))
+        is_ghost = bool(_as_int(raw.get("is_ghost", 0), 0))
         players.append({
             "id":              pid,
-            "entity_key":      f"player:{pid}",
+            "entity_key":      (
+                f"ghost:{pid}"
+                if is_ghost
+                else (f"board:{board_slot}" if board_slot is not None else f"player:{pid}")
+            ),
             "x":               float(raw.get("x", 0)),
             "y":               float(raw.get("y", 0)),
             "angle":           float(raw.get("angle", 0)),
             "flags":           int(raw.get("flags", 0)),
-            "board_slot":      _as_optional_int(raw.get("board_slot")),
+            "board_slot":      board_slot,
             "control_mode":    raw.get("control_mode", "manual") or "manual",
             "username":        raw.get("username", ""),
             "display_name":    raw.get("display_name", ""),
             "profile_key":     raw.get("profile_key", ""),
             "controller_key":  raw.get("controller_key", ""),
             "identity_source": raw.get("identity_source", ""),
+            "ghost_slot":      _as_optional_int(raw.get("ghost_slot")),
+            "speed":           _as_float(raw.get("speed"), 0.0),
+            "tag_radius":      _as_float(raw.get("tag_radius"), 0.0),
             "sim_slot":        _as_optional_int(raw.get("sim_slot")),
-            "is_ghost":        bool(_as_int(raw.get("is_ghost", 0), 0)),
+            "is_ghost":        is_ghost,
             "queued":          False,
             "queue_slot":      None,
         })
@@ -565,6 +641,36 @@ def collect_state():
             }
         except Exception:
             slot_modes = {1: "manual", 2: "manual"}
+    ghost_profiles = []
+    if game_raw and game_raw.get("ghost_profiles"):
+        try:
+            ghost_profiles = [
+                {
+                    "slot": _as_int(raw.get("slot", index), index),
+                    "speed": _as_float(raw.get("speed"), 0.0),
+                    "tag_radius": _as_float(raw.get("tag_radius"), 0.0),
+                }
+                for index, raw in enumerate(json.loads(game_raw["ghost_profiles"]), start=1)
+            ]
+        except Exception:
+            ghost_profiles = []
+    board_replays = []
+    if game_raw and game_raw.get("board_replays"):
+        try:
+            board_replays = [
+                {
+                    "board_slot": _as_int(raw.get("board_slot", index), index),
+                    "match_id": str(raw.get("match_id", "") or ""),
+                    "status": str(raw.get("status", "idle") or "idle"),
+                    "frame_index": _as_int(raw.get("frame_index", 0), 0),
+                    "frame_count": _as_int(raw.get("frame_count", 0), 0),
+                    "view_player_id": _as_int(raw.get("view_player_id", index), index),
+                    "message": str(raw.get("message", "") or ""),
+                }
+                for index, raw in enumerate(json.loads(game_raw["board_replays"]), start=1)
+            ]
+        except Exception:
+            board_replays = []
     queued_players = []
     if game_raw and game_raw.get("queued_players"):
         try:
@@ -573,6 +679,7 @@ def collect_state():
             queued_players = []
     for index, raw in enumerate(queued_players, start=1):
         queue_slot = _as_int(raw.get("queue_slot", index), index)
+        board_slot = _as_optional_int(raw.get("board_slot")) or queue_slot
         entity_key_seed = (
             raw.get("profile_key")
             or raw.get("display_name")
@@ -581,12 +688,12 @@ def collect_state():
         )
         players.append({
             "id":              0,
-            "entity_key":      f"queued:{queue_slot}:{entity_key_seed}",
+            "entity_key":      f"board:{board_slot}" if board_slot is not None else f"queued:{queue_slot}:{entity_key_seed}",
             "x":               _as_float(raw.get("x"), 0.0),
             "y":               _as_float(raw.get("y"), 0.0),
             "angle":           _as_float(raw.get("angle"), 0.0),
             "flags":           _as_int(raw.get("flags", 0), 0),
-            "board_slot":      _as_optional_int(raw.get("board_slot")) or queue_slot,
+            "board_slot":      board_slot,
             "control_mode":    raw.get("control_mode", slot_modes.get(queue_slot, "manual")) or slot_modes.get(queue_slot, "manual"),
             "username":        raw.get("username", ""),
             "display_name":    raw.get("display_name", ""),
@@ -669,6 +776,8 @@ def collect_state():
         "active_map": active_map,
         "selected_map": selected_map,
         "slot_modes": slot_modes,
+        "board_replays": board_replays,
+        "ghost_profiles": ghost_profiles,
         "match": {
             "started": match_started,
             "ended": match_ended,
@@ -701,43 +810,15 @@ async def state_cache_loop():
 
 
 def fetch_replay(match_id: str):
-    if match_id in _replay_cache:
-        return _replay_cache[match_id]
-
-    resp = dyndb.get_item(Key={"match_id": match_id, "record_type": "META"})
-    item = resp.get("Item")
-    if not item:
-        raise web.HTTPNotFound(text=f"unknown match_id: {match_id}")
-
-    bucket = item.get("replay_s3_bucket")
-    key = item.get("replay_s3_key")
-    if not bucket or not key:
-        raise web.HTTPNotFound(text=f"no replay stored for {match_id}")
-
-    obj = s3.get_object(Bucket=bucket, Key=key)
-    body = obj["Body"].read()
-    if key.endswith(".gz"):
-        body = gzip.decompress(body)
-
-    events = []
-    for line in body.decode("utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        events.append(json.loads(line))
-
-    payload = {
-        "match_id": match_id,
-        "bucket": bucket,
-        "key": key,
-        "events": events,
-    }
-    _replay_cache[match_id] = payload
-    if len(_replay_cache) > 8:
-        oldest = next(iter(_replay_cache))
-        if oldest != match_id:
-            _replay_cache.pop(oldest, None)
-    return payload
+    try:
+        return load_replay_payload(
+            match_id,
+            cache=_replay_cache,
+            dynamo_table=dyndb,
+            s3_client=s3,
+        )
+    except ReplayNotFoundError as exc:
+        raise web.HTTPNotFound(text=str(exc))
 
 
 def fetch_players():
@@ -801,7 +882,7 @@ async def ws_handler(request):
                     data = json.loads(msg.data)
                     cmd = data.get("cmd")
                     if cmd:
-                        result = await asyncio.to_thread(handle_control_command, cmd)
+                        result = await asyncio.to_thread(handle_control_command, data)
                         print(f"[monitor] command {cmd}: {result}")
             except asyncio.TimeoutError:
                 pass  # normal — no message from browser this tick
@@ -887,6 +968,15 @@ async def player_handler(request):
     return web.json_response(payload)
 
 
+async def state_handler(request):
+    try:
+        payload = await asyncio.to_thread(refresh_state_cache)
+    except Exception as e:
+        print(f"[monitor] state fetch error: {e}")
+        raise web.HTTPInternalServerError(text="failed to load live state")
+    return web.json_response(payload)
+
+
 async def control_handler(request):
     try:
         data = await request.json()
@@ -898,11 +988,11 @@ async def control_handler(request):
         raise web.HTTPBadRequest(text="missing cmd")
 
     try:
-        await asyncio.to_thread(handle_control_command, cmd)
+        message = await asyncio.to_thread(handle_control_command, data)
     except Exception as exc:
         print(f"[monitor] control error for {cmd}: {exc}")
         raise web.HTTPInternalServerError(text="failed to apply control")
-    return web.json_response({"ok": True, "cmd": cmd})
+    return web.json_response({"ok": True, "cmd": cmd, "message": message})
 
 
 async def maps_list_handler(request):
@@ -943,8 +1033,8 @@ async def map_save_handler(request):
     apply_map = bool(data.get("apply"))
     try:
         payload = await asyncio.to_thread(save_map_entry, MAPS_DIR, data, map_dyndb)
-        if apply_map and len(payload.get("spawns", [])) < 2:
-            raise MapStorageError("pushing live requires two spawn points")
+        if apply_map and len(payload.get("spawns", [])) < 1:
+            raise MapStorageError("pushing live requires at least one spawn point")
         if apply_map:
             await asyncio.to_thread(handle_control_command, f"set_map:{payload['map_id']}")
     except MapStorageError as exc:
@@ -999,6 +1089,7 @@ async def main():
         app.router.add_get(f"/{logo_asset_name}", asset_handler)
     app.router.add_get("/ws", ws_handler)
     app.router.add_get("/api/replay/{match_id}", replay_handler)
+    app.router.add_get("/api/state", state_handler)
     app.router.add_get("/api/players", players_handler)
     app.router.add_get("/api/players/{player_key}", player_handler)
     app.router.add_post("/api/control", control_handler)

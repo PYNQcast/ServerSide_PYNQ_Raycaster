@@ -3,7 +3,7 @@ import math
 
 # ── Tag / match rules ─────────────────────────────────────────────────────────
 
-TAG_RADIUS       = 20.0
+TAG_RADIUS       = 16.0   # smaller live tag proximity; easy to tune here before per-ghost traits
 MATCH_PLAYERS    = 2
 MAX_PLAYERS      = 4      # raised to 2 humans + up to 3 ghosts (tagger slots)
 TAGS_TO_WIN      = 2
@@ -12,14 +12,14 @@ TAGS_TO_WIN      = 2
 # Spawned when both humans declare RUNNER — max 3 to keep the match fair.
 
 MAX_GHOSTS       = 3
-GHOST_SPEED      = 0.2    # world units per tick (~12 wu/s at 60 Hz — matches sim-side ghost pressure)
+GHOST_SPEED      = 0.15   # world units per tick (~9 wu/s at 60 Hz — tuned down for fairer pressure)
 
 # ── Bits (GAME_MODE_CHASE_BITS) ───────────────────────────────────────────────
 # Bit positions are defined in the map file ('B' tile type).
 # Runner collects bits by proximity; all collected = runner wins.
 
-BIT_COLLECT_RADIUS = 10.0   # world units — smaller than TAG_RADIUS so collecting is precise
-PLAYER_COLLISION_RADIUS = 2.5
+BIT_COLLECT_RADIUS = 8.0    # smaller collect radius to match the tighter gameplay feel
+PLAYER_COLLISION_RADIUS = 2.0
 SPAWN_CLEARANCE_RADIUS = 3.25
 
 # ── Timing (seconds) ──────────────────────────────────────────────────────────
@@ -27,7 +27,9 @@ SPAWN_CLEARANCE_RADIUS = 3.25
 TAG_FLASH_S      = 0.3
 MATCH_END_HOLD_S = 0.5
 LOCKOUT_S        = 0.5    # reject re-registration for this long after match end
+KICK_RECONNECT_BLOCK_S = 30.0  # cooldown after a monitor kick so auto-registering boards stay out briefly
 NODE_TIMEOUT_S   = 60.0   # pause the match after this long with no packets from a human node
+LOBBY_TIMEOUT_S  = 10.0   # evict lobby/queued players faster — no match to pause yet
 PAUSE_ABORT_S    = 60.0   # abort only if a paused match stays disconnected this much longer
 
 # ── Grace period after tag reset ─────────────────────────────────────────────

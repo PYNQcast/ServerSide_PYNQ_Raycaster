@@ -9,7 +9,7 @@ This is the live server-side runtime.
 - [t1_udp_receiver.py](/home/akendall/Documents/ServerSide_PYNQ_Raycaster/ec2/server/t1_udp_receiver.py)
   - UDP ingress on port `9000`
 - [t2_game_tick.py](/home/akendall/Documents/ServerSide_PYNQ_Raycaster/ec2/server/t2_game_tick.py)
-  - 20 Hz authoritative game tick
+  - 60 Hz authoritative game tick
 - [t3_broadcaster.py](/home/akendall/Documents/ServerSide_PYNQ_Raycaster/ec2/server/t3_broadcaster.py)
   - UDP fan-out to clients
 - [t4_redis_writer.py](/home/akendall/Documents/ServerSide_PYNQ_Raycaster/ec2/server/t4_redis_writer.py)
