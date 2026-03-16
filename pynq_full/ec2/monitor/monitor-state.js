@@ -2,7 +2,6 @@ const canvas = document.getElementById('arena');
 const ctx    = canvas.getContext('2d');
 const frameChartCanvas = document.getElementById('frame-chart');
 const frameChartCtx = frameChartCanvas.getContext('2d');
-const stackedFrameChart = document.getElementById('stacked-frame-chart');
 const W = canvas.width, H = canvas.height;
 const TAG_RADIUS     = 16.0;   // must match t2_constants.py TAG_RADIUS
 const WORLD_LIMIT    = 80.0;   // fallback half-extent when no map is loaded
@@ -32,12 +31,9 @@ let _mapListRefreshTimer = 0;
 let _activePage = 'game';
 let _archiveDrawerOpen = false;
 const frameTimeHistory = [];
-const STACKED_BUFFER_SIZE = 120;
-const STACKED_MAX_MS = 35;   // ~33ms at 30 Hz push rate — bars fill chart height
-const STACKED_CHART_HEIGHT = 160;
-let _lastStackedRender = 0;
-const stackedFrameBuffer = [];
-let stackedFrameId = 0;
+const LATENCY_BUFFER_SIZE = 120;
+const latencyHistory = [];   // WS transit ms per message
+let _lastLatencyRender = 0;
 let lastRenderSampleAt = performance.now();
 const MAP_SELECT_GRACE_MS = 1500;
 
@@ -333,90 +329,71 @@ function drawFrameChart() {
   });
 }
 
-function renderStackedFrameChart() {
-  if (!stackedFrameChart) return;
+function pushLatencySample(transitMs) {
+  latencyHistory.push(transitMs);
+  if (latencyHistory.length > LATENCY_BUFFER_SIZE) latencyHistory.shift();
+}
 
-  stackedFrameChart.innerHTML = '';
-  if (!stackedFrameBuffer.length) {
-    stackedFrameChart.innerHTML = '<div class="stacked-bars-empty">collecting frame timings...</div>';
+function maybeRenderLatencyChart() {
+  const now = performance.now();
+  if (now - _lastLatencyRender < 100) return;
+  _lastLatencyRender = now;
+
+  const canvas = document.getElementById('latency-chart');
+  if (!canvas) return;
+  const ctx2 = canvas.getContext('2d');
+  const W2 = canvas.width, H2 = canvas.height;
+  ctx2.clearRect(0, 0, W2, H2);
+  ctx2.fillStyle = '#07101e';
+  ctx2.fillRect(0, 0, W2, H2);
+
+  if (!latencyHistory.length) {
+    ctx2.fillStyle = '#7aa3d1';
+    ctx2.font = '12px Courier New';
+    ctx2.fillText('waiting for WS messages...', 10, H2 / 2);
     return;
   }
 
-  const fragment = document.createDocumentFragment();
-  stackedFrameBuffer.forEach((frame) => {
-    const col = document.createElement('div');
-    col.className = 'stacked-col';
-    col.setAttribute('data-total', frame.total_ms.toFixed(1));
-
-    let remainingMs = STACKED_MAX_MS;
-    const segments = [
-      { ms: frame.stages.dispatch_ms, cls: 'seg-dispatch' },
-      { ms: frame.stages.compute_ms, cls: 'seg-compute' },
-      { ms: frame.stages.network_ms, cls: 'seg-network' },
-      { ms: frame.stages.composite_ms, cls: 'seg-composite' },
-    ];
-
-    segments.forEach((segment) => {
-      const visibleMs = Math.max(0, Math.min(segment.ms, remainingMs));
-      remainingMs -= visibleMs;
-      if (visibleMs <= 0) return;
-
-      const seg = document.createElement('div');
-      seg.className = `seg ${segment.cls}`;
-      seg.style.height = `${(visibleMs / STACKED_MAX_MS) * STACKED_CHART_HEIGHT}px`;
-      col.appendChild(seg);
-    });
-
-    fragment.appendChild(col);
+  const maxMs = Math.max(80, ...latencyHistory);
+  const gridLines = [20, 40, 60];
+  ctx2.strokeStyle = 'rgba(0, 212, 255, 0.15)';
+  ctx2.lineWidth = 1;
+  gridLines.forEach((ms) => {
+    if (ms > maxMs) return;
+    const y = H2 - (ms / maxMs) * (H2 - 4) - 2;
+    ctx2.beginPath(); ctx2.moveTo(0, y); ctx2.lineTo(W2, y); ctx2.stroke();
+    ctx2.fillStyle = 'rgba(0,212,255,0.35)';
+    ctx2.font = '9px Courier New';
+    ctx2.fillText(`${ms}ms`, 2, y - 2);
   });
 
-  stackedFrameChart.appendChild(fragment);
-}
+  const step = W2 / (LATENCY_BUFFER_SIZE - 1);
+  ctx2.beginPath();
+  latencyHistory.forEach((ms, i) => {
+    const x = i * step;
+    const y = H2 - (ms / maxMs) * (H2 - 4) - 2;
+    if (i === 0) ctx2.moveTo(x, y); else ctx2.lineTo(x, y);
+  });
+  ctx2.strokeStyle = '#00d4ff';
+  ctx2.lineWidth = 1.5;
+  ctx2.stroke();
 
-function pushStackedFrame(frame) {
-  if (!frame || !frame.stages) return;
-  stackedFrameBuffer.push(frame);
-  if (stackedFrameBuffer.length > STACKED_BUFFER_SIZE) {
-    stackedFrameBuffer.shift();
-  }
-  // Rendering is driven by the render loop — no DOM rebuild here.
-}
+  // Colour-coded dots at each sample
+  latencyHistory.forEach((ms, i) => {
+    const x = i * step;
+    const y = H2 - (ms / maxMs) * (H2 - 4) - 2;
+    ctx2.beginPath();
+    ctx2.arc(x, y, 2, 0, Math.PI * 2);
+    ctx2.fillStyle = ms >= 60 ? '#ff4444' : ms >= 20 ? '#ffd700' : '#00ff88';
+    ctx2.fill();
+  });
 
-function maybeRenderStackedFrameChart() {
-  const now = performance.now();
-  if (now - _lastStackedRender < 100) return;  // cap redraws at ~10 Hz
-  _lastStackedRender = now;
-  renderStackedFrameChart();
-}
-
-function generateDummyPipelineFrame() {
-  stackedFrameId += 1;
-  const wave = (Math.sin(stackedFrameId / 8) + 1) * 0.5;
-  const burst = stackedFrameId % 37 === 0 ? 5 + Math.random() * 5 : 0;
-  const dispatch = 0.8 + Math.random() * 0.8;
-  const compute = 6.2 + wave * 4.8 + Math.random() * 2.4 + burst;
-  const network = 1.4 + Math.random() * 1.6 + (stackedFrameId % 19 === 0 ? 1.2 : 0);
-  const composite = 1.0 + Math.random() * 1.2;
-  const total = dispatch + compute + network + composite;
-
-  return {
-    frame_id: stackedFrameId,
-    total_ms: total,
-    stages: {
-      dispatch_ms: dispatch,
-      compute_ms: compute,
-      network_ms: network,
-      composite_ms: composite,
-    },
-  };
-}
-
-function seedStackedFrameChart() {
-  if (!stackedFrameChart) return;
-  while (stackedFrameBuffer.length < STACKED_BUFFER_SIZE) {
-    stackedFrameBuffer.push(generateDummyPipelineFrame());
-  }
-  renderStackedFrameChart();
+  const avg = latencyHistory.reduce((s, v) => s + v, 0) / latencyHistory.length;
+  const current = latencyHistory[latencyHistory.length - 1];
+  const currentEl = document.getElementById('latency-chart-current');
+  const avgEl = document.getElementById('latency-chart-avg');
+  if (currentEl) currentEl.textContent = `${Math.round(current)} ms`;
+  if (avgEl) avgEl.textContent = `avg ${avg.toFixed(1)} ms`;
 }
 
 function deriveMatchStateLabel(state) {

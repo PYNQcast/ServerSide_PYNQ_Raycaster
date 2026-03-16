@@ -614,6 +614,7 @@ def collect_state():
             "is_ghost":        is_ghost,
             "queued":          False,
             "queue_slot":      None,
+            "perf":            raw.get("perf", ""),
         })
 
     game_raw  = redis_rows[9]
