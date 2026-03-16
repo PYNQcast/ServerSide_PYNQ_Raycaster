@@ -60,19 +60,18 @@ LOG_PERIOD_S     = 1.0
 # Words 0–31   : map rows (one 32-bit word per row, bit N = tile N)
 # Word  32     : player position  (x[31:16] | y[15:0])  Q6.10 fixed-point
 # Word  33     : player angle     (12-bit raw angle)
-# Word  34     : remote entity count
-# Words 35–42  : 4 remote entity slots × 2 words each (xy word, meta word)
-# Word  43     : bits count
-# Word  44     : bits mask (active bitmask)
-# Words 45–60  : up to 16 bit position xy words
+# Word  34     : sprite 0 xy position   (x[31:16] | y[15:0])  — hardcoded by HDL
+# Word  35     : sprite 0 metadata      valid[31] | id[30:24] | flags[23:16] | angle[11:0]
+# Word  36     : sprite 1 xy position   (v_r_sprite_* pipeline, second slot)
+# Word  37     : sprite 1 metadata
+# ... (further slots may be read if HDL supports them)
 MAP_ROWS = MAP_COLS = 32
 PLAYER_POS_OFFSET     = 32 * 4
 PLAYER_ANGLE_OFFSET   = 33 * 4
-ENTITY_COUNT_OFFSET   = 34 * 4
-ENTITY_BASE_OFFSET    = 35 * 4
-ENTITY_STRIDE         = 2          # words per entity slot
+ENTITY_BASE_OFFSET    = 34 * 4   # HDL reads sprite xy directly from word 34 — no count word
+ENTITY_STRIDE         = 2          # words per entity slot (xy + meta)
 MAX_ENTITIES          = 4
-BITS_COUNT_OFFSET     = (35 + ENTITY_STRIDE * MAX_ENTITIES) * 4
+BITS_COUNT_OFFSET     = (34 + ENTITY_STRIDE * MAX_ENTITIES) * 4
 BITS_MASK_OFFSET      = BITS_COUNT_OFFSET + 4
 BITS_BASE_OFFSET      = BITS_MASK_OFFSET  + 4
 MAX_BITS              = 16
@@ -170,7 +169,7 @@ def _write_sprites(bram, state):
     )
     entities = (humans + ghosts)[:MAX_ENTITIES]
 
-    bram.write(ENTITY_COUNT_OFFSET, len(entities) & 0xFFFFFFFF)
+    # No count word — HDL reads sprite xy directly from ENTITY_BASE_OFFSET (word 34).
     for slot in range(MAX_ENTITIES):
         base = ENTITY_BASE_OFFSET + slot * ENTITY_STRIDE * 4
         if slot < len(entities):
