@@ -63,6 +63,7 @@ class MatchState:
 
     def clear_match(self, arm_lockout: bool):
         self.players       = {}   # addr → player dict (ghost addrs use sentinel "ghost:<id>")
+        self.purge_expired_reconnect_blocks()
         self.reset_match_runtime(arm_lockout=arm_lockout)
 
     def reset_match_runtime(self, arm_lockout: bool):
@@ -180,6 +181,12 @@ class MatchState:
             self.reconnect_blocked_until.pop(addr, None)
             return 0.0
         return remaining
+
+    def purge_expired_reconnect_blocks(self):
+        now = time.monotonic()
+        expired = [addr for addr, deadline in self.reconnect_blocked_until.items() if deadline <= now]
+        for addr in expired:
+            del self.reconnect_blocked_until[addr]
 
     # True while match_tick is below GRACE_TICKS — proximity check is skipped
     def in_grace_period(self) -> bool:
