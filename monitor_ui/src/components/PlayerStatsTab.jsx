@@ -84,6 +84,18 @@ export default function PlayerStatsTab() {
     }
   }
 
+  async function fetchLiveState() {
+    try {
+      const response = await fetch('/api/state');
+      if (!response.ok) throw new Error(`LIVE STATE FETCH FAILED (${response.status})`);
+      const payload = await response.json();
+      const items = Array.isArray(payload.players) ? payload.players.slice() : [];
+      startTransition(() => setLivePlayers(items));
+    } catch (_fetchError) {
+      // Preserve the last good live snapshot if this refresh fails.
+    }
+  }
+
   async function fetchPlayerDetail(playerKey) {
     selectedKeyRef.current = playerKey;
     setDetailLoading(true);
@@ -138,6 +150,7 @@ export default function PlayerStatsTab() {
 
   useEffect(() => {
     fetchProfiles();
+    fetchLiveState();
 
     const section = document.getElementById('page-players');
     if (!section) return () => {};
@@ -146,7 +159,10 @@ export default function PlayerStatsTab() {
     const observer = new MutationObserver(() => {
       const visible = !section.hidden;
       setPageVisible(visible);
-      if (visible) fetchProfiles({ silent: true });
+      if (visible) {
+        fetchProfiles({ silent: true });
+        fetchLiveState();
+      }
     });
     observer.observe(section, { attributes: true, attributeFilter: ['hidden'] });
     return () => observer.disconnect();
@@ -154,6 +170,7 @@ export default function PlayerStatsTab() {
 
   useEffect(() => {
     if (!pageVisible) return () => {};
+    fetchLiveState();
     const syncLivePlayers = (state = window.latestState) => {
       const snapshot = Array.isArray(state?.players) ? state.players.slice() : [];
       startTransition(() => setLivePlayers(snapshot));
@@ -161,10 +178,16 @@ export default function PlayerStatsTab() {
     const handleState = (event) => {
       syncLivePlayers(event.detail);
     };
+    const intervalId = window.setInterval(() => {
+      fetchLiveState();
+    }, 2000);
 
     syncLivePlayers();
     window.addEventListener(MONITOR_STATE_EVENT, handleState);
-    return () => window.removeEventListener(MONITOR_STATE_EVENT, handleState);
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener(MONITOR_STATE_EVENT, handleState);
+    };
   }, [pageVisible]);
 
   const liveByProfileKey = new Map();

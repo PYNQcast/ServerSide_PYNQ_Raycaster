@@ -29,6 +29,7 @@ from t2_constants import (
     NODE_TIMEOUT_S,
     LOBBY_TIMEOUT_S,
     PAUSE_ABORT_S,
+    KICK_RECONNECT_BLOCK_S,
     MAX_GHOSTS,
     PLAYER_COLLISION_RADIUS,
     SPAWN_ANGLES,
@@ -90,6 +91,7 @@ class PacketHandler:
         if addr is None:
             return False, f"board {board_slot} not connected"
 
+        self.state.block_reconnect(addr, KICK_RECONNECT_BLOCK_S)
         player = self.state.players.pop(addr)
         self.state.pending_roles.pop(addr, None)
 
@@ -103,7 +105,7 @@ class PacketHandler:
             f"[T2] evicted board {board_slot} from {addr} "
             f"(player_id={player_id}, label={label})"
         )
-        return True, f"board {board_slot} kicked ({label})"
+        return True, f"board {board_slot} kicked ({label}); reconnect blocked for {KICK_RECONNECT_BLOCK_S:.0f}s"
 
     # Send the runtime control mode packet to one connected board.
     def _send_control_mode(self, addr):
@@ -225,6 +227,10 @@ class PacketHandler:
 
     def _register_player(self, addr, x=0.0, y=0.0, angle=0.0,
                          preferred_role=ROLE_ANY, username=""):
+        remaining = self.state.reconnect_block_remaining(addr)
+        if remaining > 0:
+            print(f"[T2] rejected {addr} — reconnect blocked for {remaining:.1f}s after kick")
+            return
         if self.state.is_in_lockout():
             return
         if self.state.match_started:
