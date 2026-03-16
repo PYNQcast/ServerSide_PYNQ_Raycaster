@@ -31,8 +31,8 @@ let _mapListRefreshTimer = 0;
 let _activePage = 'game';
 let _archiveDrawerOpen = false;
 const frameTimeHistory = [];
-const LATENCY_BUFFER_SIZE = 120;
-const latencyHistory = [];   // WS transit ms per message
+const BOARD_HZ_BUFFER_SIZE = 60;   // ~2 min at one sample per 2s
+const boardHzHistory = [];         // board tick Hz samples from PKT_PERF
 let _lastLatencyRender = 0;
 let lastRenderSampleAt = performance.now();
 const MAP_SELECT_GRACE_MS = 1500;
@@ -329,14 +329,14 @@ function drawFrameChart() {
   });
 }
 
-function pushLatencySample(transitMs) {
-  latencyHistory.push(transitMs);
-  if (latencyHistory.length > LATENCY_BUFFER_SIZE) latencyHistory.shift();
+function pushBoardHzSample(hz) {
+  boardHzHistory.push(hz);
+  if (boardHzHistory.length > BOARD_HZ_BUFFER_SIZE) boardHzHistory.shift();
 }
 
 function maybeRenderLatencyChart() {
   const now = performance.now();
-  if (now - _lastLatencyRender < 100) return;
+  if (now - _lastLatencyRender < 500) return;
   _lastLatencyRender = now;
 
   const canvas = document.getElementById('latency-chart');
@@ -347,53 +347,59 @@ function maybeRenderLatencyChart() {
   ctx2.fillStyle = '#07101e';
   ctx2.fillRect(0, 0, W2, H2);
 
-  if (!latencyHistory.length) {
+  if (!boardHzHistory.length) {
     ctx2.fillStyle = '#7aa3d1';
     ctx2.font = '12px Courier New';
-    ctx2.fillText('waiting for WS messages...', 10, H2 / 2);
+    ctx2.fillText('no board connected', 10, H2 / 2);
+    const currentEl = document.getElementById('board-hz-current');
+    const avgEl = document.getElementById('latency-chart-avg');
+    if (currentEl) currentEl.textContent = '— Hz';
+    if (avgEl) avgEl.textContent = 'avg — Hz';
     return;
   }
 
-  const maxMs = Math.max(100, ...latencyHistory);
-  // Grid at 33ms (target) and 66ms
-  const gridLines = [33, 66];
-  ctx2.strokeStyle = 'rgba(0, 212, 255, 0.15)';
-  ctx2.lineWidth = 1;
-  gridLines.forEach((ms) => {
-    if (ms > maxMs) return;
-    const y = H2 - (ms / maxMs) * (H2 - 4) - 2;
+  const minY = 0;
+  const maxY = Math.max(70, ...boardHzHistory);
+  // Grid at 50 and 60 Hz
+  [50, 60].forEach((hz) => {
+    const y = H2 - ((hz - minY) / (maxY - minY)) * (H2 - 4) - 2;
+    ctx2.strokeStyle = hz === 60 ? 'rgba(0,255,136,0.25)' : 'rgba(255,215,0,0.2)';
+    ctx2.lineWidth = 1;
     ctx2.beginPath(); ctx2.moveTo(0, y); ctx2.lineTo(W2, y); ctx2.stroke();
-    ctx2.fillStyle = 'rgba(0,212,255,0.35)';
+    ctx2.fillStyle = hz === 60 ? 'rgba(0,255,136,0.5)' : 'rgba(255,215,0,0.4)';
     ctx2.font = '9px Courier New';
-    ctx2.fillText(`${ms}ms`, 2, y - 2);
+    ctx2.fillText(`${hz}Hz`, 2, y - 2);
   });
 
-  const step = W2 / (LATENCY_BUFFER_SIZE - 1);
+  const step = boardHzHistory.length > 1 ? W2 / (boardHzHistory.length - 1) : W2;
   ctx2.beginPath();
-  latencyHistory.forEach((ms, i) => {
+  boardHzHistory.forEach((hz, i) => {
     const x = i * step;
-    const y = H2 - (ms / maxMs) * (H2 - 4) - 2;
+    const y = H2 - ((hz - minY) / (maxY - minY)) * (H2 - 4) - 2;
     if (i === 0) ctx2.moveTo(x, y); else ctx2.lineTo(x, y);
   });
   ctx2.strokeStyle = '#00d4ff';
   ctx2.lineWidth = 1.5;
   ctx2.stroke();
 
-  latencyHistory.forEach((ms, i) => {
+  boardHzHistory.forEach((hz, i) => {
     const x = i * step;
-    const y = H2 - (ms / maxMs) * (H2 - 4) - 2;
+    const y = H2 - ((hz - minY) / (maxY - minY)) * (H2 - 4) - 2;
     ctx2.beginPath();
-    ctx2.arc(x, y, 2, 0, Math.PI * 2);
-    ctx2.fillStyle = ms >= 80 ? '#ff4444' : ms >= 40 ? '#ffd700' : '#00ff88';
+    ctx2.arc(x, y, 3, 0, Math.PI * 2);
+    ctx2.fillStyle = hz >= 58 ? '#00ff88' : hz >= 50 ? '#ffd700' : '#ff4444';
     ctx2.fill();
   });
 
-  const avg = latencyHistory.reduce((s, v) => s + v, 0) / latencyHistory.length;
-  const current = latencyHistory[latencyHistory.length - 1];
-  const currentEl = document.getElementById('latency-chart-current');
+  const avg = boardHzHistory.reduce((s, v) => s + v, 0) / boardHzHistory.length;
+  const current = boardHzHistory[boardHzHistory.length - 1];
+  const currentEl = document.getElementById('board-hz-current');
   const avgEl = document.getElementById('latency-chart-avg');
-  if (currentEl) currentEl.textContent = `${Math.round(current)} ms`;
-  if (avgEl) avgEl.textContent = `avg ${avg.toFixed(1)} ms`;
+  if (currentEl) {
+    currentEl.textContent = `${Math.round(current)} Hz`;
+    currentEl.style.color = current >= 58 ? '#00ff88' : current >= 50 ? '#ffd700' : '#ff4444';
+  }
+  if (avgEl) avgEl.textContent = `avg ${avg.toFixed(1)} Hz`;
 }
 
 function deriveMatchStateLabel(state) {

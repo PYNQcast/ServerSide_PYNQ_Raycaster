@@ -626,10 +626,10 @@ function connect() {
     );
     wsUpdateCount++;
     const now = performance.now();
-    if (wsLastMsgAt > 0) {
-      const intervalMs = now - wsLastMsgAt;
-      if (intervalMs < 500) pushLatencySample(intervalMs);
-    }
+    const boardHz = normalisedPlayers.reduce(
+      (max, p) => (p.perf?.tick_rate_hz ? Math.max(max, p.perf.tick_rate_hz) : max), 0
+    );
+    if (boardHz > 0) pushBoardHzSample(boardHz);
     wsLastMsgAt = now;
     if (now - wsLastTime >= 1000) {
       wsHz = wsUpdateCount;
@@ -692,8 +692,6 @@ function updateThemeButton(button, theme) {
 
 updateGameHud(null);
 drawFrameChart();
-// Stacked pipeline chart now shows real WS inter-arrival intervals rather than
-// dummy data. Samples are pushed from the onmessage handler below.
 // Expose functions needed by inline onclick handlers in the template HTML.
 window.stopReplay = stopReplay;
 window.startBoardReplay = startBoardReplay;
