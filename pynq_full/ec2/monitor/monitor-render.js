@@ -89,8 +89,7 @@ function worldToCanvas(wx, wy) {
   const rx  = maxX - minX;
   const ry  = maxY - minY;
   const sc  = Math.min((W - pad*2) / rx, (H - pad*2) / ry);
-  // 90° CW rotation: world X→canvas Y (inverted), world Y→canvas X
-  return [(pad + (wy - minY) * sc), (pad + (maxX - wx) * sc), sc];
+  return [(pad + (wx - minX) * sc), (pad + (wy - minY) * sc), sc];
 }
 
 function drawArena(players, bits, bitsMask) {
@@ -113,16 +112,19 @@ function drawArena(players, bits, bitsMask) {
     const mw = mapData.width, mh = mapData.height;
     const tileWu = mapData.tile_scale || TILE_SCALE;
     const ts = tileWu * sc;   // tile size in canvas px
+    // Anchor the entire grid from the map's top-left corner in world space.
+    // All tile positions are integer multiples of ts from this anchor — no per-tile
+    // floating-point drift, so adjacent wall tiles share exact pixel edges (no corner gaps).
+    const [originPx, originPy] = worldToCanvas(-mw / 2 * tileWu, -mh / 2 * tileWu);
     ctx.fillStyle = '#1a1730';
     mapData.tiles.forEach((row, ri) => {
       row.forEach((cell, ci) => {
         if (!cell) return;
-        // Convert tile top-left corner to world space, then to canvas via worldToCanvas.
-        // cell_to_world: wx = (ci - mw/2) * tileWu, wy = (ri - mh/2) * tileWu
-        const wx = (ci - mw / 2) * tileWu;
-        const wy = (ri - mh / 2) * tileWu;
-        const [px, py] = worldToCanvas(wx, wy);
-        ctx.fillRect(Math.round(px), Math.round(py), Math.round(ts), Math.round(ts));
+        const px = Math.round(originPx + ci * ts);
+        const py = Math.round(originPy + ri * ts);
+        const tw = Math.round(originPx + (ci + 1) * ts) - px;
+        const th = Math.round(originPy + (ri + 1) * ts) - py;
+        ctx.fillRect(px, py, tw, th);
       });
     });
   }
@@ -236,7 +238,7 @@ function drawArena(players, bits, bitsMask) {
     // Direction arrow
     ctx.strokeStyle = colour; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.moveTo(cx, cy);
-    ctx.lineTo(cx + Math.sin(drawAngle) * arrowLen, cy + Math.cos(drawAngle) * arrowLen);
+    ctx.lineTo(cx + Math.cos(drawAngle) * arrowLen, cy + Math.sin(drawAngle) * arrowLen);
     ctx.stroke();
 
     // Player dot — smoothly scales up on tag
