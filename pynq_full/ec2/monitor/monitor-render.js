@@ -123,10 +123,10 @@ function drawArena(players, bits, bitsMask) {
     mapData.tiles.forEach((row, ri) => {
       row.forEach((cell, ci) => {
         if (!cell) return;
-        const px = Math.round(originPx - (ci + 1) * ts);
-        const py = Math.round(originPy + ri * ts);
-        const tw = Math.round(originPx - ci * ts) - px;
-        const th = Math.round(originPy + (ri + 1) * ts) - py;
+        const px = Math.round(originPx - (ri + 1) * ts);
+        const py = Math.round(originPy + ci * ts);
+        const tw = Math.round(originPx - ri * ts) - px;
+        const th = Math.round(originPy + (ci + 1) * ts) - py;
         ctx.fillRect(px, py, tw, th);
       });
     });
