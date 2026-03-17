@@ -670,9 +670,9 @@ def _apply_manual_input(state, buttons):
     if _input_is_temporarily_suspended(state):
         return
     raw = buttons.read() & 0xF
-    if raw & BTN_LEFT:
+    if raw & BTN_LEFT:      # physical BTN0 — right
         state["angle_raw"] = (state["angle_raw"] - state["turn_step"]) % ANGLE_STEPS
-    if raw & BTN_RIGHT:
+    if raw & BTN_RIGHT:     # physical BTN3 — left
         state["angle_raw"] = (state["angle_raw"] + state["turn_step"]) % ANGLE_STEPS
     state["angle"] = (state["angle_raw"] * 2.0 * math.pi / ANGLE_STEPS) % (2.0 * math.pi)
 
