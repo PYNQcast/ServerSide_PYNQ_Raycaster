@@ -365,7 +365,7 @@ class PacketHandler:
         }
 
         human_count = sum(1 for a in self.state.players if not str(a).startswith("ghost:"))
-        self._send_ack(addr, 0)
+        self._send_ack(addr, board_slot)  # use board_slot so board knows its lobby ID for sprite filtering
         self._send_map(addr)
         self._send_bits_init(addr)
         self._send_control_mode(addr, self.state.players[key])
@@ -446,7 +446,7 @@ class PacketHandler:
             player["preferred_role"] = player.get("preferred_role", ROLE_ANY)
             player["control_mode"] = self.state.slot_modes.get(player.get("board_slot", queue_slot + 1), "manual")
             self.state.pending_roles[key] = player["preferred_role"]
-            self._send_ack(udp_addr, 0)
+            self._send_ack(udp_addr, player.get("board_slot") or 0)
             self._send_map(udp_addr)
             self._send_bits_init(udp_addr)
             self._send_control_mode(udp_addr, player)
