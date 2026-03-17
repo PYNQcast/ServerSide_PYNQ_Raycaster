@@ -669,6 +669,8 @@ def _apply_manual_input(state, buttons):
     state["input_flags"] = 0
     if _input_is_temporarily_suspended(state):
         return
+    
+    #can change lefts and rights here by inverting +/- state 
     raw = buttons.read() & 0xF
     if raw & BTN_LEFT:      # physical BTN0 — right
         state["angle_raw"] = (state["angle_raw"] - state["turn_step"]) % ANGLE_STEPS
