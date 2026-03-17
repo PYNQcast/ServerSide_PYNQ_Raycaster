@@ -78,6 +78,20 @@ function updateInterpolatedLivePlayers(players, now) {
   });
 }
 
+// ── Static map cache ────────────────────────────────────────────────────────
+// Walls, grid lines, AO shadows, and vignette don't change during a match.
+// Render them once to an OffscreenCanvas and blit each frame.
+
+let _mapCacheCanvas = null;   // OffscreenCanvas or null
+let _mapCacheKey    = '';     // invalidation key
+
+function invalidateMapCache() {
+  _mapCacheCanvas = null;
+  _mapCacheKey = '';
+}
+
+window.invalidateMonitorMapCache = invalidateMapCache;
+
 // ── Canvas resize ───────────────────────────────────────────────────────────
 // Keep the canvas resolution matched to its CSS display size so it renders
 // at full sharpness rather than being upscaled from 480×480.
@@ -86,7 +100,7 @@ function syncCanvasSize() {
   const wrap = canvas.parentElement;
   if (!wrap) return false;
   const rect = wrap.getBoundingClientRect();
-  const side = Math.floor(Math.min(rect.width, rect.height) * 0.96);
+  const side = Math.floor(Math.min(rect.width, rect.height) * 0.92);
   if (side < 64) return false;
   if (canvas.width === side && canvas.height === side) return false;
   canvas.width  = side;
@@ -101,20 +115,6 @@ const _arenaResizeObserver = new ResizeObserver(() => {
 });
 _arenaResizeObserver.observe(canvas.parentElement || canvas);
 syncCanvasSize();
-
-// ── Static map cache ────────────────────────────────────────────────────────
-// Walls, grid lines, AO shadows, and vignette don't change during a match.
-// Render them once to an OffscreenCanvas and blit each frame.
-
-let _mapCacheCanvas = null;   // OffscreenCanvas or null
-let _mapCacheKey    = '';     // invalidation key
-
-function invalidateMapCache() {
-  _mapCacheCanvas = null;
-  _mapCacheKey = '';
-}
-
-window.invalidateMonitorMapCache = invalidateMapCache;
 
 function buildMapCache(cW, cH, isLight) {
   const oc  = new OffscreenCanvas(cW, cH);
