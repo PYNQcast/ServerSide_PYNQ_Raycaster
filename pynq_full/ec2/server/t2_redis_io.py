@@ -52,11 +52,17 @@ class RedisIO:
         if self.state.match_started:
             players = list(self.state.players.values())
         else:
-            players = [
-                player
-                for addr, player in self.state.players.items()
-                if not str(addr).startswith("ghost:")
-            ]
+            # In lobby all humans have player_id=0; use board_slot as a temporary
+            # display ID so boards can tell each other apart in _write_sprites.
+            players = []
+            for addr, player in self.state.players.items():
+                if str(addr).startswith("ghost:"):
+                    continue
+                slot = int(player.get("board_slot") or 0)
+                lobby_player = dict(player)
+                if lobby_player["player_id"] == 0 and slot > 0:
+                    lobby_player["player_id"] = slot
+                players.append(lobby_player)
         if not players:
             return
         human_addrs = [
