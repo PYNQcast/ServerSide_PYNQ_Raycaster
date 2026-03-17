@@ -89,13 +89,14 @@ class PacketHandler:
 
     # Remove the human currently occupying a board slot.
     def evict_board_slot(self, board_slot: int):
-        addr = self._addr_for_board_slot(board_slot)
-        if addr is None:
+        key = self._addr_for_board_slot(board_slot)
+        if key is None:
             return False, f"board {board_slot} not connected"
 
-        self.state.block_reconnect(addr, KICK_RECONNECT_BLOCK_S)
-        player = self.state.players.pop(addr)
-        self.state.pending_roles.pop(addr, None)
+        player = self.state.players.pop(key)
+        self.state.pending_roles.pop(key, None)
+        udp_addr = player.get("_addr") or key
+        self.state.block_reconnect(udp_addr, KICK_RECONNECT_BLOCK_S)
 
         player_id = int(player.get("player_id", 0) or 0)
         self.write_queue.put({"op": "del", "key": f"player:{player_id}"})
@@ -104,19 +105,16 @@ class PacketHandler:
             f"player {player_id}" if player_id > 0 else "queued player"
         )
         print(
-            f"[T2] evicted board {board_slot} from {addr} "
+            f"[T2] evicted board {board_slot} from {udp_addr} "
             f"(player_id={player_id}, label={label})"
         )
         return True, f"board {board_slot} kicked ({label}); reconnect blocked for {KICK_RECONNECT_BLOCK_S:.0f}s"
 
     # Send the runtime control mode packet to one connected board.
-    def _send_control_mode(self, addr):
+    def _send_control_mode(self, addr, player=None):
         if self.udp_transport is None:
             return
-        player = self.state.players.get(addr)
-        if not player or str(addr).startswith("ghost:"):
-            return
-        control_mode = str(player.get("control_mode") or "manual").lower()
+        control_mode = str((player or {}).get("control_mode") or "manual").lower()
         mode_value = {
             "manual": NODE_CONTROL_MODE_MANUAL,
             "auto": NODE_CONTROL_MODE_AUTO,
@@ -143,6 +141,18 @@ class PacketHandler:
     # ── Individual packet handling ────────────────────────────────────────────
     # Validate sequence/position, merge flags, update player state
 
+    def _player_key(self, addr, username: str = ""):
+        """Return the players-dict key for this connection.
+
+        When a username is provided we key on ("username", username) so that two
+        boards behind the same NAT (identical addr) register as separate players
+        as long as they use different usernames.  Without a username we fall back
+        to the raw addr tuple (existing behaviour).
+        """
+        if username:
+            return ("username", username.strip())
+        return addr
+
     def _process_packet(self, raw: dict):
         data = raw["data"]
         addr = raw["addr"]
@@ -167,18 +177,28 @@ class PacketHandler:
         movement_mode    = pkt["movement_mode"]
         protocol_version = pkt["protocol_version"]
         preferred_role   = pkt.get("preferred_role", ROLE_ANY)
+        username         = pkt.get("username", "") if pkt_type == PKT_REGISTER else ""
 
-        if addr not in self.state.players:
-            if pkt_type != PKT_REGISTER:
+        # Resolve key: username-keyed when username present, addr-keyed otherwise.
+        # Also search existing players by addr in case they registered without a username.
+        key = self._player_key(addr, username)
+        if key not in self.state.players:
+            # Fall back: find an existing addr-keyed entry for this addr
+            if addr in self.state.players:
+                key = addr
+            elif pkt_type == PKT_REGISTER:
+                self._register_player(key, addr, x, y, angle,
+                                      preferred_role=preferred_role,
+                                      username=pkt.get("username", ""))
+            else:
                 return
-            self._register_player(addr, x, y, angle,
-                                  preferred_role=preferred_role,
-                                  username=pkt.get("username", ""))
 
-        if addr not in self.state.players:
+        if key not in self.state.players:
             return  # registration rejected (lockout / full) — discard packet
 
-        p = self.state.players[addr]
+        p = self.state.players[key]
+        # Keep reply address current (NAT port may change on reconnect)
+        p["_addr"] = addr
         was_timed_out = bool(p.get("timed_out"))
         p["last_seen"] = time.monotonic()  # heartbeat — updated on every packet
         p["timed_out"] = False
@@ -187,7 +207,7 @@ class PacketHandler:
             if pkt.get("username", ""):
                 p.update(build_player_identity(pkt["username"], addr))
             p["preferred_role"] = preferred_role
-            self.state.pending_roles[addr] = preferred_role
+            self.state.pending_roles[key] = preferred_role
             if not self.state.match_started or p["player_id"] == 0:
                 p["x"], p["y"], p["angle"] = x, y, angle
             p["last_seq"]         = seq   # reset sequence baseline
@@ -253,7 +273,7 @@ class PacketHandler:
     # Record preferred role and keep humans in the lobby until the monitor sends Start.
     # Queued humans get ACK(0) so clients can move before the match begins.
 
-    def _register_player(self, addr, x=0.0, y=0.0, angle=0.0,
+    def _register_player(self, key, addr, x=0.0, y=0.0, angle=0.0,
                          preferred_role=ROLE_ANY, username=""):
         remaining = self.state.reconnect_block_remaining(addr)
         if remaining > 0:
@@ -266,37 +286,41 @@ class PacketHandler:
             return
 
         # ── Dedup: evict stale entry from the same physical board ─────────────
-        # A reconnecting board arrives from a new (ip, port) but keeps the same
-        # IP → same controller_key.  If username is set, profile_key (derived
-        # from username) survives IP changes across WiFi networks.
+        # Username-keyed players only evict other entries with the same username.
+        # Controller-keyed (no username) players evict same-IP entries as before.
         identity = build_player_identity(username, addr)
         new_ck = identity.get("controller_key", "")
         new_pk = identity.get("profile_key", "")
+        is_username_keyed = bool(username)
 
-        stale_addrs = []
-        for existing_addr, existing_p in list(self.state.players.items()):
-            if str(existing_addr).startswith("ghost:"):
+        stale_keys = []
+        for existing_key, existing_p in list(self.state.players.items()):
+            if str(existing_key).startswith("ghost:"):
                 continue
-            if existing_addr == addr:
+            if existing_key == key:
                 continue
             ex_ck = existing_p.get("controller_key", "")
             ex_pk = existing_p.get("profile_key", "")
-            # Same IP → same controller_key: definitive match.
-            # Same username-derived profile_key: match when both sides are username-sourced.
-            if new_ck and ex_ck == new_ck:
-                stale_addrs.append(existing_addr)
-            elif (new_pk and ex_pk == new_pk
-                  and identity.get("identity_source") == "username"
-                  and existing_p.get("identity_source") == "username"):
-                stale_addrs.append(existing_addr)
+            if is_username_keyed:
+                # Username-keyed: only evict an entry with the same username
+                # (same board reconnecting with same username).
+                # Never evict a different username — that's a different board.
+                if (new_pk and ex_pk == new_pk
+                        and identity.get("identity_source") == "username"
+                        and existing_p.get("identity_source") == "username"):
+                    stale_keys.append(existing_key)
+            else:
+                # No username: fall back to IP-based dedup (original behaviour).
+                if new_ck and ex_ck == new_ck:
+                    stale_keys.append(existing_key)
 
-        for stale_addr in stale_addrs:
-            stale_p = self.state.players.pop(stale_addr)
-            self.state.pending_roles.pop(stale_addr, None)
+        for stale_key in stale_keys:
+            stale_p = self.state.players.pop(stale_key)
+            self.state.pending_roles.pop(stale_key, None)
             self.write_queue.put({"op": "del", "key": f"player:{stale_p['player_id']}"})
-            print(f"[T2] evicted stale {stale_addr} "
+            print(f"[T2] evicted stale {stale_key} "
                   f"(player_id={stale_p['player_id']}, board_slot={stale_p.get('board_slot')}) "
-                  f"— same board reconnected at {addr}")
+                  f"— same board reconnected as {key}")
 
         # ── Cap check (after dedup so freed slot counts as available) ─────────
         human_count = sum(1 for a in self.state.players if not str(a).startswith("ghost:"))
@@ -310,10 +334,10 @@ class PacketHandler:
             return
 
         self.state.clear_lockout()
-        self.state.pending_roles[addr] = preferred_role
+        self.state.pending_roles[key] = preferred_role
 
         # Placeholder player_id=0 until role assignment resolves both players
-        self.state.players[addr] = {
+        self.state.players[key] = {
             "player_id":        0,
             "x": x, "y": y, "angle": angle, "flags": 0,
             "last_seen":        time.monotonic(),
@@ -324,6 +348,7 @@ class PacketHandler:
             "preferred_role":   preferred_role,
             "board_slot":       board_slot,
             "control_mode":     self.state.slot_modes.get(board_slot, "manual"),
+            "_addr":            addr,   # real UDP addr for sending replies
             **identity,
         }
 
@@ -331,8 +356,8 @@ class PacketHandler:
         self._send_ack(addr, 0)
         self._send_map(addr)
         self._send_bits_init(addr)
-        self._send_control_mode(addr)
-        print(f"[T2] player queued from {addr} (lobby humans={human_count}, ghosts={self._ghost_count()})")
+        self._send_control_mode(addr, self.state.players[key])
+        print(f"[T2] player queued key={key} addr={addr} (lobby humans={human_count}, ghosts={self._ghost_count()})")
 
     def _human_addrs(self):
         humans = [
@@ -395,8 +420,9 @@ class PacketHandler:
         self.state.reset_slot_modes()
         self.state.set_spawn_positions(self.map_state.get("spawn_positions", []))
 
-        for queue_slot, addr in enumerate(human_addrs):
-            player = self.state.players[addr]
+        for queue_slot, key in enumerate(human_addrs):
+            player = self.state.players[key]
+            udp_addr = player.get("_addr") or key
             lobby_x, lobby_y, lobby_angle = self._spawn_pose_for_slot(queue_slot)
             player["player_id"] = 0
             player["x"] = lobby_x
@@ -407,11 +433,11 @@ class PacketHandler:
             player["timed_out"] = False
             player["preferred_role"] = player.get("preferred_role", ROLE_ANY)
             player["control_mode"] = self.state.slot_modes.get(player.get("board_slot", queue_slot + 1), "manual")
-            self.state.pending_roles[addr] = player["preferred_role"]
-            self._send_ack(addr, 0)
-            self._send_map(addr)
-            self._send_bits_init(addr)
-            self._send_control_mode(addr)
+            self.state.pending_roles[key] = player["preferred_role"]
+            self._send_ack(udp_addr, 0)
+            self._send_map(udp_addr)
+            self._send_bits_init(udp_addr)
+            self._send_control_mode(udp_addr, player)
 
         for addr, player in self.state.players.items():
             if not str(addr).startswith("ghost:"):
@@ -468,19 +494,23 @@ class PacketHandler:
             player["last_seq"] = None
             player["timed_out"] = False
 
-        self.state.players[runner_addr]["player_id"] = 1
-        self._send_ack(runner_addr, 1)
-        self._send_map(runner_addr)
-        self._send_bits_init(runner_addr)
-        self._send_control_mode(runner_addr)
+        runner_p = self.state.players[runner_addr]
+        runner_udp = runner_p.get("_addr") or runner_addr
+        runner_p["player_id"] = 1
+        self._send_ack(runner_udp, 1)
+        self._send_map(runner_udp)
+        self._send_bits_init(runner_udp)
+        self._send_control_mode(runner_udp, runner_p)
         print(f"[T2] assigned RUNNER(1) to {runner_addr}")
 
         if tagger_addr:
-            self.state.players[tagger_addr]["player_id"] = 2
-            self._send_ack(tagger_addr, 2)
-            self._send_map(tagger_addr)
-            self._send_bits_init(tagger_addr)
-            self._send_control_mode(tagger_addr)
+            tagger_p = self.state.players[tagger_addr]
+            tagger_udp = tagger_p.get("_addr") or tagger_addr
+            tagger_p["player_id"] = 2
+            self._send_ack(tagger_udp, 2)
+            self._send_map(tagger_udp)
+            self._send_bits_init(tagger_udp)
+            self._send_control_mode(tagger_udp, tagger_p)
             print(f"[T2] assigned TAGGER(2) to {tagger_addr}")
 
         self.state.pending_roles = {}
@@ -533,12 +563,14 @@ class PacketHandler:
         else:
             target_mode = "manual"
         self.state.slot_modes[target_slot] = target_mode
-        addr = self._addr_for_board_slot(target_slot)
-        if addr is None:
+        key = self._addr_for_board_slot(target_slot)
+        if key is None:
             print(f"[T2] node mode stored for board slot {target_slot} -> {target_mode} (offline)")
             return False, f"board {target_slot} {target_mode} stored for next reconnect"
-        self.state.players[addr]["control_mode"] = target_mode
-        self._send_control_mode(addr)
+        player = self.state.players[key]
+        player["control_mode"] = target_mode
+        udp_addr = player.get("_addr") or key
+        self._send_control_mode(udp_addr, player)
         print(f"[T2] node mode set for board slot {target_slot} -> {target_mode}")
         return True, f"board {target_slot} -> {target_mode}"
 
