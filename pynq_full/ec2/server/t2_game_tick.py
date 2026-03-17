@@ -317,18 +317,19 @@ class GameTick:
             target_mode = "manual"
         self.state.slot_modes[slot] = target_mode
 
-        addr = self.packets._addr_for_board_slot(slot)
-        if addr is None:
+        key = self.packets._addr_for_board_slot(slot)
+        if key is None:
             return
-        player = self.state.players.get(addr)
-        if not player or str(addr).startswith("ghost:"):
+        player = self.state.players.get(key)
+        if not player or str(key).startswith("ghost:"):
             return
+        udp_addr = player.get("_addr") or key
 
         player["control_mode"] = target_mode
-        self.packets._send_ack(addr, int(player.get("player_id", 0) or 0))
-        self.packets._send_map(addr)
-        self.packets._send_bits_init(addr)
-        self.packets._send_control_mode(addr)
+        self.packets._send_ack(udp_addr, int(player.get("player_id", 0) or 0))
+        self.packets._send_map(udp_addr)
+        self.packets._send_bits_init(udp_addr)
+        self.packets._send_control_mode(udp_addr, player)
 
     def _stop_board_replay(self, board_slot: int, reason: str, restore_board: bool):
         slot = int(board_slot or 0)
@@ -357,9 +358,9 @@ class GameTick:
             self._restore_board_after_replay(slot, restore_mode)
         elif session is not None:
             self.state.slot_modes[slot] = restore_mode
-            addr = self.packets._addr_for_board_slot(slot)
-            if addr is not None and addr in self.state.players:
-                self.state.players[addr]["control_mode"] = restore_mode
+            key = self.packets._addr_for_board_slot(slot)
+            if key is not None and key in self.state.players:
+                self.state.players[key]["control_mode"] = restore_mode
 
         self._clear_board_replay_summary(slot)
         return True, f"board {slot} replay stopped ({reason}){f' for {match_id}' if match_id else ''}"
