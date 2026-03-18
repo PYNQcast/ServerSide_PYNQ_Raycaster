@@ -308,26 +308,35 @@ function BoardStage({ hostSlot }) {
       // Whether user has taken control (dims auto-spin)
       controlled: false,
       autoSpinFade: 1, // 1 = full auto spin, 0 = user controlled
+      // Phase offset so auto-spin resumes from current angle, not t*1.1
+      autoYawOffset: 0,
     };
 
     const canvas = renderer.domElement;
 
+    const showTooltip = () => {
+      if (!tooltipRef.current) return;
+      tooltipRef.current.style.opacity = '1';
+      tooltipRef.current.style.transform = 'translateY(0)';
+    };
+    const hideTooltip = () => {
+      if (!tooltipRef.current) return;
+      tooltipRef.current.style.opacity = '0';
+      tooltipRef.current.style.transform = 'translateY(4px)';
+    };
+
     const onMouseEnter = () => {
       interact.hovering = true;
       canvas.style.cursor = 'grab';
-      if (tooltipRef.current) {
-        tooltipRef.current.style.opacity = '1';
-        tooltipRef.current.style.transform = 'translateY(0)';
-      }
+      showTooltip();
     };
     const onMouseLeave = () => {
       interact.hovering = false;
       interact.dragging = false;
       canvas.style.cursor = '';
-      if (tooltipRef.current) {
-        tooltipRef.current.style.opacity = '0';
-        tooltipRef.current.style.transform = 'translateY(4px)';
-      }
+      // Resume auto-spin when mouse leaves
+      interact.controlled = false;
+      hideTooltip();
     };
     const onMouseDown = (e) => {
       interact.dragging = true;
@@ -343,7 +352,7 @@ function BoardStage({ hostSlot }) {
       const dy = e.clientY - interact.lastY;
       interact.lastX = e.clientX;
       interact.lastY = e.clientY;
-      const sensitivity = 0.008;
+      const sensitivity = 0.004;
       interact.velYaw   = dx * sensitivity;
       interact.velPitch = dy * sensitivity;
       interact.userYaw   += interact.velYaw;
@@ -382,7 +391,7 @@ function BoardStage({ hostSlot }) {
         const dy = e.touches[0].clientY - interact.lastY;
         interact.lastX = e.touches[0].clientX;
         interact.lastY = e.touches[0].clientY;
-        const sensitivity = 0.008;
+        const sensitivity = 0.004;
         interact.velYaw   = dx * sensitivity;
         interact.velPitch = dy * sensitivity;
         interact.userYaw   += interact.velYaw;
@@ -419,6 +428,7 @@ function BoardStage({ hostSlot }) {
       interact.velYaw = 0;
       interact.velPitch = 0;
       interact.zoom = 1;
+      interact.autoSpinFade = 1;
     });
 
     // ── Animation ──
@@ -431,13 +441,19 @@ function BoardStage({ hostSlot }) {
       const t = timer.getElapsed();
 
       // Fade auto-spin in/out based on user control
+      const prevFade = interact.autoSpinFade;
       const targetFade = interact.controlled ? 0 : 1;
       interact.autoSpinFade += (targetFade - interact.autoSpinFade) * 0.04;
 
+      // When handing off back to auto-spin, sync offset so board doesn't jump
+      if (interact.autoSpinFade > 0.01 && prevFade <= 0.01) {
+        interact.autoYawOffset = interact.userYaw - t * 1.1;
+      }
+
       // Inertia: decay velocity when not dragging
       if (!interact.dragging) {
-        interact.velYaw   *= 0.92;
-        interact.velPitch *= 0.92;
+        interact.velYaw   *= 0.88;
+        interact.velPitch *= 0.88;
         interact.userYaw   += interact.velYaw;
         interact.userPitch += interact.velPitch;
         interact.userPitch = Math.max(-1.2, Math.min(1.2, interact.userPitch));
@@ -450,13 +466,13 @@ function BoardStage({ hostSlot }) {
       const bob = Math.sin(t * 1.4);
       const bobPhase = (bob + 1) / 2;
 
-      const autoYaw   = t * 1.1;
+      const autoYaw   = t * 1.1 + interact.autoYawOffset;
       const autoPitchX = 0.25 + Math.sin(t * 0.5) * 0.08;
       const autoRollZ  = Math.sin(t * 0.7) * 0.06;
 
       // Blend auto rotation with user rotation
       const f = interact.autoSpinFade;
-      board.rotation.y = autoYaw * f + interact.userYaw;
+      board.rotation.y = autoYaw * f + interact.userYaw * (1 - f);
       board.rotation.x = autoPitchX * f + interact.userPitch * (1 - f);
       board.rotation.z = autoRollZ * f;
       board.position.y = 0.22 + bob * 0.18;
@@ -541,21 +557,23 @@ function BoardStage({ hostSlot }) {
         style={{
           position: 'absolute',
           bottom: 40,
-          left: '50%',
-          transform: 'translateX(-50%) translateY(4px)',
+          left: 16,
+          transform: 'translateY(4px)',
           opacity: 0,
           transition: 'opacity 0.25s ease, transform 0.25s ease',
           pointerEvents: 'none',
-          color: 'rgba(255,200,190,0.7)',
-          fontSize: '11px',
-          letterSpacing: '0.06em',
+          color: 'rgba(255,200,190,0.65)',
+          fontSize: '10px',
+          letterSpacing: '0.05em',
           fontFamily: 'monospace',
-          textAlign: 'center',
-          whiteSpace: 'nowrap',
-          textShadow: '0 1px 4px rgba(0,0,0,0.8)',
+          textAlign: 'left',
+          lineHeight: '1.7',
+          textShadow: '0 1px 4px rgba(0,0,0,0.9)',
         }}
       >
-        drag to spin &nbsp;·&nbsp; scroll to zoom &nbsp;·&nbsp; double-click to reset
+        drag · spin<br />
+        scroll · zoom<br />
+        dbl-click · reset
       </div>
     </div>
   );
