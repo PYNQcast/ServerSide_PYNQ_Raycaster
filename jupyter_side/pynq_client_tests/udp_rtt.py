@@ -187,39 +187,99 @@ class _CapturedButtons:
         return self._mask
 
 
-def _build_manual_state():
+def _build_runtime_state():
     tiles = pynq_runtime._fallback_map() if pynq_runtime else bytearray(32 * 32)
     tick_rate = float(getattr(pynq_runtime, "TICK_RATE", 60.0)) if pynq_runtime else 60.0
     scale = 50.0 / max(1.0, tick_rate)
     move_speed = float(getattr(pynq_runtime, "MOVE_SPEED", 0.25)) * scale if pynq_runtime else 0.25 * scale
     turn_step = max(1, int(round(float(getattr(pynq_runtime, "TURN_STEP", 26)) * scale))) if pynq_runtime else max(1, int(round(26 * scale)))
     return {
+        "username": "pynq_rtt_bench",
+        "mode": "manual",
+        "preferred_role": protocol.ROLE_ANY,
+        "registered": False,
+        "player_id": None,
+        "seq": 0,
         "input_flags": 0,
         "input_suspended_until": 0.0,
         "x": 0.0,
         "y": 0.0,
         "angle": 0.0,
         "angle_raw": 0,
+        "match_ended": False,
+        "game_mode": protocol.GAME_MODE_CHASE,
         "move_speed": move_speed,
         "turn_step": turn_step,
         "map_w": int(getattr(pynq_runtime, "MAP_COLS", 32)) if pynq_runtime else 32,
         "map_h": int(getattr(pynq_runtime, "MAP_ROWS", 32)) if pynq_runtime else 32,
         "tile_scale": 8,
         "tiles": tiles,
+        "players": [],
+        "bits": [],
+        "bits_mask": 0,
+        "force_server_pose_sync": True,
+        "last_rx": None,
+        "last_reg_tx": 0.0,
+        "last_state_tx": 0.0,
+        "last_log": 0.0,
+        "last_ack_ts": None,
+        "last_map_ts": None,
+        "last_bits_ts": None,
+        "last_mode_ts": None,
+        "last_game_state_seq": None,
+        "tick": 0,
+        "sprites_dirty": False,
+        "last_perf_tx": 0.0,
+        "perf_tick_count": 0,
+        "perf_worst_overrun_us": 0,
+        "perf_bram_write_us": 0,
     }
 
 
-def _measure_button_to_visible(
-    bram,
-    state,
-    button_mask: int,
-) -> float:
+def _handle_one_packet(sock: socket.socket, state, bram) -> bool:
+    try:
+        data, _addr = sock.recvfrom(4096)
+    except socket.timeout:
+        return False
+    pynq_runtime._handle(data, state, bram)
+    return True
+
+
+def _wait_for_registration(sock: socket.socket, server: str, port: int, state, bram, timeout_s: float = 12.0) -> None:
+    deadline = time.monotonic() + max(1.0, float(timeout_s))
+    addr = (server, port)
+    while time.monotonic() < deadline:
+        now = time.monotonic()
+        if not state["registered"] and (now - float(state["last_reg_tx"] or 0.0)) >= float(getattr(pynq_runtime, "REGISTER_RETRY_S", 2.0)):
+            pynq_runtime._send_register(sock, addr, state)
+        _handle_one_packet(sock, state, bram)
+        if state["registered"] and state["last_map_ts"] is not None:
+            return
+    raise RuntimeError("Timed out waiting for ACK and MAP from the server")
+
+
+def _drain_pending_packets(sock: socket.socket, state, bram, idle_s: float = 0.05) -> None:
+    deadline = time.monotonic() + max(0.01, float(idle_s))
+    while time.monotonic() < deadline:
+        received = _handle_one_packet(sock, state, bram)
+        if not received:
+            return
+
+
+def _measure_button_to_visible(sock: socket.socket, server: str, port: int, bram, state, button_mask: int, timeout_s: float) -> tuple[str, Optional[float]]:
     sample_buttons = _CapturedButtons(button_mask)
+    _drain_pending_packets(sock, state, bram)
+    baseline_game_state_seq = state.get("last_game_state_seq")
     started_ns = time.perf_counter_ns()
     pynq_runtime._apply_manual_input(state, sample_buttons)
-    pynq_runtime._write_pose(bram, state)
-    finished_ns = time.perf_counter_ns()
-    return (finished_ns - started_ns) / 1_000_000.0
+    pynq_runtime._send_state(sock, (server, port), state)
+    deadline = time.monotonic() + max(0.1, float(timeout_s))
+    while time.monotonic() < deadline:
+        if _handle_one_packet(sock, state, bram) and state.get("last_game_state_seq") != baseline_game_state_seq:
+            pynq_runtime._write_pose(bram, state)
+            finished_ns = time.perf_counter_ns()
+            return "ok", (finished_ns - started_ns) / 1_000_000.0
+    return "timeout", None
 
 
 def run_udp_rtt_benchmark(
@@ -249,37 +309,44 @@ def run_udp_rtt_benchmark(
         if bram is None:
             raise RuntimeError("button_to_visible requires a BRAM target")
 
-        state = _build_manual_state()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(SOCKET_TIMEOUT_S)
+        state = _build_runtime_state()
         pynq_runtime._write_map(bram, state["tiles"], state["map_w"], state["map_h"])
         pynq_runtime._write_pose(bram, state)
+        try:
+            _wait_for_registration(sock, server, port, state, bram)
 
-        previous_mask = 0
-        last_press_at_ms = 0
-        sample_index = 0
-        poll_interval_s = 1.0 / max(1.0, float(poll_hz))
-        print("Press board buttons to capture button_to_visible samples...")
-        while sample_index < max(1, int(samples)):
-            now_ms = int(time.time() * 1000)
-            mask = int(buttons.read()) & 0xF
-            is_new_press = mask != 0 and previous_mask == 0 and (now_ms - last_press_at_ms) >= int(debounce_ms)
-            if is_new_press:
-                sample_ms = _measure_button_to_visible(bram, state, mask)
-                button_to_visible_samples_ms.append(sample_ms)
-                csv_rows.append({
-                    "label": label,
-                    "sample_index": sample_index,
-                    "seq": sample_index + 1,
-                    "status": "ok",
-                    "rtt_ms": "",
-                    "button_to_visible_ms": round(sample_ms, 3),
-                    "trigger": f"button:{mask}",
-                    "measurement": "button_to_visible",
-                    "button_mask": mask,
-                })
-                sample_index += 1
-                last_press_at_ms = now_ms
-            previous_mask = mask
-            time.sleep(poll_interval_s)
+            previous_mask = 0
+            last_press_at_ms = 0
+            sample_index = 0
+            poll_interval_s = 1.0 / max(1.0, float(poll_hz))
+            print("Press board buttons to capture button_to_visible samples...")
+            while sample_index < max(1, int(samples)):
+                now_ms = int(time.time() * 1000)
+                mask = int(buttons.read()) & 0xF
+                is_new_press = mask != 0 and previous_mask == 0 and (now_ms - last_press_at_ms) >= int(debounce_ms)
+                if is_new_press:
+                    status, sample_ms = _measure_button_to_visible(sock, server, port, bram, state, mask, timeout_s)
+                    if sample_ms is not None:
+                        button_to_visible_samples_ms.append(sample_ms)
+                    csv_rows.append({
+                        "label": label,
+                        "sample_index": sample_index,
+                        "seq": sample_index + 1,
+                        "status": status,
+                        "rtt_ms": "",
+                        "button_to_visible_ms": "" if sample_ms is None else round(sample_ms, 3),
+                        "trigger": f"button:{mask}",
+                        "measurement": "button_to_visible",
+                        "button_mask": mask,
+                    })
+                    sample_index += 1
+                    last_press_at_ms = now_ms
+                previous_mask = mask
+                time.sleep(poll_interval_s)
+        finally:
+            sock.close()
     else:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.settimeout(SOCKET_TIMEOUT_S)
@@ -365,13 +432,13 @@ def run_udp_rtt_benchmark(
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run direct UDP RTT benchmark against the PYNQ server")
+    parser = argparse.ArgumentParser(description="Run PYNQ RTT or button-to-visible benchmark against the live server path")
     parser.add_argument("--server", default=DEFAULT_SERVER, help="EC2/server IP or hostname")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="server UDP port")
     parser.add_argument("--label", default="default", help="load label for the run, e.g. idle or dual-board")
     parser.add_argument("--samples", type=int, default=DEFAULT_SAMPLES, help="number of RTT probes to send")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_S, help="per-sample timeout in seconds")
-    parser.add_argument("--measure", choices=["rtt", "button_to_visible"], default="rtt", help="measure direct UDP RTT or local board button-to-visible latency")
+    parser.add_argument("--measure", choices=["rtt", "button_to_visible"], default="rtt", help="measure direct UDP RTT or button press to next server-state return written to BRAM")
     parser.add_argument("--trigger", choices=["auto", "button"], default="auto", help="send probes automatically or on each new board button press")
     parser.add_argument("--overlay", default=getattr(pynq_runtime, "OVERLAY_PATH", "") if pynq_runtime else "", help="PYNQ overlay path for button-triggered mode")
     parser.add_argument("--no-hw", action="store_true", help="use null buttons in button-triggered mode")
