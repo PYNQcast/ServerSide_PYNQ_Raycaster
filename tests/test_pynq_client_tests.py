@@ -121,3 +121,25 @@ def test_udp_rtt_plotter_summarises_csv_by_label():
             "p95_rtt_ms": 12.5,
             "max_rtt_ms": 14.5,
         }]
+
+
+def test_udp_rtt_button_trigger_rows_include_trigger_column():
+    with TemporaryDirectory() as temp_dir:
+        csv_path = Path(temp_dir) / "udp_rtt_button.csv"
+        csv_path.write_text(
+            "\n".join([
+                "label,sample_index,seq,status,rtt_ms,trigger",
+                "button-rtt,0,1,ok,22.5,button:4",
+                "button-rtt,1,2,timeout,,button:8",
+            ]),
+            encoding="utf-8",
+        )
+
+        with jupyter_import_context():
+            plotter = importlib.import_module("pynq_client_tests.plot_udp_rtt_csv")
+
+            rows = plotter.load_rtt_rows([str(csv_path)])
+
+        assert rows[0]["status"] == "ok"
+        assert rows[0]["rtt_ms"] == 22.5
+        assert rows[0]["_label"] == "button-rtt"

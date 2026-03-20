@@ -25,7 +25,8 @@ except Exception:
     import rtt_protocol as protocol
 
 try:
-    import run_pynq as pynq_runtime
+    from . import rtt_run_pynq
+    pynq_runtime = rtt_run_pynq.load_run_pynq()
 except Exception:
     pynq_runtime = None
 
@@ -42,6 +43,7 @@ CSV_COLUMNS = [
     "seq",
     "status",
     "rtt_ms",
+    "trigger",
 ]
 
 
@@ -129,12 +131,44 @@ def _write_csv(path: str, rows: list[dict[str, object]]):
         writer.writerows(rows)
 
 
+def _probe_once(sock: socket.socket, server: str, port: int, seq: int, timeout_s: float) -> tuple[str, Optional[float]]:
+    packet = protocol.pack_rtt_ping_packet(seq)
+    sent_at_ns = time.perf_counter_ns()
+    sock.sendto(packet, (server, port))
+    deadline = time.monotonic() + max(0.05, float(timeout_s))
+
+    while time.monotonic() < deadline:
+        try:
+            data, _addr = sock.recvfrom(4096)
+        except socket.timeout:
+            continue
+
+        recv_at_ns = time.perf_counter_ns()
+        try:
+            unpacked = protocol.unpack_rtt_packet(data)
+        except Exception:
+            continue
+        if unpacked["pkt_type"] != protocol.PKT_RTT_PONG:
+            continue
+        if int(unpacked["seq"]) != seq:
+            continue
+
+        return "ok", (recv_at_ns - sent_at_ns) / 1_000_000.0
+
+    return "timeout", None
+
+
 def run_udp_rtt_benchmark(
     server: str,
     port: int,
     label: str,
     samples: int,
     timeout_s: float,
+    *,
+    trigger: str = "auto",
+    buttons=None,
+    poll_hz: float = 60.0,
+    debounce_ms: int = 150,
 ) -> tuple[UdpRTTReport, list[dict[str, object]]]:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(SOCKET_TIMEOUT_S)
@@ -144,49 +178,48 @@ def run_udp_rtt_benchmark(
     csv_rows: list[dict[str, object]] = []
 
     try:
-        for sample_index in range(max(1, int(samples))):
-            seq = (sample_index + 1) & 0xFFFF
-            packet = protocol.pack_rtt_ping_packet(seq)
-            sent_at_ns = time.perf_counter_ns()
-            sock.sendto(packet, (server, port))
-            deadline = time.monotonic() + max(0.05, float(timeout_s))
-            matched = False
-
-            while time.monotonic() < deadline:
-                try:
-                    data, _addr = sock.recvfrom(4096)
-                except socket.timeout:
-                    continue
-
-                recv_at_ns = time.perf_counter_ns()
-                try:
-                    unpacked = protocol.unpack_rtt_packet(data)
-                except Exception:
-                    continue
-                if unpacked["pkt_type"] != protocol.PKT_RTT_PONG:
-                    continue
-                if int(unpacked["seq"]) != seq:
-                    continue
-
-                rtt_ms = (recv_at_ns - sent_at_ns) / 1_000_000.0
-                rtt_samples_ms.append(rtt_ms)
+        if trigger == "button":
+            if buttons is None:
+                raise RuntimeError("button trigger requested but no button source was provided")
+            previous_mask = 0
+            last_press_at_ms = 0
+            sample_index = 0
+            poll_interval_s = 1.0 / max(1.0, float(poll_hz))
+            print("Press board buttons to capture RTT samples...")
+            while sample_index < max(1, int(samples)):
+                now_ms = int(time.time() * 1000)
+                mask = int(buttons.read()) & 0xF
+                is_new_press = mask != 0 and previous_mask == 0 and (now_ms - last_press_at_ms) >= int(debounce_ms)
+                if is_new_press:
+                    seq = (sample_index + 1) & 0xFFFF
+                    status, rtt_ms = _probe_once(sock, server, port, seq, timeout_s)
+                    if rtt_ms is not None:
+                        rtt_samples_ms.append(rtt_ms)
+                    csv_rows.append({
+                        "label": label,
+                        "sample_index": sample_index,
+                        "seq": seq,
+                        "status": status,
+                        "rtt_ms": "" if rtt_ms is None else round(rtt_ms, 3),
+                        "trigger": f"button:{mask}",
+                    })
+                    sample_index += 1
+                    last_press_at_ms = now_ms
+                previous_mask = mask
+                time.sleep(poll_interval_s)
+        else:
+            for sample_index in range(max(1, int(samples))):
+                seq = (sample_index + 1) & 0xFFFF
+                status, rtt_ms = _probe_once(sock, server, port, seq, timeout_s)
+                if rtt_ms is not None:
+                    rtt_samples_ms.append(rtt_ms)
                 csv_rows.append({
                     "label": label,
                     "sample_index": sample_index,
                     "seq": seq,
-                    "status": "ok",
-                    "rtt_ms": round(rtt_ms, 3),
-                })
-                matched = True
-                break
-
-            if not matched:
-                csv_rows.append({
-                    "label": label,
-                    "sample_index": sample_index,
-                    "seq": seq,
-                    "status": "timeout",
-                    "rtt_ms": "",
+                    "status": status,
+                    "rtt_ms": "" if rtt_ms is None else round(rtt_ms, 3),
+                    "trigger": "auto",
                 })
     finally:
         sock.close()
@@ -221,6 +254,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--label", default="default", help="load label for the run, e.g. idle or dual-board")
     parser.add_argument("--samples", type=int, default=DEFAULT_SAMPLES, help="number of RTT probes to send")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_S, help="per-sample timeout in seconds")
+    parser.add_argument("--trigger", choices=["auto", "button"], default="auto", help="send probes automatically or on each new board button press")
+    parser.add_argument("--overlay", default=getattr(pynq_runtime, "OVERLAY_PATH", "") if pynq_runtime else "", help="PYNQ overlay path for button-triggered mode")
+    parser.add_argument("--no-hw", action="store_true", help="use null buttons in button-triggered mode")
+    parser.add_argument("--poll-hz", type=float, default=60.0, help="button polling rate in Hz for button-triggered mode")
+    parser.add_argument("--debounce-ms", type=int, default=150, help="minimum spacing between accepted button presses")
     parser.add_argument("--csv-out", default="", help="optional path to write per-sample CSV results")
     parser.add_argument("--json-out", default="", help="optional path to write JSON summary results")
     return parser
@@ -230,12 +268,26 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
 
+    buttons = None
+    if args.trigger == "button":
+        if pynq_runtime is None:
+            print("Button-triggered mode requires run_pynq.py to be available next to this folder or in the parent jupyter_side folder.")
+            return 1
+        if args.no_hw:
+            buttons = pynq_runtime._NullButtons()
+        else:
+            _overlay, _bram, buttons = pynq_runtime._load_overlay(args.overlay)
+
     report, csv_rows = run_udp_rtt_benchmark(
         server=args.server,
         port=int(args.port),
         label=args.label,
         samples=max(1, int(args.samples)),
         timeout_s=max(0.05, float(args.timeout)),
+        trigger=args.trigger,
+        buttons=buttons,
+        poll_hz=max(1.0, float(args.poll_hz)),
+        debounce_ms=max(0, int(args.debounce_ms)),
     )
 
     _print_report(report)

@@ -38,6 +38,18 @@ python3 -m pynq_client_tests \
   --json-out udp_rtt_idle.json
 ```
 
+Optional button-triggered mode:
+
+```bash
+python3 run_pynq_rtt.py \
+  --server 3.9.71.204 \
+  --samples 20 \
+  --label button-rtt \
+  --trigger button \
+  --csv-out udp_rtt_button.csv \
+  --json-out udp_rtt_button.json
+```
+
 Key outputs:
 
 - `avg_rtt_ms`
@@ -69,6 +81,11 @@ How to read the stats:
 - `loss_pct`: percentage of probes that timed out with no RTT reply.
 - `samples_ok`: number of successful RTT replies received.
 - `samples_lost`: number of timed out RTT probes.
+
+Trigger modes:
+
+- `auto`: sends probes immediately one after another.
+- `button`: sends one RTT probe per new board button press using the `run_pynq.py` GPIO button path.
 
 Recommended report wording:
 
