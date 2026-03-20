@@ -27,8 +27,10 @@ except Exception:
 try:
     from . import rtt_run_pynq
     pynq_runtime = rtt_run_pynq.load_run_pynq()
-except Exception:
+    PYNQ_RUNTIME_IMPORT_ERROR = None
+except Exception as exc:
     pynq_runtime = None
+    PYNQ_RUNTIME_IMPORT_ERROR = exc
 
 
 DEFAULT_SERVER = "3.9.71.204"
@@ -458,7 +460,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     needs_hw_path = args.trigger == "button" or args.measure == "button_to_visible"
     if needs_hw_path:
         if pynq_runtime is None:
-            print("Button-related modes require run_pynq.py to be available next to this folder or in the parent jupyter_side folder.")
+            detail = f" ({PYNQ_RUNTIME_IMPORT_ERROR})" if PYNQ_RUNTIME_IMPORT_ERROR is not None else ""
+            print("Button-related modes require run_pynq.py to be available next to this folder or in the parent jupyter_side folder." + detail)
             return 1
         if args.no_hw:
             buttons = pynq_runtime._NullButtons()
