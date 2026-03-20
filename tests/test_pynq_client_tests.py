@@ -188,3 +188,12 @@ def test_udp_rtt_plotter_summarises_csv_by_label():
             "p95_rtt_ms": 12.5,
             "max_rtt_ms": 14.5,
         }]
+
+
+def test_run_pynq_test_button_names_decode_mask():
+    with jupyter_import_context():
+        run_pynq_test = importlib.import_module("pynq_client_tests.run_pynq_test")
+
+        assert run_pynq_test._button_names(0) == "none"
+        assert run_pynq_test._button_names(4) == "forward"
+        assert run_pynq_test._button_names(4 | 8) == "forward+right"

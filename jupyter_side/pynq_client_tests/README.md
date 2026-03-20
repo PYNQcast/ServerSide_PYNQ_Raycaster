@@ -111,14 +111,14 @@ This writes:
 - `input_latency_max.png`
 - `input_latency_trace.png`
 
-If you want a notebook-first workflow, open:
+If you want a notebook-first workflow for button-triggered RTT capture, open:
 
 - [Input_Latency_Report.ipynb](/home/akendall/Documents/ServerSide_PYNQ_Raycaster/jupyter_side/pynq_client_tests/Input_Latency_Report.ipynb)
 
 That notebook lets you:
 
-- set the monitor URL and load label
-- capture a CSV run from inside Jupyter
+- set the server and load label
+- capture a button-triggered CSV run from inside Jupyter
 - compare multiple CSV runs
 - render the report plots inline
 
@@ -158,3 +158,16 @@ This writes:
 - `udp_rtt_comparison.png`
 - `udp_rtt_loss.png`
 - `udp_rtt_trace.png`
+
+If you want RTT samples specifically triggered by real board button presses, use:
+
+```bash
+python3 pynq_client_tests/run_pynq_test.py \
+  --server 3.9.71.204 \
+  --samples 20 \
+  --label button-rtt \
+  --csv-out button_rtt.csv \
+  --json-out button_rtt.json
+```
+
+That uses the same GPIO button path as `run_pynq.py` and records one RTT sample per new button press.
