@@ -16,16 +16,21 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
 
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+
 try:
     from . import rtt_protocol as protocol
-except Exception:
-    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-    if SCRIPT_DIR not in sys.path:
-        sys.path.insert(0, SCRIPT_DIR)
+except ImportError:
     import rtt_protocol as protocol
 
 try:
     from . import rtt_run_pynq
+except ImportError:
+    import rtt_run_pynq
+
+try:
     pynq_runtime = rtt_run_pynq.load_run_pynq()
     PYNQ_RUNTIME_IMPORT_ERROR = None
 except Exception as exc:
