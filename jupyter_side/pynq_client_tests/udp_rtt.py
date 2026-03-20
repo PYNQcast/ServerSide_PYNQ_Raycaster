@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Direct UDP RTT benchmark against the EC2 PYNQ server."""
+# udp_rtt.py - Direct UDP RTT benchmark against the EC2 PYNQ server.
 
 from __future__ import annotations
 
@@ -34,12 +34,8 @@ pynq_runtime = None
 PYNQ_RUNTIME_IMPORT_ERROR = None
 
 
+# Load run_pynq lazily; importing pynq at module load initialises hardware and can destabilise the session.
 def _ensure_pynq_runtime():
-    """Load run_pynq lazily — only when a button mode is actually requested.
-
-    Importing pynq at module load time on the board initialises hardware and
-    can crash or destabilise a running session, so we defer it until needed.
-    """
     global pynq_runtime, PYNQ_RUNTIME_IMPORT_ERROR
     if pynq_runtime is not None:
         return
@@ -308,6 +304,7 @@ def _measure_button_to_visible(sock: socket.socket, server: str, port: int, bram
     return "timeout", None
 
 
+# Run the full benchmark: register (if needed), collect samples, return a report and per-sample CSV rows.
 def run_udp_rtt_benchmark(
     server: str,
     port: int,

@@ -1,25 +1,9 @@
-# ec2/server/server.py
+# server.py - SEDA game server entry point.
 #
-# Python SEDA game server : entry point.
+# Pipeline: T1(recv) -> T2(game loop) -> T3(broadcast) asyncio; T4(Redis) OS thread.
+# T1/T3 share one socket so broadcasts leave from EC2:9000, matching the node NAT entry.
 #
-# 4-stage pipeline: T1 → T2 → T3 (asyncio), T4 (thread)
-#
-#   T1 UDPReceiver   asyncio  → packet_queue (asyncio.Queue)   → T2 GameTick
-#   T2 GameTick      asyncio  → broadcast_queue (asyncio.Queue) → T3 Broadcaster
-#   T2 GameTick      asyncio  → write_queue (SimpleQueue)       → T4 RedisWriter
-#   T4 RedisWriter   thread   → Redis (blocking calls, isolated from event loop)
-#
-# T1/T2/T3 run as asyncio coroutines in a single event loop — cooperative,
-# no locks needed on shared state (self.players in T2).
-# T4 runs as a dedicated OS thread — Redis latency never stalls T2/T3.
-# The SimpleQueue between T2 and T4 is the thread-safe SEDA stage boundary.
-#
-# T1 and T3 share the same UDP socket (port 9000) so that broadcast replies
-# come from EC2:9000 — matching the NAT mapping the node's sendto created.
-#
-# Run on EC2:
-#   python3 ec2/server/server.py
-# Requires: pip install redis
+# Run: python3 ec2/server/server.py
 
 import asyncio
 import queue
@@ -38,22 +22,19 @@ UDP_PORT  = 9000
 TICK_RATE = 60   # Hz
 
 async def main():
-    packet_queue    = asyncio.Queue()    # T1 → T2 : raw UDP packets
-    broadcast_queue = asyncio.Queue()    # T2 → T3 : game state to broadcast
-    write_queue     = queue.SimpleQueue() # T2 → T4 : Redis writes (thread-safe)
+    packet_queue    = asyncio.Queue()     # T1 -> T2: raw UDP datagrams
+    broadcast_queue = asyncio.Queue()     # T2 -> T3: game state to broadcast
+    write_queue     = queue.SimpleQueue() # T2 -> T4: Redis writes (thread-safe)
 
     receiver = UDPReceiver(packet_queue)
     writer   = RedisWriter(write_queue)
 
-    # T4 starts as a thread — runs independently of the event loop
-    writer.start()
+    writer.start()  # T4 daemon thread, runs independently of the event loop
 
     print(f"[server] SEDA pipeline starting on UDP port {UDP_PORT}")
-    print(f"[server] T1/T2/T3: asyncio event loop  |  T4: OS thread")
+    print(f"[server] T1/T2/T3: asyncio  |  T4: OS thread")
 
-    # Bind T1 first — exposes receiver.transport for T3 and T2 to share.
-    # Sharing the socket means broadcasts and ACKs come from EC2:9000, which matches
-    # the NAT entry the node's outbound sendto(EC2:9000) created.
+    # T1 must bind first so receiver.transport is available for T3 and T2 to reuse.
     await receiver.bind(UDP_PORT)
 
     ticker = GameTick(
@@ -65,7 +46,6 @@ async def main():
     )
     broadcaster = Broadcaster(broadcast_queue, shared_transport=receiver.transport)
 
-    # T1, T2, T3 run as asyncio coroutines
     await asyncio.gather(
         receiver.run(),
         ticker.run(),

@@ -1,7 +1,5 @@
-# match_state.py — MatchState: all mutable match-level fields in one place.
-#
-# Lives in game_logic/ because match state is a pure data structure — no queues,
-# no asyncio. Any module can import it without pulling in SEDA orchestration.
+# match_state.py - MatchState: all mutable match-level fields in one place.
+# Pure data structure with no queues or asyncio; safe to import from any module.
 
 import time
 from t2_constants import (
@@ -9,7 +7,6 @@ from t2_constants import (
     GHOST_SPEED, TAG_RADIUS, MAX_GHOSTS,
 )
 from protocol import GAME_MODE_CHASE
-# t2_constants lives in server/ — imported here because constants are config, not logic
 
 
 def _clamp_float(value, default: float, minimum: float, maximum: float) -> float:
@@ -20,15 +17,13 @@ def _clamp_float(value, default: float, minimum: float, maximum: float) -> float
     return max(minimum, min(maximum, parsed))
 
 
-# All mutable state that belongs to one match lifecycle — passed by reference to sub-modules
+# All mutable state for one match lifecycle; passed by reference to sub-modules.
 class MatchState:
 
     def __init__(self):
         self.reset_all()
 
-    # ── Full reset ────────────────────────────────────────────────────────────
-    # Clears every field — called on startup and after each match ends cleanly
-
+    # Clears every field; called on startup and after each match ends cleanly.
     def reset_all(self):
         self.spawn_positions = list(SPAWN_POSITIONS)
         self.slot_modes = {1: "manual", 2: "manual"}
@@ -40,14 +35,11 @@ class MatchState:
         }
         self.clear_match(arm_lockout=False)
 
+    # Reset slot modes to manual when returning to lobby so previous auto modes don't carry over.
     def reset_slot_modes(self):
-        """Reset all board slots to manual — call when returning to lobby so a
-        monitor-set auto mode from the previous match doesn't carry over."""
         self.slot_modes = {1: "manual", 2: "manual"}
 
-    # ── Player position helpers ───────────────────────────────────────────────
-    # Teleporting to spawn after a tag prevents immediate re-tag after flash clears
-
+    # Teleport all players to spawn; prevents immediate re-tag after flash clears.
     def reset_positions(self):
         for p in self.players.values():
             idx       = p["player_id"] - 1
@@ -58,9 +50,7 @@ class MatchState:
         self.match_tick = 0   # restart grace period so proximity check pauses
         print("[T2] positions reset to spawn, grace period restarted")
 
-    # ── Match lifecycle helpers ───────────────────────────────────────────────
-    # Centralised state transitions so GameTick, PacketHandler, CoreLogic all agree
-
+    # Centralised state transitions so GameTick, PacketHandler, and CoreLogic all agree.
     def clear_match(self, arm_lockout: bool):
         self.players       = {}   # addr → player dict (ghost addrs use sentinel "ghost:<id>")
         self.purge_expired_reconnect_blocks()
@@ -160,7 +150,7 @@ class MatchState:
                 return p
         return None
 
-    # True while we're still within the post-match lockout window
+    # True while within the post-match lockout window.
     def is_in_lockout(self) -> bool:
         return self.lockout_until is not None and time.monotonic() < self.lockout_until
 
@@ -189,6 +179,6 @@ class MatchState:
         for addr in expired:
             del self.reconnect_blocked_until[addr]
 
-    # True while match_tick is below GRACE_TICKS — proximity check is skipped
+    # True while match_tick is below GRACE_TICKS; proximity check is skipped.
     def in_grace_period(self) -> bool:
         return self.match_tick < GRACE_TICKS

@@ -1,3 +1,5 @@
+# player_profiles.py - Player identity helpers: sanitise username, derive stable keys.
+
 import re
 
 
@@ -21,6 +23,7 @@ def controller_key_for_addr(addr) -> str:
     return f"controller-{key}" if key else "controller-unknown"
 
 
+# Build the identity dict for a player: username-keyed if username provided, IP-keyed otherwise.
 def build_player_identity(username: str, addr) -> dict:
     clean_username = sanitize_username(username)
     controller_key = controller_key_for_addr(addr)

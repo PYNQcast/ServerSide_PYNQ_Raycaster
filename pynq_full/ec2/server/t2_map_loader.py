@@ -1,6 +1,5 @@
-# t2_map_loader.py — Map file loading for the pynq_full server.
-#
-# Kept separate so GameTick stays a pure orchestrator with no file-I/O logic.
+# t2_map_loader.py - Map file parsing and spawn-position calculation.
+# Kept separate so GameTick stays a pure orchestrator with no file I/O.
 # Map state is a plain mutable dict so the control listener can hot-swap it
 # without touching GameTick or PacketHandler internals.
 
@@ -178,12 +177,8 @@ def build_spawn_positions(width: int, height: int, tiles: bytearray, tile_scale:
         positions.append(cell_to_world(cell[0], cell[1], width, height, tile_scale))
     return positions
 
+# Parse a text map file. Tile key: '#'=wall, 'B'=bit spawn, '1'..'5'=spawn anchor, else=empty.
 def load_map(path: str) -> dict:
-    """Parse a text map file.
-
-    Tile key: '#' = wall, 'B' = bit spawn, '1'..'5' = explicit spawn anchors,
-    anything else = empty.
-    """
     rows = []
     try:
         with open(path) as f:
