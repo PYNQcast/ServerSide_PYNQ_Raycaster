@@ -1,112 +1,137 @@
-import importlib.util
+import importlib
+import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+PYNQ_EC2 = ROOT / "pynq_full" / "ec2"
+PYNQ_SERVER = PYNQ_EC2 / "server"
+PYNQ_INTERFACING = ROOT / "pynq_full" / "interfacing"
+SIM_EC2 = ROOT / "sim_full" / "ec2"
+SIM_SERVER = SIM_EC2 / "server"
+SIM_PROTOCOL = ROOT / "sim_full" / "interfacing_+_sim"
 
 
-def _load_module(name, rel_path):
-    path = ROOT / rel_path
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
+@contextmanager
+def pynq_import_context():
+    original_path = list(sys.path)
+    sys.path[:0] = [str(PYNQ_INTERFACING), str(PYNQ_SERVER), str(PYNQ_EC2)]
+    for name in list(sys.modules):
+        if name in {"protocol", "t2_constants"} or name.startswith("game_logic"):
+            sys.modules.pop(name, None)
+    try:
+        yield
+    finally:
+        sys.path[:] = original_path
+        for name in list(sys.modules):
+            if name in {"protocol", "t2_constants"} or name.startswith("game_logic"):
+                sys.modules.pop(name, None)
 
 
-def test_sim_validate_position_accepts_newer_in_bounds_step():
-    game_logic = _load_module("sim_game_logic", "sim_full/ec2/server/game_logic.py")
-
-    assert game_logic.validate_position(
-        10,
-        0.0, 0.0, 0.0,
-        3.0, 4.0, 0.1, 11,
-        -100.0, -100.0, 100.0, 100.0,
-        10.0,
-    )
-
-
-def test_sim_validate_position_rejects_stale_seq():
-    game_logic = _load_module("sim_game_logic", "sim_full/ec2/server/game_logic.py")
-
-    assert not game_logic.validate_position(
-        10,
-        0.0, 0.0, 0.0,
-        1.0, 1.0, 0.1, 10,
-        -100.0, -100.0, 100.0, 100.0,
-        10.0,
-    )
+@contextmanager
+def sim_import_context():
+    original_path = list(sys.path)
+    sys.path[:0] = [str(SIM_PROTOCOL), str(SIM_SERVER), str(SIM_EC2)]
+    for name in list(sys.modules):
+        if name in {"protocol", "t2_constants"} or name.startswith("game_logic"):
+            sys.modules.pop(name, None)
+    try:
+        yield
+    finally:
+        sys.path[:] = original_path
+        for name in list(sys.modules):
+            if name in {"protocol", "t2_constants"} or name.startswith("game_logic"):
+                sys.modules.pop(name, None)
 
 
-def test_sim_validate_position_rejects_out_of_bounds():
-    game_logic = _load_module("sim_game_logic", "sim_full/ec2/server/game_logic.py")
+def test_pynq_anticheat_accepts_newer_in_bounds_step():
+    with pynq_import_context():
+        anticheat = importlib.import_module("game_logic.anticheat")
 
-    assert not game_logic.validate_position(
-        10,
-        0.0, 0.0, 0.0,
-        101.0, 0.0, 0.1, 11,
-        -100.0, -100.0, 100.0, 100.0,
-        10.0,
-    )
-
-
-def test_sim_validate_position_rejects_speed_cap():
-    game_logic = _load_module("sim_game_logic", "sim_full/ec2/server/game_logic.py")
-
-    assert not game_logic.validate_position(
-        10,
-        0.0, 0.0, 0.0,
-        11.0, 0.0, 0.1, 11,
-        -100.0, -100.0, 100.0, 100.0,
-        10.0,
-    )
+        assert anticheat.Anticheat.validate_position(
+            10,
+            0.0, 0.0, 0.0,
+            3.0, 4.0, 0.1, 11,
+            -100.0, -100.0, 100.0, 100.0,
+            10.0,
+        )
 
 
-def test_pynq_bridge_python_fallback_matches_policy():
-    bridge = _load_module("pynq_game_logic_bridge", "pynq_full/ec2/server/game_logic_bridge.py")
+def test_pynq_anticheat_rejects_stale_seq():
+    with pynq_import_context():
+        anticheat = importlib.import_module("game_logic.anticheat")
 
-    assert bridge._FallbackGameLogic.validate_position(
-        65535,
-        0.0, 0.0, 0.0,
-        1.0, 1.0, 0.0, 0,
-        -100.0, -100.0, 100.0, 100.0,
-        10.0,
-    )
-    assert not bridge._FallbackGameLogic.validate_position(
-        20,
-        0.0, 0.0, 0.0,
-        50.0, 0.0, 0.0, 21,
-        -100.0, -100.0, 100.0, 100.0,
-        10.0,
-    )
+        assert not anticheat.Anticheat.validate_position(
+            10,
+            0.0, 0.0, 0.0,
+            1.0, 1.0, 0.1, 10,
+            -100.0, -100.0, 100.0, 100.0,
+            10.0,
+        )
+
+
+def test_pynq_anticheat_rejects_out_of_bounds():
+    with pynq_import_context():
+        anticheat = importlib.import_module("game_logic.anticheat")
+
+        assert not anticheat.Anticheat.validate_position(
+            10,
+            0.0, 0.0, 0.0,
+            101.0, 0.0, 0.1, 11,
+            -100.0, -100.0, 100.0, 100.0,
+            10.0,
+        )
+
+
+def test_pynq_anticheat_rejects_speed_cap():
+    with pynq_import_context():
+        anticheat = importlib.import_module("game_logic.anticheat")
+
+        assert not anticheat.Anticheat.validate_position(
+            20,
+            0.0, 0.0, 0.0,
+            50.0, 0.0, 0.0, 21,
+            -100.0, -100.0, 100.0, 100.0,
+            10.0,
+        )
+
+
+def test_pynq_anticheat_distance_between_is_euclidean():
+    with pynq_import_context():
+        anticheat = importlib.import_module("game_logic.anticheat")
+
+        assert anticheat.Anticheat.distance_between(0.0, 0.0, 3.0, 4.0) == 5.0
 
 
 def test_protocol_flag_names_make_direction_explicit():
-    sim_protocol = _load_module("sim_protocol", "sim_full/interfacing_+_sim/protocol.py")
+    with sim_import_context():
+        sim_protocol = importlib.import_module("protocol")
 
-    assert sim_protocol.client_input_flags(shooting=True) == sim_protocol.FLAG_INPUT_SHOOT
-    assert sim_protocol.decode_flag_names(
-        sim_protocol.FLAG_INPUT_SHOOT, direction="client_to_server"
-    ) == ["shoot"]
-    assert sim_protocol.decode_flag_names(
-        sim_protocol.FLAG_TAGGED | sim_protocol.FLAG_MATCH_END,
-        direction="server_to_client",
-    ) == ["tagged", "match_end"]
+        assert sim_protocol.client_input_flags(shooting=True) == sim_protocol.FLAG_INPUT_SHOOT
+        assert sim_protocol.decode_flag_names(
+            sim_protocol.FLAG_INPUT_SHOOT, direction="client_to_server"
+        ) == ["shoot"]
+        assert sim_protocol.decode_flag_names(
+            sim_protocol.FLAG_TAGGED | sim_protocol.FLAG_MATCH_END,
+            direction="server_to_client",
+        ) == ["tagged", "match_end"]
 
 
 def test_protocol_node_packet_carries_mode_and_version():
-    sim_protocol = _load_module("sim_protocol", "sim_full/interfacing_+_sim/protocol.py")
+    with sim_import_context():
+        sim_protocol = importlib.import_module("protocol")
 
-    packet = sim_protocol.pack_node_packet(
-        sim_protocol.PKT_STATE_UPDATE,
-        7,
-        1.5, 2.5, 0.75,
-        sim_protocol.client_input_flags(shooting=True),
-        movement_mode=sim_protocol.MOVEMENT_MODE_INTENT_WITH_PREDICTION,
-    )
-    unpacked = sim_protocol.unpack_node_packet(packet)
+        packet = sim_protocol.pack_node_packet(
+            sim_protocol.PKT_STATE_UPDATE,
+            7,
+            1.5, 2.5, 0.75,
+            sim_protocol.client_input_flags(shooting=True),
+            movement_mode=sim_protocol.MOVEMENT_MODE_INTENT_WITH_PREDICTION,
+        )
+        unpacked = sim_protocol.unpack_node_packet(packet)
 
-    assert unpacked["seq"] == 7
-    assert unpacked["input_flags"] == sim_protocol.FLAG_INPUT_SHOOT
-    assert unpacked["movement_mode"] == sim_protocol.MOVEMENT_MODE_INTENT_WITH_PREDICTION
-    assert unpacked["protocol_version"] == sim_protocol.NODE_PROTOCOL_VERSION
+        assert unpacked["seq"] == 7
+        assert unpacked["input_flags"] == sim_protocol.FLAG_INPUT_SHOOT
+        assert unpacked["movement_mode"] == sim_protocol.MOVEMENT_MODE_INTENT_WITH_PREDICTION
+        assert unpacked["protocol_version"] == sim_protocol.NODE_PROTOCOL_VERSION

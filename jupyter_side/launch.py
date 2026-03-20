@@ -23,7 +23,7 @@ import time
 
 # ── paths ────────────────────────────────────────────────────────────────────
 SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
-CLIENT_SCRIPT = os.path.join(SCRIPT_DIR, "script.py")
+CLIENT_SCRIPT = os.path.join(SCRIPT_DIR, "pynq_client.py")
 CONFIG_PATH   = os.path.expanduser("~/.pynqcast.json")
 
 # ── defaults ─────────────────────────────────────────────────────────────────

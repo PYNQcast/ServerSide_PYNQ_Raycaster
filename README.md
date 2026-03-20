@@ -137,6 +137,19 @@ Opens a 4-pane tmux session:
 - Monitor available at `http://localhost:8080` via SSH tunnel.
 - PYNQ nodes connect directly to `EC2:9000` — no simulator panes needed.
 
+### Assessor dashboard only (`monitor_view.sh`)
+
+```bash
+./monitor_view.sh
+```
+
+Opens just the live monitor/dashboard without starting the full tmux dev stack.
+
+- Reuses the existing EC2 deployment and starts `monitor.py` there if needed.
+- Creates a background SSH tunnel from local `:8080` to EC2 `:8080`.
+- Opens the dashboard in the browser for quick assessor access.
+- Close the local tunnel later with `./monitor_view.sh --stop`.
+
 ### PC simulator (`sim_dev2.sh`)
 
 ```bash

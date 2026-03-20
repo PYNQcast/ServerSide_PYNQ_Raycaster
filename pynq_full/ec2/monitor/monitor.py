@@ -672,6 +672,12 @@ def collect_state():
             ]
         except Exception:
             board_replays = []
+    latest_input_latency = None
+    if game_raw and game_raw.get("latest_input_latency"):
+        try:
+            latest_input_latency = json.loads(game_raw["latest_input_latency"])
+        except Exception:
+            latest_input_latency = None
     queued_players = []
     if game_raw and game_raw.get("queued_players"):
         try:
@@ -780,6 +786,7 @@ def collect_state():
         "slot_modes": slot_modes,
         "board_replays": board_replays,
         "ghost_profiles": ghost_profiles,
+        "input_latency": latest_input_latency,
         "match": {
             "started": match_started,
             "ended": match_ended,

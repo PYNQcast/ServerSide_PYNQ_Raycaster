@@ -5,9 +5,11 @@
 ```bash
 ./pynq_dev.sh   # PYNQ board stack
 ./sim_dev2.sh   # simulator stack (software nodes, no hardware needed)
+./monitor_view.sh  # dashboard only, no tmux stack
 ```
 
 Both scripts block until tmux is ready, then attach automatically.
+`monitor_view.sh` just opens the live dashboard over SSH and exits after setting up the tunnel.
 
 ---
 
@@ -72,6 +74,21 @@ chmod 600 ServerSide_PYNQ_Raycaster/raycastpair.pem
 cd ServerSide_PYNQ_Raycaster
 npm install        # one-time
 ./sim_dev2.sh      # or ./pynq_dev.sh
+```
+
+For assessors who only need the dashboard, they can skip the full launchers:
+
+```bash
+cp raycastpair.pem ServerSide_PYNQ_Raycaster/
+chmod 600 ServerSide_PYNQ_Raycaster/raycastpair.pem
+cd ServerSide_PYNQ_Raycaster
+./monitor_view.sh
+```
+
+That command ensures `monitor.py` is running on EC2, opens a local `:8080` SSH tunnel, and launches the browser. To close the tunnel later:
+
+```bash
+./monitor_view.sh --stop
 ```
 
 ---

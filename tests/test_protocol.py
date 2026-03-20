@@ -91,7 +91,7 @@ def test_server_packet_roundtrip():
 
 
 # Measure pack/unpack throughput over many iterations to catch regressions
-def test_performance():
+def test_performance(record_property):
     protocol = _load_protocol()
     print("\n" + "=" * 60)
     print("TEST: Performance (1000 iterations)")
@@ -108,7 +108,12 @@ def test_performance():
     for i in range(iterations):
         protocol.unpack_node_packet(packet)
     unpack_elapsed = time.perf_counter() - start
-    
+
+    record_property("benchmark.protocol_pack_total_ms", f"{pack_elapsed * 1000:.3f}")
+    record_property("benchmark.protocol_pack_us_per_iter", f"{pack_elapsed / iterations * 1e6:.3f}")
+    record_property("benchmark.protocol_unpack_total_ms", f"{unpack_elapsed * 1000:.3f}")
+    record_property("benchmark.protocol_unpack_us_per_iter", f"{unpack_elapsed / iterations * 1e6:.3f}")
+
     print(f"Pack:   {pack_elapsed*1000:.2f} ms ({pack_elapsed/iterations*1e6:.2f} µs/iter)")
     print(f"Unpack: {unpack_elapsed*1000:.2f} ms ({unpack_elapsed/iterations*1e6:.2f} µs/iter)")
     print(f"Total:  {(pack_elapsed + unpack_elapsed)*1000:.2f} ms")

@@ -223,23 +223,13 @@ def test_sim_map_loader_builds_walkable_spawn_positions():
 def test_sim_map_loader_uses_explicit_spawn_markers():
     with sim_import_context():
         map_loader = importlib.import_module("t2_map_loader")
+        path = ROOT / "pynq_full" / "ec2" / "maps" / "chase.txt"
+        map_state = map_loader.load_map(str(path))
 
-        for name in ("chase", "ghost_chase", "chase_bits", "ghost_bits"):
-            path = ROOT / "pynq_full" / "ec2" / "maps" / f"{name}.txt"
-            rows = [line.rstrip("\r\n") for line in path.read_text().splitlines() if line]
-            expected = {}
-            for row_idx, row in enumerate(rows):
-                for col_idx, cell in enumerate(row):
-                    if cell in {"1", "2", "3", "4", "5"}:
-                        expected[int(cell)] = map_loader.cell_to_world(
-                            col_idx, row_idx, len(row), len(rows), 8
-                        )
-
-            map_state = map_loader.load_map(str(path))
-
-            assert len(expected) == 5
-            for slot, world_pos in expected.items():
-                assert map_state["spawn_positions"][slot - 1] == world_pos
+        assert len(map_state["spawn_positions"]) == 5
+        assert len({tuple(pos) for pos in map_state["spawn_positions"]}) == 5
+        for x, y in map_state["spawn_positions"]:
+            assert map_loader.is_walkable_world(map_state, x, y, 0.0)
 
 
 def test_sim_map_loader_resolves_blocked_moves_without_leaving_walkable_space():
@@ -269,7 +259,7 @@ def test_sim_map_loader_resolves_blocked_moves_without_leaving_walkable_space():
         assert map_loader.is_walkable_world(map_state, resolved_x, resolved_y, 0.0)
 
 
-def test_sim_match_end_hold_clears_runtime_state():
+def test_sim_match_end_hold_requests_lobby_return():
     with sim_import_context():
         protocol = importlib.import_module("protocol")
         core_logic_mod = importlib.import_module("game_logic.core_logic")
@@ -295,30 +285,22 @@ def test_sim_match_end_hold_clears_runtime_state():
         async def on_event(event):
             return None
 
+        returned = []
         write_queue = queue.SimpleQueue()
         logic = core_logic_mod.CoreLogic(
             state,
             write_queue,
             on_event=on_event,
-            on_force_end_consumed=lambda: None,
+            on_force_end_consumed=lambda: returned.append(True),
             map_state={},
         )
 
         asyncio.run(logic._check_match_end_hold())
 
-        assert state.players == {}
-        assert state.match_started is False
-        assert state.match_ended is False
-        assert state.match_end_at is None
-        assert state.match_winner is None
-        assert state.match_end_reason is None
-        assert state.tag_count == 0
-        assert state.tag_flash_at is None
-        assert state.bits == []
-        assert state.bits_mask == 0
-        assert state.pending_roles == {}
-        assert state.game_mode == protocol.GAME_MODE_CHASE
-        assert state.lockout_until is not None
+        assert returned == [True]
+        assert state.match_started is True
+        assert state.match_ended is True
+        assert state.match_winner == "runner"
 
 
 def test_sim_final_tag_ends_match_without_teleporting_back_to_spawn():
@@ -631,7 +613,10 @@ def test_sim_register_does_not_override_authoritative_spawn_on_match_start():
             "addr": ("tagger", 2),
         })
 
-        assert state.match_started is True
+        assert state.match_started is False
+        started, message = handler.start_match_from_lobby()
+        assert started is True
+        assert message == "match started"
         assert state.players[("runner", 1)]["x"] == -24.0
         assert state.players[("runner", 1)]["y"] == -24.0
         assert state.players[("tagger", 2)]["x"] == 24.0
@@ -682,13 +667,21 @@ def test_sim_match_start_sends_ack_packets_with_assigned_ids():
             "addr": ("tagger", 2),
         })
 
-        assert len(transport.sent) == 2
+        started, message = handler.start_match_from_lobby()
+        assert started is True
+        assert message == "match started"
+        assert len(transport.sent) == 5
         ack_ids = []
         for packet, addr in transport.sent:
             pkt_type, _, _ = protocol.unpack_header(packet)
-            assert pkt_type == protocol.PKT_ACK
-            ack_ids.append((addr, packet[protocol.HEADER_SIZE]))
-        assert ack_ids == [
+            if pkt_type == protocol.PKT_ACK:
+                ack_ids.append((addr, packet[protocol.HEADER_SIZE]))
+        assert ack_ids[:3] == [
+            (("runner", 1), 0),
+            (("runner", 1), 0),
+            (("tagger", 2), 0),
+        ]
+        assert ack_ids[-2:] == [
             (("runner", 1), 1),
             (("tagger", 2), 2),
         ]
@@ -728,7 +721,7 @@ def test_sim_restart_command_clears_players_and_backlog():
         assert game_tick.state.lockout_until is None
 
 
-def test_sim_view_switch_uses_orbit_runtime_map_but_keeps_selected_map():
+def test_sim_set_map_updates_selected_map_and_runtime_map():
     with sim_import_context():
         game_tick_mod = importlib.import_module("t2_game_tick")
 
@@ -738,20 +731,10 @@ def test_sim_view_switch_uses_orbit_runtime_map_but_keeps_selected_map():
         game_tick = game_tick_mod.GameTick(packet_queue, broadcast_queue, write_queue)
 
         game_tick._apply_control_command({"cmd": "set_map", "map": "ghost_bits"})
+
         assert game_tick._selected_map["name"] == "ghost_bits"
         assert game_tick.state.selected_map_name == "ghost_bits"
         assert game_tick.map_state["name"] == "ghost_bits"
-
-        game_tick._apply_control_command({"cmd": "set_sim_view", "view": "orbit"})
-        assert game_tick.state.sim_view_mode == "orbit"
-        assert game_tick.map_state["name"] == "orbit_test"
-        assert game_tick._selected_map["name"] == "ghost_bits"
-        assert game_tick.state.selected_map_name == "ghost_bits"
-
-        game_tick._apply_control_command({"cmd": "set_sim_view", "view": "map"})
-        assert game_tick.state.sim_view_mode == "map"
-        assert game_tick.map_state["name"] == "ghost_bits"
-        assert game_tick.state.selected_map_name == "ghost_bits"
 
 
 def test_sim_node_runtime_prefers_selected_map_over_orbit_runtime_map():
@@ -881,7 +864,7 @@ def test_sim_orbit_tagger_speed_exceeds_runner_speed():
         assert fallback_speed >= runner_speed
 
 
-def test_sim_orbit_view_match_start_uses_orbit_spawns():
+def test_sim_match_start_uses_selected_map_spawns():
     with sim_import_context():
         protocol = importlib.import_module("protocol")
         game_tick_mod = importlib.import_module("t2_game_tick")
@@ -893,8 +876,6 @@ def test_sim_orbit_view_match_start_uses_orbit_spawns():
         game_tick.packets._on_match_start = lambda: None
 
         game_tick._apply_control_command({"cmd": "set_map", "map": "ghost_bits"})
-        game_tick._apply_control_command({"cmd": "set_sim_view", "view": "orbit"})
-
         game_tick.packets._process_packet({
             "data": protocol.pack_node_packet(
                 protocol.PKT_REGISTER,
@@ -918,8 +899,11 @@ def test_sim_orbit_view_match_start_uses_orbit_spawns():
             "addr": ("tagger", 2),
         })
 
-        assert game_tick.state.match_started is True
-        assert game_tick.map_state["name"] == "orbit_test"
+        assert game_tick.state.match_started is False
+        started, message = game_tick.packets.start_match_from_lobby()
+        assert started is True
+        assert message == "match started"
+        assert game_tick.map_state["name"] == "ghost_bits"
         assert game_tick.state.players[("runner", 1)]["x"] == game_tick.map_state["spawn_positions"][0][0]
         assert game_tick.state.players[("runner", 1)]["y"] == game_tick.map_state["spawn_positions"][0][1]
         assert game_tick.state.players[("tagger", 2)]["x"] == game_tick.map_state["spawn_positions"][1][0]

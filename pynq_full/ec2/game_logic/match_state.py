@@ -86,6 +86,7 @@ class MatchState:
         self.bits          = []
         self.bits_mask     = 0
         self.pending_roles = {}
+        self.latest_input_latency = None
 
     def abort_match(self):
         self.clear_match(arm_lockout=True)

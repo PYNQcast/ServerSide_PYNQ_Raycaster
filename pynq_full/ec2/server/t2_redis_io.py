@@ -19,6 +19,11 @@ def _redis_scalar(value, default=""):
     return default if value is None else value
 
 
+def _truncated_ms_delta(start_ms: int, end_ms: int) -> float:
+    delta = (int(end_ms) - int(start_ms)) & 0xFFFFFFFF
+    return round(delta / 1.0, 2)
+
+
 # Serialises game state for UDP broadcast and Redis persistence
 class RedisIO:
 
@@ -41,6 +46,15 @@ class RedisIO:
     async def push_broadcast(self, tick_count: int):
         if not self.state.players:
             return
+
+        broadcast_ts_ms = int(time.time() * 1000) & 0xFFFFFFFF
+        latest_input_latency = getattr(self.state, "latest_input_latency", None)
+        if latest_input_latency and latest_input_latency.get("client_sent_at_ms") is not None:
+            latest_input_latency["server_broadcast_at_ms"] = broadcast_ts_ms
+            latest_input_latency["input_to_broadcast_ms"] = _truncated_ms_delta(
+                latest_input_latency["client_sent_at_ms"],
+                broadcast_ts_ms,
+            )
 
         replay_slots = {
             int(slot)
@@ -75,8 +89,7 @@ class RedisIO:
         ]
         if not human_addrs:
             return
-        header  = struct.pack('<HHI', 0x0002, tick_count & 0xFFFF,
-                              int(time.time() * 1000) & 0xFFFFFFFF)
+        header  = struct.pack('<HHI', 0x0002, tick_count & 0xFFFF, broadcast_ts_ms)
         ext     = struct.pack(GAME_STATE_EXT_FMT,
                               self.state.game_mode, len(players), self.state.bits_mask & 0xFFFF)
         entries = b"".join(
@@ -171,6 +184,7 @@ class RedisIO:
                 self.state.ghost_profile(slot)
                 for slot in sorted(getattr(self.state, "ghost_profiles", {}))
             ]),
+            "latest_input_latency": json.dumps(getattr(self.state, "latest_input_latency", None)),
             "map":               _redis_scalar(self.map_state.get("name", "")),
             "bits": json.dumps([[round(b[0], 2), round(b[1], 2)]
                                  for b in self.state.bits]),
