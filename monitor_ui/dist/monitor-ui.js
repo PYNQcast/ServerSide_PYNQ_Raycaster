@@ -61,12 +61,6 @@ Error generating stack: `+n.message+`
           <div class="hud-sub">server \u2192 browser transit</div>
         </div>
 
-        <div class="panel-raised hud-card">
-          <div class="hud-label">Input Latency</div>
-          <div id="hud-input-broadcast" class="hud-value">\u2014 ms</div>
-          <div id="hud-input-latency-note" class="hud-sub">latest input \u2192 broadcast</div>
-        </div>
-
         <div class="panel-terminal hud-events-card">
           <div class="hud-events-head">
             <div class="hud-label">Live Event Feed</div>
@@ -616,12 +610,6 @@ Error generating stack: `+n.message+`
           <div class="hud-label">Est. Latency</div>
           <div id="hud-latency" class="hud-value">\u2014 ms</div>
           <div class="hud-sub">server state age</div>
-        </div>
-
-        <div class="panel-raised hud-card">
-          <div class="hud-label">Input Latency</div>
-          <div id="hud-input-broadcast" class="hud-value">\u2014 ms</div>
-          <div id="hud-input-latency-note" class="hud-sub">latest input \u2192 broadcast</div>
         </div>
 
         <div class="panel-terminal hud-events-card">
