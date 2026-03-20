@@ -48,11 +48,40 @@ Key outputs:
 - `samples_ok`
 - `samples_lost`
 
-Notebook workflow:
+What this benchmark is measuring:
+
+- Direct UDP round-trip time from the PYNQ board to the EC2 game server and back.
+- Each sample is a dedicated RTT probe packet sent to server port `9000`, followed by the server's immediate echo reply.
+- This is a network-path benchmark for `board -> server -> board`.
+
+What this benchmark is not measuring:
+
+- It does not measure monitor/browser latency.
+- It does not measure full gameplay response time from button press to visible movement on screen.
+- It does not require the game monitor or SSH tunnel to be running.
+
+How to read the stats:
+
+- `avg_rtt_ms`: average RTT across all successful probes.
+- `p50_rtt_ms`: median RTT; half the samples are below this.
+- `p95_rtt_ms`: 95th percentile RTT; the main stability metric for the report.
+- `max_rtt_ms`: worst single RTT spike observed in the run.
+- `loss_pct`: percentage of probes that timed out with no RTT reply.
+- `samples_ok`: number of successful RTT replies received.
+- `samples_lost`: number of timed out RTT probes.
+
+Recommended report wording:
+
+- "Measured direct board-to-server UDP RTT using dedicated echo probes over the live `pynq_dev.sh` stack."
+- "Quoted `p95_rtt_ms` as the main latency stability metric, with `avg_rtt_ms` and `max_rtt_ms` for context."
+
+Notebook wrapper:
 
 - [UDP_RTT_Benchmark.ipynb](/home/akendall/Documents/ServerSide_PYNQ_Raycaster/jupyter_side/pynq_client_tests/UDP_RTT_Benchmark.ipynb)
 
-Jupyter plotting:
+That notebook just runs the same terminal RTT command and then displays the saved JSON stats cleanly.
+
+Plotting from saved CSV files:
 
 ```python
 from pynq_client_tests.plot_udp_rtt_csv import load_rtt_rows, plot_rtt_rows, summarise_by_label
