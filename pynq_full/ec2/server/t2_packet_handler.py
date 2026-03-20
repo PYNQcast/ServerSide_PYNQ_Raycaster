@@ -16,7 +16,7 @@ import time
 
 from protocol import (
     # constants
-    NODE_SIZE, PKT_REGISTER, PKT_ACK, PKT_PERF, HEADER_FMT, HEADER_SIZE,
+    NODE_SIZE, PKT_STATE_UPDATE, PKT_REGISTER, PKT_ACK, PKT_PERF, HEADER_FMT, HEADER_SIZE,
     CLIENT_INPUT_FLAGS, SERVER_STATE_FLAGS, MOVEMENT_MODE_INTENT_ONLY,
     ROLE_ANY, ROLE_RUNNER, ROLE_TAGGER,
     GAME_MODE_CHASE, GAME_MODE_CHASE_BITS, FLAG_GHOST,
@@ -45,6 +45,11 @@ from player_profiles import build_player_identity
 def _validate_seq(prev_seq, seq):
     delta = (int(seq) - int(prev_seq)) & 0xFFFF
     return delta != 0 and delta <= 0x7FFF
+
+
+def _truncated_ms_delta(start_ms: int, end_ms: int) -> float:
+    delta = (int(end_ms) - int(start_ms)) & 0xFFFFFFFF
+    return round(delta / 1.0, 2)
 
 
 # Drains the inbound packet queue, registers players, sends ACK+MAP on registration
@@ -172,6 +177,7 @@ class PacketHandler:
             pkt = unpack_register_packet(data)
         pkt_type         = pkt["pkt_type"]
         seq              = pkt["seq"]
+        client_ts_ms     = pkt["timestamp"]
         x, y, angle      = pkt["x"], pkt["y"], pkt["angle"]
         raw_flags        = pkt["input_flags"]
         movement_mode    = pkt["movement_mode"]
@@ -254,6 +260,24 @@ class PacketHandler:
         # intent-only mode leaves position advancement to future server logic.
         if movement_mode != MOVEMENT_MODE_INTENT_ONLY:
             p["x"], p["y"], p["angle"] = next_x, next_y, angle
+
+        if pkt_type == PKT_STATE_UPDATE:
+            server_received_at_ms = int(time.time() * 1000) & 0xFFFFFFFF
+            self.state.latest_input_latency = {
+                "player_id": int(p.get("player_id", 0) or 0),
+                "board_slot": int(p.get("board_slot", 0) or 0),
+                "display_name": p.get("display_name", ""),
+                "username": p.get("username", ""),
+                "controller_key": p.get("controller_key", ""),
+                "seq": int(seq),
+                "movement_mode": int(movement_mode),
+                "input_flags": int(raw_flags & CLIENT_INPUT_FLAGS),
+                "client_sent_at_ms": int(client_ts_ms) & 0xFFFFFFFF,
+                "server_received_at_ms": server_received_at_ms,
+                "input_to_server_ms": _truncated_ms_delta(client_ts_ms, server_received_at_ms),
+                "server_broadcast_at_ms": None,
+                "input_to_broadcast_ms": None,
+            }
 
         # Client can only set CLIENT_INPUT_FLAGS; server-owned bits are preserved
         client_input = raw_flags & CLIENT_INPUT_FLAGS

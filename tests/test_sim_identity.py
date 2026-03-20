@@ -197,6 +197,14 @@ def test_sim_packet_handler_starts_match_when_second_human_joins():
             )
             handler._process_packet({"data": packet, "addr": addr})
 
+        assert state.match_started is False
+        assert match_started == []
+        assert sorted(player["player_id"] for player in state.players.values()) == [0, 0]
+
+        started, message = handler.start_match_from_lobby()
+
+        assert started is True
+        assert message == "match started"
         assert state.match_started is True
         assert match_started == [True]
         assert sorted(player["player_id"] for player in state.players.values()) == [1, 2]

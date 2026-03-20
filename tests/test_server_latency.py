@@ -696,14 +696,21 @@ def _show_popup(report: FullReport):
 
 # ── pytest tests ───────────────────────────────────────────────────────────────
 
-def test_server_side_latency_benchmarks():
+def test_server_side_latency_benchmarks(record_property):
     tick = _run_server_benchmark()
     _print_stats(tick.e2e)
+    throughput = tick.packets_per_tick / (tick.e2e.avg_ms / 1000.0) if tick.e2e.avg_ms > 0 else 0.0
+    record_property("benchmark.tick_avg_ms", f"{tick.e2e.avg_ms:.3f}")
+    record_property("benchmark.tick_p50_ms", f"{tick.e2e.p50_ms:.3f}")
+    record_property("benchmark.tick_p95_ms", f"{tick.e2e.p95_ms:.3f}")
+    record_property("benchmark.tick_max_ms", f"{tick.e2e.max_ms:.3f}")
+    record_property("benchmark.tick_budget_ms", f"{tick.tick_budget_ms:.1f}")
+    record_property("benchmark.tick_packets_per_s", f"{throughput:.1f}")
     assert tick.e2e.avg_ms < 25.0, f"e2e avg {tick.e2e.avg_ms:.2f} ms exceeds 25 ms"
     assert tick.e2e.p95_ms < 35.0, f"e2e p95 {tick.e2e.p95_ms:.2f} ms exceeds 35 ms"
 
 
-def test_network_analytics_live():
+def test_network_analytics_live(record_property):
     import pytest
     stack = _detect_stack()
     if not stack["live"]:
@@ -712,8 +719,17 @@ def test_network_analytics_live():
     report = FullReport(tick=tick, stack=stack)
     if stack["redis_tunnel"]:
         report.redis = _run_redis_probe()
+        if report.redis:
+            record_property("benchmark.redis_avg_ms", f"{report.redis.avg_ms:.3f}")
+            record_property("benchmark.redis_p95_ms", f"{report.redis.p95_ms:.3f}")
+            record_property("benchmark.redis_max_ms", f"{report.redis.max_ms:.3f}")
     report.rtt = asyncio.run(_run_rtt_probe())
     if report.rtt:
+        record_property("benchmark.udp_rtt_avg_ms", f"{report.rtt.avg_ms:.3f}")
+        record_property("benchmark.udp_rtt_p95_ms", f"{report.rtt.p95_ms:.3f}")
+        record_property("benchmark.udp_rtt_max_ms", f"{report.rtt.max_ms:.3f}")
+        record_property("benchmark.udp_loss_pct", f"{report.rtt.loss_pct:.2f}")
+        record_property("benchmark.udp_server_hz", f"{report.rtt.rate_hz:.2f}")
         if report.rtt.avg_ms > 150:
             print(f"\nWARNING: RTT avg {report.rtt.avg_ms:.1f} ms is high (>150 ms)")
         if report.rtt.loss_pct > 5:

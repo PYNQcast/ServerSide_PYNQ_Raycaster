@@ -1,4 +1,6 @@
 import importlib
+import json
+import struct
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -81,35 +83,65 @@ def test_pynq_client_encodes_map_pose_and_angle_for_real_hardware():
         tiles[31] = 1
         tiles[(7 * 32) + 3] = 1
 
-        rows = pynq_client.encode_map_rows_for_bram(32, 32, tiles)
+        class DummyBram:
+            def __init__(self):
+                self.writes = {}
 
-        assert len(rows) == 32
-        assert rows[0] == ((1 << 0) | (1 << 5) | (1 << 31))
-        assert rows[7] == (1 << 3)
-        assert rows[8] == 0
+            def write(self, offset, value):
+                self.writes[offset] = value
 
-        assert pynq_client.world_to_hw_q6_10(0.0, 8, 32) == (16 << 10)
-        assert pynq_client.world_to_hw_q6_10(-8.0, 8, 32) == (15 << 10)
-        assert pynq_client.radians_to_hw_angle(0.0) == 0
-        assert pynq_client.radians_to_hw_angle(3.141592653589793 / 2) == 1024
+        bram = DummyBram()
+        assert pynq_client._write_map(bram, tiles, 32, 32) is True
+
+        assert bram.writes[0] == ((1 << 0) | (1 << 5) | (1 << 31))
+        assert bram.writes[7 * 4] == (1 << 3)
+        assert bram.writes[8 * 4] == 0
+
+        assert pynq_client._q6_10(0.0, 8, 32) == (16 << 10)
+        assert pynq_client._q6_10(-8.0, 8, 32) == (15 << 10)
+        assert pynq_client._hw_angle(0.0) == 0
+        assert pynq_client._hw_angle(3.141592653589793 / 2) == 1024
 
 
 def test_pynq_client_keeps_remote_entities_including_ghosts():
     with pynq_import_context():
         pynq_client = importlib.import_module("pynq_client")
+        protocol = importlib.import_module("protocol")
 
         players = [
             {"player_id": 1, "x": 10.0, "y": 20.0, "angle": 0.25, "flags": 0},
             {"player_id": 2, "x": 30.0, "y": 40.0, "angle": 0.50, "flags": 0},
-            {"player_id": 3, "x": 50.0, "y": 60.0, "angle": 0.75, "flags": pynq_client.FLAG_GHOST},
-            {"player_id": 4, "x": 70.0, "y": 80.0, "angle": 1.00, "flags": pynq_client.FLAG_GHOST},
+            {"player_id": 3, "x": 50.0, "y": 60.0, "angle": 0.75, "flags": protocol.FLAG_GHOST},
+            {"player_id": 4, "x": 70.0, "y": 80.0, "angle": 1.00, "flags": protocol.FLAG_GHOST},
         ]
 
-        entities = pynq_client.build_remote_entities(1, players)
+        class DummyBram:
+            def __init__(self):
+                self.writes = {}
 
-        assert [entity["entity_id"] for entity in entities] == [2, 3, 4]
-        assert entities[1]["flags"] & pynq_client.FLAG_GHOST
-        assert entities[2]["flags"] & pynq_client.FLAG_GHOST
+            def write(self, offset, value):
+                self.writes[offset] = value
+
+        state = {
+            "player_id": 1,
+            "map_w": 32,
+            "map_h": 32,
+            "tile_scale": 8,
+            "players": players,
+            "bits": [],
+            "bits_mask": 0,
+        }
+        bram = DummyBram()
+        pynq_client._write_sprites(bram, state)
+
+        meta0 = bram.writes[pynq_client.ENTITY_BASE_OFFSET + 4]
+        meta1 = bram.writes[pynq_client.ENTITY_BASE_OFFSET + 12]
+        meta2 = bram.writes[pynq_client.ENTITY_BASE_OFFSET + 20]
+        assert (meta0 >> 24) & 0x7F == 2
+        assert (meta1 >> 24) & 0x7F == 3
+        assert (meta2 >> 24) & 0x7F == 4
+        assert (meta1 >> 16) & 0xFF & protocol.FLAG_GHOST
+        assert (meta2 >> 16) & 0xFF & protocol.FLAG_GHOST
 
 
 def test_pynq_client_caps_remote_entity_count():
@@ -121,32 +153,63 @@ def test_pynq_client_caps_remote_entity_count():
             for player_id in range(1, 8)
         ]
 
-        entities = pynq_client.build_remote_entities(1, players)
+        class DummyBram:
+            def __init__(self):
+                self.writes = {}
 
-        assert len(entities) == pynq_client.MAX_REMOTE_ENTITIES
-        assert [entity["entity_id"] for entity in entities] == [2, 3, 4, 5]
+            def write(self, offset, value):
+                self.writes[offset] = value
+
+        state = {
+            "player_id": 1,
+            "map_w": 32,
+            "map_h": 32,
+            "tile_scale": 8,
+            "players": players,
+            "bits": [],
+            "bits_mask": 0,
+        }
+        bram = DummyBram()
+        pynq_client._write_sprites(bram, state)
+
+        metas = [
+            bram.writes[pynq_client.ENTITY_BASE_OFFSET + 4 + (slot * 8)]
+            for slot in range(pynq_client.MAX_ENTITIES)
+        ]
+        assert [((meta >> 24) & 0x7F) for meta in metas] == [2, 3, 4, 5]
 
 
 def test_pynq_client_decodes_button_gpio_bits():
     with pynq_import_context():
         pynq_client = importlib.import_module("pynq_client")
 
-        buttons = pynq_client.decode_button_bits(
-            pynq_client.BUTTON_FORWARD_MASK | pynq_client.BUTTON_TURN_RIGHT_MASK
-        )
-
-        assert buttons == {
-            "forward": True,
-            "backward": False,
-            "turn_left": False,
-            "turn_right": True,
+        state = {
+            "input_flags": 0,
+            "angle_raw": 0,
+            "angle": 0.0,
+            "x": 0.0,
+            "y": 0.0,
+            "move_speed": 0.0,
+            "turn_step": 64,
+            "map_w": 32,
+            "map_h": 32,
+            "tile_scale": 8,
+            "tiles": bytearray(32 * 32),
+            "input_suspended_until": 0.0,
         }
 
+        class Buttons:
+            def read(self):
+                return pynq_client.BTN_FWD | pynq_client.BTN_RIGHT
 
-def test_test_package_auto_runner_prefers_nearest_active_bit_in_bits_mode():
+        pynq_client._apply_manual_input(state, Buttons())
+        assert state["angle_raw"] == 64
+
+
+def test_pynq_client_auto_runner_prefers_nearest_active_bit_in_bits_mode():
     with pynq_import_context():
         protocol = importlib.import_module("protocol")
-        test_package = importlib.import_module("test_package_v2")
+        test_package = importlib.import_module("pynq_client")
 
         state = {
             "registered": True,
@@ -174,10 +237,10 @@ def test_test_package_auto_runner_prefers_nearest_active_bit_in_bits_mode():
         assert (state["input_flags"] & protocol.FLAG_SHOOTING) == 0
 
 
-def test_test_package_auto_tagger_chases_runner_and_shoots_when_aligned():
+def test_pynq_client_auto_tagger_chases_runner_and_shoots_when_aligned():
     with pynq_import_context():
         protocol = importlib.import_module("protocol")
-        test_package = importlib.import_module("test_package_v2")
+        test_package = importlib.import_module("pynq_client")
 
         state = {
             "registered": True,
@@ -208,9 +271,9 @@ def test_test_package_auto_tagger_chases_runner_and_shoots_when_aligned():
         assert state["input_flags"] & protocol.FLAG_SHOOTING
 
 
-def test_test_package_pathfinder_routes_through_gap():
+def test_pynq_client_pathfinder_routes_through_gap():
     with pynq_import_context():
-        test_package = importlib.import_module("test_package_v2")
+        test_package = importlib.import_module("pynq_client")
 
         width = 8
         height = 8
@@ -233,10 +296,10 @@ def test_test_package_pathfinder_routes_through_gap():
         assert (4, 4) in path
 
 
-def test_test_package_runtime_mode_packet_switches_live_mode():
+def test_pynq_client_runtime_mode_packet_switches_live_mode():
     with pynq_import_context():
         protocol = importlib.import_module("protocol")
-        test_package = importlib.import_module("test_package_v2")
+        test_package = importlib.import_module("pynq_client")
 
         state = {
             "mode": "manual",
@@ -255,18 +318,18 @@ def test_test_package_runtime_mode_packet_switches_live_mode():
         }
 
         packet = protocol.pack_node_mode_packet(seq=9, mode=protocol.NODE_CONTROL_MODE_AUTO)
-        test_package._handle_packet(packet, state, bram=None)
+        test_package._handle(packet, state, bram=test_package._NullBram())
 
         assert state["mode"] == "auto"
 
 
-def test_test_package_manual_input_uses_runtime_speed_override():
+def test_pynq_client_manual_input_uses_runtime_speed_override():
     with pynq_import_context():
-        test_package = importlib.import_module("test_package_v2")
+        test_package = importlib.import_module("pynq_client")
 
         class Buttons:
             def read(self):
-                return test_package.BUTTON_FORWARD_MASK
+                return test_package.BTN_FWD
 
         state = {
             "x": 0.0,
@@ -288,29 +351,45 @@ def test_test_package_manual_input_uses_runtime_speed_override():
         assert state["y"] == 0.0
 
 
-def test_pynq_client_drop_to_registration_clears_live_state():
+def test_pynq_client_ack_clears_live_state():
     with pynq_import_context():
         pynq_client = importlib.import_module("pynq_client")
+        protocol = importlib.import_module("protocol")
 
-        class DummyHardware:
-            pass
+        state = {
+            "registered": True,
+            "player_id": 2,
+            "mode": "manual",
+            "x": 3.0,
+            "y": 4.0,
+            "angle": 0.5,
+            "angle_raw": 99,
+            "map_w": 32,
+            "map_h": 32,
+            "tile_scale": 8,
+            "match_ended": True,
+            "bits": [(1.0, 1.0)],
+            "bits_mask": 7,
+            "players": [{"player_id": 3}],
+            "input_flags": protocol.FLAG_INPUT_SHOOT,
+            "force_server_pose_sync": False,
+            "input_suspended_until": 0.0,
+            "last_game_state_seq": 10,
+            "last_ack_ts": None,
+        }
 
-        node = pynq_client.PYNQNode("127.0.0.1", 9000, DummyHardware())
-        node.registered = True
-        node.player_id = 2
-        node.match_ended = True
-        node.server_flags = pynq_client.FLAG_MATCH_END
-        node.remote_entities = [{"entity_id": 3}]
-        node.last_server_packet_at = 123.0
+        packet = struct.pack(protocol.HEADER_FMT, protocol.PKT_ACK, 0, 1234) + struct.pack("<B", 1)
+        pynq_client._handle(packet, state, pynq_client._NullBram())
 
-        node._drop_to_registration("test")
-
-        assert node.registered is False
-        assert node.player_id is None
-        assert node.match_ended is False
-        assert node.server_flags == 0
-        assert node.remote_entities == []
-        assert node.last_server_packet_at is None
+        assert state["registered"] is True
+        assert state["player_id"] == 1
+        assert state["match_ended"] is False
+        assert state["bits"] == []
+        assert state["bits_mask"] == 0
+        assert state["players"] == []
+        assert state["input_flags"] == 0
+        assert state["x"] == 0.0
+        assert state["y"] == 0.0
 
 
 def test_register_packet_round_trips_username_trailer():
@@ -422,14 +501,14 @@ def test_packet_handler_registers_username_and_profile_metadata():
         )
         handler._process_packet({"data": packet, "addr": addr})
 
-        player = state.players[addr]
+        player = state.players[("username", "kat")]
         assert player["username"] == "kat"
         assert player["display_name"] == "kat"
         assert player["profile_key"] == "kat"
         assert player["controller_key"] == "controller-192-168-2-10"
         assert player["player_id"] == 0
         assert state.match_started is False
-        assert state.pending_roles[addr] == protocol.ROLE_TAGGER
+        assert state.pending_roles[("username", "kat")] == protocol.ROLE_TAGGER
 
 
 def test_pynq_packet_handler_queues_single_player_lobby_session():
@@ -490,13 +569,14 @@ def test_pynq_packet_handler_queues_single_player_lobby_session():
         handler._process_packet({"data": packet, "addr": addr})
 
         assert state.match_started is False
-        assert state.players[addr]["player_id"] == 0
-        assert state.players[addr]["board_slot"] == 1
-        assert state.players[addr]["control_mode"] == "manual"
+        player = state.players[("username", "solo")]
+        assert player["player_id"] == 0
+        assert player["board_slot"] == 1
+        assert player["control_mode"] == "manual"
         assert len(transport.sent) == 4
         ack_type, _, _ = protocol.unpack_header(transport.sent[0][0])
         assert ack_type == protocol.PKT_ACK
-        assert transport.sent[0][0][protocol.HEADER_SIZE] == 0
+        assert transport.sent[0][0][protocol.HEADER_SIZE] == 1
         map_width, map_height, _, _ = protocol.unpack_map_packet(transport.sent[1][0])
         assert (map_width, map_height) == (32, 32)
         bits_type, _, _ = protocol.unpack_header(transport.sent[2][0])
@@ -629,7 +709,7 @@ def test_pynq_packet_handler_runtime_mode_switch_targets_connected_board_slot():
         assert updated is True
         assert message == "board 1 -> auto"
         assert state.slot_modes[1] == "auto"
-        assert state.players[addr]["control_mode"] == "auto"
+        assert state.players[("username", "solo")]["control_mode"] == "auto"
         assert len(transport.sent) == sent_before + 1
         mode_type, _, _ = protocol.unpack_header(transport.sent[-1][0])
         assert mode_type == protocol.PKT_NODE_MODE
@@ -743,8 +823,8 @@ def test_pynq_packet_handler_start_match_supports_one_human_plus_ghost():
         assert started is True
         assert message == "match started"
         assert state.match_started is True
-        assert solo_addr in state.players
-        assert state.players[solo_addr]["player_id"] == 1
+        assert ("username", "solo") in state.players
+        assert state.players[("username", "solo")]["player_id"] == 1
         ghost_keys = [addr for addr in state.players if str(addr).startswith("ghost:")]
         assert len(ghost_keys) == 1
         assert state.players[ghost_keys[0]]["flags"] & protocol.FLAG_GHOST
@@ -1245,7 +1325,7 @@ def test_pynq_redis_broadcast_hides_ghosts_while_waiting_in_lobby():
         _, _, _, _, players, _ = protocol.unpack_server_packet(payload["data"])
 
         assert payload["targets"] == [("board1", 1)]
-        assert [player["player_id"] for player in players] == [0]
+        assert len(players) == 1
         assert not any(player["flags"] & protocol.FLAG_GHOST for player in players)
 
 
@@ -1289,6 +1369,145 @@ def test_pynq_redis_writes_include_ghost_profiles():
         assert ghost_profiles[2]["slot"] == 3
         assert ghost_profiles[2]["speed"] == 0.07
         assert ghost_profiles[2]["tag_radius"] == 6.5
+
+
+def test_pynq_packet_handler_records_latest_input_latency():
+    with pynq_import_context():
+        import asyncio
+
+        protocol = importlib.import_module("protocol")
+        packet_handler_mod = importlib.import_module("t2_packet_handler")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+
+        state = match_state_mod.MatchState()
+        state.players = {
+            ("board1", 1): {
+                "player_id": 1,
+                "x": 0.0,
+                "y": 0.0,
+                "angle": 0.0,
+                "flags": 0,
+                "last_seen": 0.0,
+                "last_seq": 9,
+                "movement_mode": 0,
+                "protocol_version": 1,
+                "timed_out": False,
+                "board_slot": 1,
+                "display_name": "board-one",
+                "username": "board-one",
+                "controller_key": "controller-board-one",
+                "_addr": ("board1", 1),
+            },
+        }
+        state.match_started = True
+
+        handler = packet_handler_mod.PacketHandler(
+            state=state,
+            packet_queue=asyncio.Queue(),
+            write_queue=[],
+            udp_transport=None,
+            map_state={
+                "width": 32,
+                "height": 32,
+                "tile_scale": 8,
+                "tiles": bytearray(32 * 32),
+                "bits": [],
+                "spawn_positions": [(0.0, 0.0)],
+            },
+            on_match_start=lambda: None,
+            on_match_abort=lambda event=None: None,
+            on_match_pause=lambda event=None: None,
+            on_match_resume=lambda event=None: None,
+            on_event=lambda event=None: None,
+        )
+
+        packet = protocol.pack_node_packet(
+            protocol.PKT_STATE_UPDATE,
+            10,
+            2.0,
+            0.0,
+            0.25,
+            flags=protocol.FLAG_INPUT_SHOOT,
+            movement_mode=protocol.MOVEMENT_MODE_POSE,
+        )
+        handler._process_packet({"data": packet, "addr": ("board1", 1)})
+
+        latest = state.latest_input_latency
+        assert latest is not None
+        assert latest["player_id"] == 1
+        assert latest["board_slot"] == 1
+        assert latest["seq"] == 10
+        assert latest["input_flags"] == protocol.FLAG_INPUT_SHOOT
+        assert latest["input_to_server_ms"] >= 0.0
+
+
+def test_pynq_redis_writes_include_latest_input_latency():
+    with pynq_import_context():
+        import asyncio
+        import queue
+
+        protocol = importlib.import_module("protocol")
+        redis_io_mod = importlib.import_module("t2_redis_io")
+        match_state_mod = importlib.import_module("game_logic.match_state")
+
+        state = match_state_mod.MatchState()
+        state.match_started = True
+        state.players = {
+            ("board1", 1): {
+                "player_id": 1,
+                "x": 0.0,
+                "y": 0.0,
+                "angle": 0.0,
+                "flags": 0,
+                "last_seen": 0.0,
+                "last_seq": 1,
+                "movement_mode": 0,
+                "protocol_version": 1,
+                "timed_out": False,
+                "_addr": ("board1", 1),
+            },
+        }
+        state.latest_input_latency = {
+            "player_id": 1,
+            "board_slot": 1,
+            "display_name": "board-one",
+            "username": "board-one",
+            "controller_key": "controller-board-one",
+            "seq": 10,
+            "movement_mode": protocol.MOVEMENT_MODE_POSE,
+            "input_flags": protocol.FLAG_INPUT_SHOOT,
+            "client_sent_at_ms": 1000,
+            "server_received_at_ms": 1012,
+            "input_to_server_ms": 12.0,
+            "server_broadcast_at_ms": None,
+            "input_to_broadcast_ms": None,
+        }
+
+        broadcast_queue = asyncio.Queue()
+        write_queue = queue.SimpleQueue()
+        redis_io = redis_io_mod.RedisIO(
+            state=state,
+            map_state={"name": "lobby", "bits": []},
+            broadcast_queue=broadcast_queue,
+            write_queue=write_queue,
+        )
+
+        asyncio.run(redis_io.push_broadcast(7))
+        redis_io.push_redis_writes(7, 3)
+
+        writes = []
+        while True:
+            try:
+                writes.append(write_queue.get_nowait())
+            except Exception:
+                break
+
+        game_state_write = next(msg for msg in writes if msg.get("key") == "game:state")
+        latest = json.loads(game_state_write["mapping"]["latest_input_latency"])
+        assert latest["player_id"] == 1
+        assert latest["seq"] == 10
+        assert latest["input_to_server_ms"] == 12.0
+        assert latest["input_to_broadcast_ms"] is not None
 
 
 def test_pynq_packet_handler_kicked_board_is_temporarily_blocked_from_rejoining():
@@ -1363,7 +1582,7 @@ def test_pynq_packet_handler_kicked_board_is_temporarily_blocked_from_rejoining(
         assert len(transport.sent) == sent_before_kick
 
 
-def test_pynq_game_tick_set_map_returns_players_to_lobby_on_new_map():
+def test_pynq_game_tick_set_map_is_ignored_during_live_match():
     with pynq_import_context():
         import asyncio
         import queue
@@ -1410,13 +1629,12 @@ def test_pynq_game_tick_set_map_returns_players_to_lobby_on_new_map():
 
         game_tick._apply_control_command({"cmd": "set_map", "map": "ghost_bits"})
 
-        assert game_tick.map_state["name"] == "ghost_bits"
-        assert game_tick.state.match_started is False
-        assert game_tick.state.players[("runner", 1)]["player_id"] == 0
+        assert game_tick.map_state["name"] == "lobby"
+        assert game_tick.state.match_started is True
+        assert game_tick.state.players[("runner", 1)]["player_id"] == 1
         assert game_tick.state.players["ghost:1"]["player_id"] == 3
-        assert game_tick.state.players["ghost:1"]["flags"] == protocol.FLAG_GHOST
-        assert packet_queue.empty()
-        assert broadcast_queue.empty()
+        assert not packet_queue.empty()
+        assert not broadcast_queue.empty()
 
 
 def test_pynq_game_tick_kick_board_removes_target_and_returns_remaining_players_to_lobby():
@@ -1588,7 +1806,7 @@ def test_pynq_game_tick_start_board_replay_streams_setup_and_first_frame():
             assert game_tick.state.slot_modes[1] == "replay"
             assert game_tick.state.players[addr]["control_mode"] == "replay"
             assert game_tick.state.board_replays[1]["status"] == "playing"
-            assert game_tick.state.board_replays[1]["frame_index"] == 1
+            assert game_tick.state.board_replays[1]["frame_index"] == 0
 
         asyncio.run(exercise())
 

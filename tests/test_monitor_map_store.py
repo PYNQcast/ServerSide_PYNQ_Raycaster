@@ -1,7 +1,12 @@
 from pathlib import Path
 from decimal import Decimal
+import sys
 
 import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from monitor_map_store import (
     MapStorageError,
@@ -11,7 +16,6 @@ from monitor_map_store import (
     load_map_entry,
     save_map_entry,
 )
-
 
 class FakeMapTable:
     def __init__(self):
