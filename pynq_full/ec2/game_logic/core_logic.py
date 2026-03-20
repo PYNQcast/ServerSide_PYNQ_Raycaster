@@ -1,9 +1,5 @@
-# core_logic.py — Per-tick authoritative game rules: proximity tagging, match lifecycle.
-#
-# Owns: tick, _check_proximity, _check_match_end, _check_match_end_hold,
-#        _clear_tag_flash
-#
-# Lives in game_logic/ (not server/) because these are pure rules, not SEDA wiring.
+# core_logic.py - Per-tick game rules: proximity tagging, bits, and match lifecycle.
+# Pure rules with no SEDA wiring; safe to unit-test in isolation.
 
 
 import asyncio
@@ -33,9 +29,7 @@ class CoreLogic:
         self._anticheat             = Anticheat()
         self.map_state              = map_state if map_state is not None else {}
 
-    # ── Main tick entry point ─────────────────────────────────────────────────
-    # Run all per-tick game-rule checks in the correct order each tick
-
+    # Run all per-tick game-rule checks in the correct order.
     async def tick(self):
         await self._check_match_end_hold()
         if self.state.match_ended:
@@ -50,9 +44,7 @@ class CoreLogic:
         if self.state.match_started and not self.state.match_ended:
             self.state.match_tick += 1
 
-    # ── Ghost AI movement ─────────────────────────────────────────────────────
-    # Each tick move every ghost tagger straight toward the runner at GHOST_SPEED
-
+    # Move every ghost tagger straight toward the runner each tick.
     def _move_ghosts(self):
         if not self.state.match_started or self.state.match_ended:
             return
@@ -167,9 +159,7 @@ class CoreLogic:
             return max(2.0, max(overrides))
         return TAG_RADIUS
 
-    # ── Bit collection ────────────────────────────────────────────────────────
-    # Runner collects bits in CHASE_BITS mode; all-collected → match end
-
+    # Runner collects bits in CHASE_BITS mode; all collected triggers match end.
     async def _check_bits(self):
         if self.state.game_mode != GAME_MODE_CHASE_BITS:
             return
@@ -199,9 +189,7 @@ class CoreLogic:
                 await self._finish_match("runner", "bits_cleared")
                 return
 
-    # ── Tag flash expiry ──────────────────────────────────────────────────────
-    # Clear FLAG_TAGGED after TAG_FLASH_S so the next tag can be registered
-
+    # Clear FLAG_TAGGED after TAG_FLASH_S so the next tag can be registered.
     def _clear_tag_flash(self):
         if self.state.tag_flash_at is None or self.state.match_ended:
             return
@@ -213,21 +201,17 @@ class CoreLogic:
                           f"({self.state.tag_count}/{TAGS_TO_WIN} tags)")
             self.state.tag_flash_at = None
 
-    # ── Match-end hold phase ──────────────────────────────────────────────────
-    # After final tag FLAG_TAGGED is held for MATCH_END_HOLD_S so every node sees it
-
+    # Hold FLAG_TAGGED for MATCH_END_HOLD_S after the final tag so every node sees it.
     async def _check_match_end_hold(self):
         if self.state.match_end_at is None:
             return
         if time.monotonic() < self.state.match_end_at:
             return
 
-        print(f"[T2] match end hold expired — returning players to lobby")
+        print(f"[T2] match end hold expired, returning players to lobby")
         self._on_force_end_consumed()
 
-    # ── Proximity / tag detection ─────────────────────────────────────────────
-    # Pairwise check — skipped during grace period so players can separate after spawn/reset
-
+    # Pairwise proximity check; skipped during grace period so players can separate after reset.
     async def _check_proximity(self):
         players = list(self.state.players.values())
         if len(players) < 2 or self.state.match_ended or self.state.in_grace_period():
@@ -245,7 +229,7 @@ class CoreLogic:
                 # Lower player_id (runner = 1) is always the one tagged
                 tagged = p1 if p1["player_id"] < p2["player_id"] else p2
 
-                # Guard: only one tag per flash window — prevents double-counting
+                # Only one tag per flash window; prevents double-counting.
                 if (tagged["flags"] & FLAG_TAGGED) or self.state.tag_flash_at is not None:
                     continue
 
@@ -253,7 +237,7 @@ class CoreLogic:
                 self.state.tag_count    += 1
                 self.state.tag_flash_at  = time.monotonic() + TAG_FLASH_S
                 print(f"[T2] P{tagged['player_id']} tagged (dist={dist:.2f}) "
-                      f"— tag {self.state.tag_count}/{TAGS_TO_WIN}")
+                      f"tag {self.state.tag_count}/{TAGS_TO_WIN}")
 
                 final_tag = self.state.tag_count >= TAGS_TO_WIN
                 if not final_tag:
@@ -269,9 +253,7 @@ class CoreLogic:
                     "final_tag":  final_tag,
                 })
 
-    # ── Match end trigger ─────────────────────────────────────────────────────
-    # End match on TAGS_TO_WIN tags or an immediate force_end command
-
+    # End match on TAGS_TO_WIN tags or an immediate force_end command.
     async def _check_match_end(self):
         if not self.state.match_started or self.state.match_ended:
             self._force_end_flag = False
@@ -302,7 +284,7 @@ class CoreLogic:
         bits_total = len(self.state.bits)
         bits_collected = sum(1 for bit in self.state.bits if not bit[2])
         print(
-            f"[T2] match ended — {reason} (winner={winner}, clearing players in {MATCH_END_HOLD_S}s)"
+            f"[T2] match ended: {reason} (winner={winner}, clearing in {MATCH_END_HOLD_S}s)"
         )
         await self._on_event({
             "event": "match_end",

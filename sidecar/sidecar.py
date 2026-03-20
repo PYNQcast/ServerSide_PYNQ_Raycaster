@@ -1,4 +1,4 @@
-# ec2/sidecar/sidecar.py — BRPOP game:seda-events → DynamoDB / S3 / SNS pipeline.
+# sidecar.py - BRPOP game:seda-events -> DynamoDB / S3 / SNS pipeline.
 # Game hooks (game_on_*) define match-specific behaviour; pipeline logic stays fixed.
 
 import gzip
@@ -12,7 +12,7 @@ import boto3
 import redis
 from boto3.dynamodb.conditions import Key
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# Config
 
 REDIS_HOST = os.environ.get("REDIS_HOST", "127.0.0.1")
 REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
@@ -33,7 +33,7 @@ ENABLE_DDB_RETENTION = os.environ.get("ENABLE_DDB_RETENTION", "1").strip().lower
     "0", "false", "no", "off"
 }
 
-# ── Connections ───────────────────────────────────────────────────────────────
+# Connections
 
 print(f"Connecting to Redis at {REDIS_HOST}:{REDIS_PORT}...")
 r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
@@ -46,7 +46,7 @@ player_table = dynamo.Table(PLAYER_TABLE)
 s3 = boto3.client("s3", region_name=AWS_REGION) if S3_BUCKET else None
 sns = boto3.client("sns", region_name=AWS_REGION) if (SNS_TOPIC_ARN or SNS_TOPIC_NAME) else None
 
-# ── Generic Pipeline State ────────────────────────────────────────────────────
+# Pipeline state
 
 current_match_id = None
 current_match_started_at = None
@@ -54,20 +54,18 @@ current_match_events = []
 snapshot_counter = 0          # counts state_snapshot events; used for keyframe marking
 KEYFRAME_INTERVAL = 60        # emit a full keyframe every N snapshots (1s at 60 Hz)
 
-# ── S3 Multipart Upload State ─────────────────────────────────────────────────
-# Replay lines stream to S3 during the match instead of buffering in memory.
-# S3 multipart requires each part (except the last) to be >= 5 MB.
-# We accumulate uncompressed NDJSON lines until the buffer hits MULTIPART_CHUNK_SIZE,
-# then flush a gzip-compressed part. match_end closes the upload.
+# S3 multipart upload state
+# Replay lines stream to S3 during the match; each flushed part must be >= 5 MB (S3 minimum).
+# match_end closes the upload.
 
-S3_MULTIPART_MIN_BYTES = 5 * 1024 * 1024   # 5 MB — S3 minimum part size
+S3_MULTIPART_MIN_BYTES = 5 * 1024 * 1024   # 5 MB: S3 minimum part size
 _mp_upload_id   = None    # active multipart upload ID
 _mp_replay_key  = None    # S3 key for the current upload
 _mp_parts       = []      # list of {"PartNumber": n, "ETag": "..."} dicts
 _mp_part_number = 0       # next part number (1-indexed)
 _mp_line_buffer = []      # NDJSON lines not yet flushed to a part
 
-# ── Generic Helpers ───────────────────────────────────────────────────────────
+# Helpers
 
 
 def utc_now():
@@ -176,8 +174,8 @@ def upload_replay(match_id: str, events: list, started_at: str):
         return None
 
 
+# Open an S3 multipart upload for the current match replay.
 def mp_open(match_id: str, started_at: str):
-    """Open an S3 multipart upload for the current match replay."""
     global _mp_upload_id, _mp_replay_key, _mp_parts, _mp_part_number, _mp_line_buffer
     if not s3 or not S3_BUCKET:
         return
@@ -199,8 +197,8 @@ def mp_open(match_id: str, started_at: str):
         _mp_upload_id = None
 
 
+# Buffer one NDJSON line; flush a multipart part if the buffer exceeds 5 MB.
 def mp_append(event: dict):
-    """Buffer one NDJSON line; flush a part if buffer exceeds 5 MB."""
     global _mp_line_buffer
     if _mp_upload_id is None:
         return
@@ -210,8 +208,8 @@ def mp_append(event: dict):
         mp_flush()
 
 
+# Compress buffered NDJSON lines and upload as the next multipart part.
 def mp_flush():
-    """Compress buffered lines and upload as the next multipart part."""
     global _mp_line_buffer, _mp_part_number, _mp_parts
     if _mp_upload_id is None or not _mp_line_buffer:
         return
@@ -233,15 +231,15 @@ def mp_flush():
         print(f"S3 multipart flush failed (part {_mp_part_number}): {exc}")
 
 
+# Flush remaining lines as the final part and complete the multipart upload; returns the S3 key.
 def mp_close():
-    """Flush remaining lines as the final part and complete the multipart upload."""
     global _mp_upload_id, _mp_replay_key, _mp_parts, _mp_part_number, _mp_line_buffer
     if _mp_upload_id is None:
         return None
     if _mp_line_buffer:
         mp_flush()
     if not _mp_parts:
-        # Nothing was uploaded — abort and fall back to standard upload
+        # Nothing was uploaded: abort and fall back to standard upload
         try:
             s3.abort_multipart_upload(Bucket=S3_BUCKET, Key=_mp_replay_key,
                                       UploadId=_mp_upload_id)
@@ -271,8 +269,8 @@ def mp_close():
     return key
 
 
+# Abort the in-progress multipart upload and reset all upload state.
 def mp_abort():
-    """Abort a multipart upload on error or reset."""
     global _mp_upload_id, _mp_replay_key, _mp_parts, _mp_part_number, _mp_line_buffer
     if _mp_upload_id and s3 and S3_BUCKET:
         try:
@@ -449,6 +447,7 @@ def delete_match_rows(rows: list):
     return deleted
 
 
+# Archive and delete old DynamoDB match rows when the warm count exceeds DDB_WARM_MATCH_LIMIT.
 def enforce_warm_retention():
     if not ENABLE_DDB_RETENTION:
         return
@@ -509,7 +508,7 @@ def reset_match_state():
     game_reset_state()
 
 
-# ── Game Hooks: Current Match Modes ──────────────────────────────────────────
+# Game hooks: per-match state
 
 GAME_MODE_CHASE = 0
 GAME_MODE_CHASE_BITS = 1
@@ -537,8 +536,8 @@ def game_reset_state():
     game_match_players = []
 
 
+# Build DynamoDB and replay player snapshots from the event's player list (or Redis fallback).
 def game_build_player_snapshot(player_total: int, event_players=None):
-    """Read the current players from Redis in a game-specific shape."""
     ddb_players = []
     replay_players = []
 
@@ -629,6 +628,7 @@ def load_live_player_state(player_id: int) -> dict:
     }
 
 
+# Upsert each human player's PROFILE and write a MATCH# record in the player DynamoDB table.
 def persist_player_history(match_id: str, match_players: list, status: str, ended_at: str, final_meta: dict):
     for player in match_players:
         player_id = int(player.get("player_id", 0))
@@ -749,8 +749,10 @@ def persist_player_history(match_id: str, match_players: list, status: str, ende
             print(f"DynamoDB player history write failed for {player_key}: {exc}")
 
 
+# Game hooks: build DynamoDB META fields and replay payloads for each event type.
+
+# Build META row fields and replay_event for a match_start.
 def game_on_match_start(event: dict):
-    """Hook: define the META row and replay start payload for this game."""
     global game_mode, game_bits_total, game_human_players, game_ghost_count, game_map_name
     global game_match_players
     game_mode = int(event.get("game_mode", GAME_MODE_CHASE) or GAME_MODE_CHASE)
@@ -786,8 +788,8 @@ def game_on_match_start(event: dict):
     }
 
 
+# Build a TAG#N DynamoDB row and replay_event for a player_tagged event.
 def game_on_player_tagged(event: dict):
-    """Hook: define the per-tag row and replay payload for this game."""
     global game_tag_count
     game_tag_count += 1
 
@@ -804,8 +806,8 @@ def game_on_player_tagged(event: dict):
     }
 
 
+# Build a BIT#N DynamoDB row and replay_event for a bit_collected event.
 def game_on_bit_collected(event: dict):
-    """Hook: define the per-bit row and replay payload for bit mode."""
     global game_bit_count
     game_bit_count += 1
 
@@ -824,8 +826,8 @@ def game_on_bit_collected(event: dict):
     }
 
 
+# Build final META fields and SNS payload for a match_end event.
 def game_on_match_end(event: dict):
-    """Hook: define final META updates and extra SNS payload fields."""
     replay_event = dict(event)
     replay_event["tag_count"] = game_tag_count
     replay_event["bit_count"] = game_bit_count
@@ -853,8 +855,8 @@ def game_on_match_end(event: dict):
     }
 
 
+# Build final META fields for a match_aborted event.
 def game_on_match_abort(event: dict):
-    """Hook: define final META updates when a match is aborted mid-flight."""
     replay_event = dict(event)
     replay_event["tag_count"] = game_tag_count
     replay_event["bit_count"] = game_bit_count
@@ -872,11 +874,8 @@ def game_on_match_abort(event: dict):
     }
 
 
+# Tag each replay snapshot; mark every KEYFRAME_INTERVAL-th frame as a keyframe for O(1) seeking.
 def game_on_state_snapshot(event: dict):
-    """Hook: authoritative world-state frame for replay playback.
-    Every KEYFRAME_INTERVAL snapshots is marked keyframe=True so the dashboard
-    can seek to any point in O(1) without replaying from frame 0.
-    """
     global snapshot_counter
     snapshot_counter += 1
     replay_event = dict(event)
@@ -888,7 +887,7 @@ def game_on_state_snapshot(event: dict):
     }
 
 
-# ── Pipeline Event Handlers ──────────────────────────────────────────────────
+# Pipeline event handlers
 
 def handle_match_start(event: dict):
     if has_active_match():
@@ -976,6 +975,7 @@ def _cache_recent_match(status: str, replay_key: str):
         print(f"Redis recent-matches write failed: {exc}")
 
 
+# Close the multipart upload, update DynamoDB META, publish SNS, and run retention; fires a background thread.
 def _finalise_match(status: str, replay_event: dict, meta_fields: dict,
                     *, sns_fields=None):
     ended_at = utc_now_iso()
@@ -998,8 +998,7 @@ def _finalise_match(status: str, replay_event: dict, meta_fields: dict,
     if match_duration is not None:
         final_meta["duration_ms"] = match_duration
 
-    # Close the multipart upload synchronously — most data was already streamed
-    # during the match, so this only flushes the tail buffer.
+    # Close the multipart upload synchronously (most data was already streamed; this flushes the tail).
     replay_key = mp_close()
     if replay_key is None:
         replay_key = upload_replay(current_match_id, current_match_events, current_match_started_at)
@@ -1091,7 +1090,7 @@ def handle_transient_match_event(event: dict):
     mp_append({**replay_event, "match_id": current_match_id, "recorded_at": recorded_at})
 
 
-# ── Event Dispatch ────────────────────────────────────────────────────────────
+# Event dispatch
 
 HANDLERS = {
     "match_start": handle_match_start,
@@ -1104,9 +1103,9 @@ HANDLERS = {
     "state_snapshot": handle_state_snapshot,
 }
 
-# ── Main Loop ─────────────────────────────────────────────────────────────────
+# Main loop
 
-print(f"Waiting on '{EVENT_KEY}' / '{REPLAY_KEY}' (BRPOP — zero CPU until event arrives)...")
+print(f"Waiting on '{EVENT_KEY}' / '{REPLAY_KEY}' (BRPOP: zero CPU until event arrives)...")
 enforce_warm_retention()
 
 while True:
@@ -1122,7 +1121,7 @@ while True:
         continue
 
     event_type = event.get("event")
-    print(f"Event: {event_type} — {event}")
+    print(f"Event: {event_type}: {event}")
 
     handler = HANDLERS.get(event_type)
     if handler:

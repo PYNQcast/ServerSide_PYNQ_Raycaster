@@ -1,17 +1,11 @@
-# t2_game_tick.py — T2 GameTick: authoritative game loop at 60 Hz.
-#
-# Queues:
-#   in:  packet_queue    {"data": bytes, "addr": (ip, port)}
-#   out: broadcast_queue {"data": bytes, "targets": [(ip,port),...]}
-#   out: write_queue     {"op": "hset"|"lpush"|"del", "key": str, ...}
-#
-# Thin orchestrator — all logic lives in:
-#   t2_constants          — tunable constants
-#   t2_map_loader         — map file parsing and hot-swap dict
-#   game_logic.match_state — mutable match fields + reset helpers
-#   t2_packet_handler     — UDP ingestion, player registration, eviction
-#   game_logic.core_logic  — per-tick tag/match-end rules
-#   t2_redis_io           — broadcast packet builder, Redis write helpers
+# t2_game_tick.py - T2: authoritative 60 Hz game loop.
+# Thin orchestrator; all logic lives in the sub-modules below.
+#   t2_constants        - tunable constants
+#   t2_map_loader       - map file parsing and hot-swap dict
+#   match_state         - mutable match fields and reset helpers
+#   t2_packet_handler   - UDP ingestion, registration, eviction
+#   core_logic          - per-tick tag and match-end rules
+#   t2_redis_io         - broadcast packet builder, Redis write helpers
 
 import asyncio
 import copy
@@ -71,8 +65,6 @@ class GameTick:
                                       on_match_resume=self._on_match_resume,
                                       on_event=self._push_event)
 
-    # ── Main loop ─────────────────────────────────────────────────────────────
-
     async def run(self):
         print(f"[T2 GameTick] running at {1/self.interval:.0f} Hz")
         self._start_control_subscriber()
@@ -94,9 +86,7 @@ class GameTick:
             self.tick_count += 1
             await asyncio.sleep(sleep_for)
 
-    # ── Redis control channel ─────────────────────────────────────────────────
-    # Runs redis-py's blocking pubsub in a thread; handles force_end and set_map
-
+    # Blocking pubsub in a background thread; commands arrive via control_queue.
     def _start_control_subscriber(self):
         def _subscribe():
             rc  = redislib.Redis(host="127.0.0.1", port=6379, decode_responses=True)
@@ -112,6 +102,7 @@ class GameTick:
                 self.control_queue.put(data)
         threading.Thread(target=_subscribe, daemon=True).start()
 
+    # Drain all pending control commands from the background pubsub thread.
     def _drain_control_commands(self):
         while True:
             try:
@@ -120,6 +111,7 @@ class GameTick:
                 break
             self._apply_control_command(data)
 
+    # Dispatch a decoded Redis control command to the appropriate game action.
     def _apply_control_command(self, data: dict):
         cmd = data.get("cmd")
         if cmd == "force_end":
@@ -169,7 +161,7 @@ class GameTick:
             print(f"[T2] kick_board: {message}")
         elif cmd == "set_map":
             if self.state.match_started and not self.state.match_ended:
-                print("[T2] set_map ignored — map cannot be changed during a live match")
+                print("[T2] set_map ignored: map cannot be changed during a live match")
                 return
             name = data.get("map", "chase")
             new_map = load_map(os.path.join(_MAPS_DIR, f"{name}.txt"))
@@ -208,6 +200,7 @@ class GameTick:
             except asyncio.QueueEmpty:
                 return drained
 
+    # Clear all players and match state; optionally swap in a new map.
     def _reset_session(self, reason: str, next_map: dict | None = None, arm_lockout: bool = False):
         current_players = list(self.state.players.values())
         had_players = bool(current_players)
@@ -240,13 +233,14 @@ class GameTick:
 
         action = "map swapped" if next_map is not None else "match reset"
         print(
-            f"[T2] {action} ({reason}) — map='{target_map_name}' "
+            f"[T2] {action} ({reason}): map='{target_map_name}' "
             f"players_cleared={len(current_players)} "
             f"packet_backlog={dropped_packets} broadcast_backlog={dropped_broadcasts}"
         )
         if not had_players and next_map is None:
             print("[T2] restart requested with no active or queued players")
 
+    # Return all humans to lobby state without disconnecting them; optionally swap map.
     def _return_players_to_lobby(self, reason: str, next_map: dict | None = None):
         current_players = list(self.state.players.values())
         had_players = bool(current_players)
@@ -274,7 +268,7 @@ class GameTick:
         self.logic._force_end_flag = False
 
         print(
-            f"[T2] returned to lobby ({reason}) — map='{self.map_state.get('name')}' "
+            f"[T2] returned to lobby ({reason}): map='{self.map_state.get('name')}' "
             f"humans={sum(1 for addr in self.state.players if not str(addr).startswith('ghost:'))} "
             f"ghosts={sum(1 for addr in self.state.players if str(addr).startswith('ghost:'))} "
             f"packet_backlog={dropped_packets} broadcast_backlog={dropped_broadcasts}"
@@ -374,6 +368,7 @@ class GameTick:
         for board_slot in active_slots:
             self._stop_board_replay(board_slot, reason, restore_board=restore_board)
 
+    # Start loading a replay for a board slot; kicks off the async prepare task.
     def _request_board_replay(self, board_slot: int, match_id: str):
         slot = int(board_slot or 0)
         if slot not in (1, 2):
@@ -434,6 +429,7 @@ class GameTick:
             raise ValueError(f"replay map is unavailable on server: {map_name}")
         return replay_map
 
+    # Load replay payload, extract frames/map/bits, push map+ack to board, and start streaming.
     async def _prepare_board_replay(self, board_slot: int, match_id: str):
         try:
             payload = await asyncio.to_thread(self._load_board_replay, match_id)
@@ -524,6 +520,7 @@ class GameTick:
             )
             print(f"[T2] board replay start failed: {exc}")
 
+    # Send the next replay frame to the board over UDP; updates frame_index and summary at ~10 Hz.
     def _send_board_replay_frame(self, session: dict):
         if self.packets.udp_transport is None:
             raise RuntimeError("UDP transport unavailable for board replay")
@@ -554,6 +551,7 @@ class GameTick:
             )
         return True
 
+    # Tick all active board replays; stops any whose board disconnects or whose frames are exhausted.
     def _advance_board_replays(self):
         for board_slot in sorted(list(self._board_replays.keys())):
             session = self._board_replays.get(board_slot)
@@ -580,8 +578,9 @@ class GameTick:
                 print(f"[T2] board replay stream failed for board {board_slot}: {exc}")
                 self._stop_board_replay(board_slot, "stream_failed", restore_board=True)
 
-    # ── Match event callbacks ─────────────────────────────────────────────────
+    # Match lifecycle events
 
+    # Build and push the match_start Redis event with player snapshot and bit positions.
     def _on_match_start(self):
         bits = [[round(b[0], 2), round(b[1], 2)] for b in self.state.bits]
         human_players = sum(1 for addr in self.state.players if not str(addr).startswith("ghost:"))
@@ -632,8 +631,6 @@ class GameTick:
 
     async def _push_event(self, event: dict):
         self.redis_io.push_event(event)
-
-    # ── Metrics ───────────────────────────────────────────────────────────────
 
     def _print_metrics(self, elapsed_s: float):
         print(

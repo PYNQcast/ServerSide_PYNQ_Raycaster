@@ -1,3 +1,5 @@
+# replay_store.py - Load replay payloads from DynamoDB (META) + S3 (NDJSON .gz).
+
 import gzip
 import json
 import os
@@ -15,10 +17,9 @@ class ReplayNotFoundError(LookupError):
 
 
 def _cache_get(cache, match_id):
-    if match_id not in cache:
-        return None
-    payload = cache.pop(match_id)
-    cache[match_id] = payload
+    payload = cache.pop(match_id, None)
+    if payload is not None:
+        cache[match_id] = payload  # move to end (LRU)
     return payload
 
 
@@ -29,6 +30,7 @@ def _cache_put(cache, match_id, payload, cache_size):
         cache.pop(oldest_key, None)
 
 
+# Fetch a replay from cache, DynamoDB META record, and S3 NDJSON blob; caches the result.
 def load_replay_payload(
     match_id: str,
     *,

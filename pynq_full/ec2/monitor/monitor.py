@@ -1,4 +1,4 @@
-# ec2/monitor/monitor.py — live monitor, HTTP+WebSocket on port 8080.
+# monitor.py - Live game monitor: HTTP + WebSocket on port 8080.
 # Reads player state from Redis, match history from DynamoDB.
 # Access via SSH tunnel set up by pynq_dev.sh: http://localhost:8080
 
@@ -76,7 +76,7 @@ SERVICE_SPECS = {
     },
 }
 
-# ── Connections ────────────────────────────────────────────────────────────────
+# Connections
 
 r     = redislib.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 dyndb = boto3.resource("dynamodb", region_name=AWS_REGION).Table(DYNAMO_TABLE)
@@ -84,7 +84,7 @@ player_dyndb = boto3.resource("dynamodb", region_name=AWS_REGION).Table(PLAYER_T
 map_dyndb = boto3.resource("dynamodb", region_name=AWS_REGION).Table(MAP_TABLE) if MAP_TABLE else None
 s3    = boto3.client("s3", region_name=AWS_REGION)
 
-# ── DynamoDB poll (slow — every 5s) ───────────────────────────────────────────
+# Cache
 
 _ddb_cache      = []
 _ddb_last_fetch = 0.0
@@ -97,6 +97,8 @@ _redis_stats_cache = {}
 _redis_stats_last_fetch = 0.0
 _state_cache = {}
 _state_cache_json = "{}"
+
+# Poll / fetch helpers
 
 def _prime_map_state_cache(map_name: str):
     global _state_cache, _state_cache_json
@@ -146,13 +148,14 @@ def _plain_json(value):
         return [_plain_json(inner) for inner in value]
     return value
 
+# Poll recent matches from Redis cache first, falling back to a DynamoDB scan.
 def poll_dynamodb():
     global _ddb_cache, _ddb_last_fetch
     now = time.monotonic()
     if now - _ddb_last_fetch < DDB_POLL_INTERVAL_S:
         return _ddb_cache
 
-    # Redis cache: written by sidecar on match_end — O(1), no AWS cost.
+    # Redis cache: written by sidecar on match_end; O(1), no AWS cost.
     # Fall through to DynamoDB scan only on a fresh instance with no cached matches.
     try:
         cached = r.lrange("game:recent-matches", 0, 4)
@@ -226,6 +229,7 @@ def _service_pids(name: str):
             pids.append(pid)
     return pids
 
+# Check server/sidecar process liveness via ps; cached at SERVICE_POLL_INTERVAL_S.
 def poll_services(force: bool = False):
     global _service_cache, _service_last_fetch
     now = time.monotonic()
@@ -253,6 +257,7 @@ def poll_services(force: bool = False):
     return _service_cache
 
 
+# Collect Redis INFO stats and estimate monitor's own command budget per second.
 def poll_redis_stats():
     global _redis_stats_cache, _redis_stats_last_fetch
     now = time.monotonic()
@@ -339,6 +344,9 @@ def _stop_service(name: str):
             pass
     return f"{name} killed"
 
+# Service control
+
+# Dispatch a control command (string or dict); publishes to Redis or manages service processes.
 def handle_control_command(payload_or_cmd):
     global _service_message
 
@@ -356,10 +364,10 @@ def handle_control_command(payload_or_cmd):
 
     if cmd == "force_end":
         r.publish("game:control", json.dumps({"cmd": "force_end"}))
-        _service_message = "force_end sent — session will return to the lobby after the end hold"
+        _service_message = "force_end sent: session will return to the lobby after the end hold"
     elif cmd == "start_match":
         r.publish("game:control", json.dumps({"cmd": "start_match"}))
-        _service_message = "start_match sent — queued lobby players will be promoted if at least one human is connected"
+        _service_message = "start_match sent: queued lobby players will be promoted if at least one human is connected"
     elif cmd == "restart":
         payload = json.dumps({"cmd": "restart"})
         r.publish("game:control", payload)
@@ -391,7 +399,7 @@ def handle_control_command(payload_or_cmd):
             r.publish("game:control", payload)
             _active_map = map_name
             _prime_map_state_cache(map_name)
-            _service_message = f"map change to {map_name} requested — ignored if a match is live"
+            _service_message = f"map change to {map_name} requested: ignored if a match is live"
     elif cmd.startswith("set_ghosts_"):
         count = int(cmd.split("_")[-1])
         r.publish("game:control", json.dumps({"cmd": "set_ghost_count", "count": count}))
@@ -469,13 +477,9 @@ def handle_control_command(payload_or_cmd):
     poll_services(force=True)
     return _service_message
 
-# ── Current-match event tracking ───────────────────────────────────────────────
-#
-# game:monitor-events is append-only (trimmed to the last 100 entries).
-# The monitor only wants the latest match's sequence:
-#   match_start -> player_tagged -> ... -> match_end
-# We keep a tiny local cache only to preserve stable display timestamps while
-# new events are prepended to the Redis list.
+# Match event tracking
+# game:monitor-events is prepend-only (trimmed to last 100 entries).
+# We keep a local cache to preserve stable display timestamps as new events arrive.
 
 _match_event_log  = []   # newest first, each event includes display_time
 _match_event_keys = []   # newest first json keys matching _match_event_log
@@ -488,8 +492,8 @@ def _clear_match_events():
     _match_event_log = []
     _match_event_keys = []
 
+# Return the current match's events only (match_start..present), newest first, with stable timestamps.
 def current_match_events(raw_events: list):
-    """Return the newest match's events only, newest first, with stable times."""
     global _match_event_log, _match_event_keys
 
     current = []
@@ -543,6 +547,7 @@ def current_match_events(raw_events: list):
     return _match_event_log
 
 
+# Build a synthetic "live-now" match entry for the match list if a match is in progress.
 def _live_match_summary(match_events: list, active_map: str, game_mode: int,
                         paused: bool = False, pause_reason: str | None = None,
                         paused_player_ids=None):
@@ -573,8 +578,9 @@ def _live_match_summary(match_events: list, active_map: str, game_mode: int,
         "paused_player_ids": list(paused_player_ids or []),
     }
 
-# ── Redis state collection ─────────────────────────────────────────────────────
+# Redis state collection
 
+# Read player positions, game state, and events from Redis in one pipeline; returns full state dict.
 def collect_state():
     pipe = r.pipeline(transaction=False)
     for pid in range(1, 10):
@@ -818,6 +824,8 @@ async def state_cache_loop():
         await asyncio.sleep(max(0.0, interval - elapsed))
 
 
+# DynamoDB / S3 fetch helpers
+
 def fetch_replay(match_id: str):
     try:
         return load_replay_payload(
@@ -830,6 +838,7 @@ def fetch_replay(match_id: str):
         raise web.HTTPNotFound(text=str(exc))
 
 
+# Scan all PROFILE records from DynamoDB, sorted most-recently-seen first.
 def fetch_players():
     items = []
     last_evaluated_key = None
@@ -850,6 +859,7 @@ def fetch_players():
     return {"players": _plain_json(items)}
 
 
+# Fetch a player's PROFILE + all MATCH# records from DynamoDB.
 def fetch_player_profile(player_key: str):
     response = player_dyndb.query(
         KeyConditionExpression=Key("player_key").eq(player_key)
@@ -870,15 +880,16 @@ def fetch_player_profile(player_key: str):
         "matches": _plain_json(matches),
     }
 
-# ── WebSocket handler ──────────────────────────────────────────────────────────
+# HTTP / WebSocket handlers
 
+# WebSocket push loop: sends state JSON at PUSH_RATE_HZ and handles incoming browser commands.
 async def ws_handler(request):
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     print(f"[monitor] browser connected from {request.remote}")
     try:
         while not ws.closed:
-            # Push state to browser — inject send timestamp so browser can measure WS RTT
+            # Push state to browser; inject send timestamp so browser can measure WS RTT.
             try:
                 sent_at_ms = int(time.time() * 1000)
                 payload = _state_cache_json[:-1] + f',"server_sent_at":{sent_at_ms}}}'
@@ -896,14 +907,12 @@ async def ws_handler(request):
                         result = await asyncio.to_thread(handle_control_command, data)
                         print(f"[monitor] command {cmd}: {result}")
             except asyncio.TimeoutError:
-                pass  # normal — no message from browser this tick
+                pass  # normal: no message from browser this tick
             except Exception:
                 pass
     finally:
         print(f"[monitor] browser disconnected")
     return ws
-
-# ── Static file handler ────────────────────────────────────────────────────────
 
 async def index_handler(request):
     return web.FileResponse(MONITOR_DIR / "index.html")
@@ -1006,8 +1015,8 @@ async def control_handler(request):
     return web.json_response({"ok": True, "cmd": cmd, "message": message})
 
 
+# GET /api/maps: list all available map names and their metadata.
 async def maps_list_handler(request):
-    """GET /api/maps — list all available map names."""
     try:
         entries = await asyncio.to_thread(list_map_entries, MAPS_DIR, map_dyndb)
     except MapStorageError as exc:
@@ -1020,10 +1029,8 @@ async def maps_list_handler(request):
     })
 
 
+# GET /api/map/{name}: return the map as a JSON tile grid (loads maps/{name}.txt).
 async def map_handler(request):
-    """Return the requested map as a JSON tile grid.
-    GET /api/map/level1  → loads maps/level1.txt
-    """
     name = request.match_info["name"]
     try:
         payload = await asyncio.to_thread(load_map_entry, MAPS_DIR, name, True, map_dyndb)
@@ -1085,7 +1092,7 @@ async def map_delete_handler(request):
         raise web.HTTPInternalServerError(text="failed to delete map")
     return web.json_response({"ok": True, **payload})
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# Main
 
 async def main():
     app = web.Application()

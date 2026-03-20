@@ -1,14 +1,6 @@
-# t2_packet_handler.py — Packet ingestion, player registration, and node eviction.
-#
-# Owns: drain, _process_packet, _register_player, evict_timed_out_nodes
-#
-# pynq_full extras vs sim_full:
-#   - _register_player calls _send_ack (assigns player_id) and _send_map (loads tiles)
-#   - Board slots and live node-mode control are handled here for the real hardware path
-#
-# Why a separate module: packet processing is the noisiest part of the codebase
-# (validation, flag merging, sequence checks). Keeping it here lets GameTick stay
-# a clean orchestrator with no protocol-level logic.
+# t2_packet_handler.py - Packet ingestion, player registration, and node eviction.
+# Separated from GameTick so the orchestrator stays free of protocol-level logic.
+# pynq_full extra: sends PKT_ACK/PKT_MAP on registration and handles board slot control.
 
 import asyncio
 import struct
@@ -132,9 +124,7 @@ class PacketHandler:
         except Exception as e:
             print(f"[T2] failed to send PKT_NODE_MODE to {addr}: {e}")
 
-    # ── Main drain loop ───────────────────────────────────────────────────────
-    # Pull every queued packet and process it — called once per game tick
-
+    # Pull every queued packet and process it; called once per game tick.
     async def drain(self):
         while True:
             try:
@@ -143,26 +133,19 @@ class PacketHandler:
                 break
             self._process_packet(raw)
 
-    # ── Individual packet handling ────────────────────────────────────────────
-    # Validate sequence/position, merge flags, update player state
-
+    # Key on ("username", name) when a username is present so two boards behind the
+    # same NAT can register separately; fall back to raw addr tuple otherwise.
     def _player_key(self, addr, username: str = ""):
-        """Return the players-dict key for this connection.
-
-        When a username is provided we key on ("username", username) so that two
-        boards behind the same NAT (identical addr) register as separate players
-        as long as they use different usernames.  Without a username we fall back
-        to the raw addr tuple (existing behaviour).
-        """
         if username:
             return ("username", username.strip())
         return addr
 
+    # Decode one raw packet dict and dispatch to register, state update, or perf handler.
     def _process_packet(self, raw: dict):
         data = raw["data"]
         addr = raw["addr"]
 
-        # PKT_PERF is shorter than NODE_SIZE — handle before the length check.
+        # PKT_PERF is shorter than NODE_SIZE; handle before the length check.
         if len(data) >= HEADER_SIZE:
             pkt_type_peek = struct.unpack_from('<H', data, 0)[0]
             if pkt_type_peek == PKT_PERF:
@@ -185,9 +168,9 @@ class PacketHandler:
         preferred_role   = pkt.get("preferred_role", ROLE_ANY)
         username         = pkt.get("username", "") if pkt_type == PKT_REGISTER else ""
 
-        # Resolve key: username-keyed when username present, addr-keyed otherwise.
-        # For non-REGISTER packets (no username), scan for a username-keyed player
-        # whose _addr matches this UDP source — handles boards behind shared NAT.
+        # Resolve key: username-keyed when present, addr-keyed otherwise.
+        # For non-REGISTER packets, scan for a username-keyed player whose _addr
+        # matches this UDP source to handle boards behind shared NAT.
         key = self._player_key(addr, username)
         if key not in self.state.players:
             # Search all players for one whose real UDP addr matches
@@ -206,13 +189,13 @@ class PacketHandler:
                 return
 
         if key not in self.state.players:
-            return  # registration rejected (lockout / full) — discard packet
+            return  # registration rejected (lockout or full)
 
         p = self.state.players[key]
         # Keep reply address current (NAT port may change on reconnect)
         p["_addr"] = addr
         was_timed_out = bool(p.get("timed_out"))
-        p["last_seen"] = time.monotonic()  # heartbeat — updated on every packet
+        p["last_seen"] = time.monotonic()  # updated on every packet
         p["timed_out"] = False
 
         if pkt_type == PKT_REGISTER:
@@ -284,7 +267,7 @@ class PacketHandler:
         p["flags"] = (p["flags"] & SERVER_STATE_FLAGS) | client_input
         self._maybe_resume_match()
 
-    # ── Player registration ───────────────────────────────────────────────────
+    # Store telemetry from a PKT_PERF packet onto the matching player dict.
     def _handle_perf(self, data: bytes, addr):
         try:
             pkt = unpack_perf_packet(data)
@@ -292,7 +275,7 @@ class PacketHandler:
             return
         p = self.state.players.get(addr)
         if p is None:
-            # username-keyed player — find by stored _addr
+            # Username-keyed player; find by stored _addr.
             for candidate in self.state.players.values():
                 if candidate.get("_addr") == addr:
                     p = candidate
@@ -306,24 +289,21 @@ class PacketHandler:
             "worst_overrun_us":  pkt["worst_overrun_us"],
         }
 
-    # Record preferred role and keep humans in the lobby until the monitor sends Start.
-    # Queued humans get ACK(0) so clients can move before the match begins.
-
+    # Keep humans in the lobby until the monitor sends Start; ACK(0) lets clients move early.
     def _register_player(self, key, addr, x=0.0, y=0.0, angle=0.0,
                          preferred_role=ROLE_ANY, username=""):
         remaining = self.state.reconnect_block_remaining(addr)
         if remaining > 0:
-            print(f"[T2] rejected {addr} — reconnect blocked for {remaining:.1f}s after kick")
+            print(f"[T2] rejected {addr}: reconnect blocked for {remaining:.1f}s after kick")
             return
         if self.state.is_in_lockout():
             return
         if self.state.match_started:
-            print(f"[T2] rejected {addr} — match already started")
+            print(f"[T2] rejected {addr}: match already started")
             return
 
-        # ── Dedup: evict stale entry from the same physical board ─────────────
-        # Username-keyed players only evict other entries with the same username.
-        # Controller-keyed (no username) players evict same-IP entries as before.
+        # Dedup: username-keyed players evict only same-username entries.
+        # Controller-keyed (no username) players evict same-IP entries.
         identity = build_player_identity(username, addr)
         new_ck = identity.get("controller_key", "")
         new_pk = identity.get("profile_key", "")
@@ -340,7 +320,7 @@ class PacketHandler:
             if is_username_keyed:
                 # Username-keyed: only evict an entry with the same username
                 # (same board reconnecting with same username).
-                # Never evict a different username — that's a different board.
+                # Never evict a different username; that is a different board.
                 if (new_pk and ex_pk == new_pk
                         and identity.get("identity_source") == "username"
                         and existing_p.get("identity_source") == "username"):
@@ -356,17 +336,17 @@ class PacketHandler:
             self.write_queue.put({"op": "del", "key": f"player:{stale_p['player_id']}"})
             print(f"[T2] evicted stale {stale_key} "
                   f"(player_id={stale_p['player_id']}, board_slot={stale_p.get('board_slot')}) "
-                  f"— same board reconnected as {key}")
+                  f"same board reconnected as {key}")
 
-        # ── Cap check (after dedup so freed slot counts as available) ─────────
+        # Cap check (after dedup so any freed slot counts as available).
         human_count = sum(1 for a in self.state.players if not str(a).startswith("ghost:"))
         if human_count >= MATCH_PLAYERS:
-            print(f"[T2] rejected {addr} — already at {MATCH_PLAYERS} human players")
+            print(f"[T2] rejected {addr}: already at {MATCH_PLAYERS} human players")
             return
 
         board_slot = self._allocate_board_slot()
         if board_slot is None:
-            print(f"[T2] rejected {addr} — no board slots available")
+            print(f"[T2] rejected {addr}: no board slots available")
             return
 
         self.state.clear_lockout()
@@ -395,6 +375,7 @@ class PacketHandler:
         self._send_control_mode(addr, self.state.players[key])
         print(f"[T2] player queued key={key} addr={addr} (lobby humans={human_count}, ghosts={self._ghost_count()})")
 
+    # Return human player addr keys sorted by board_slot for stable broadcast ordering.
     def _human_addrs(self):
         humans = [
             (addr, player)
@@ -408,6 +389,8 @@ class PacketHandler:
             )
         )
         return [addr for addr, _ in humans]
+
+    # Ghost helpers
 
     def _ghost_count(self):
         return sum(1 for addr in self.state.players if str(addr).startswith("ghost:"))
@@ -610,7 +593,7 @@ class PacketHandler:
         print(f"[T2] node mode set for board slot {target_slot} -> {target_mode}")
         return True, f"board {target_slot} -> {target_mode}"
 
-    # Create a ghost tagger entry in players — driven by CoreLogic, not UDP packets
+    # Create a ghost tagger entry in players; driven by set_ghost_count, not UDP packets.
     def _spawn_ghost(self):
         ghost_count = sum(1 for a in self.state.players if str(a).startswith("ghost:"))
         if ghost_count >= MAX_GHOSTS:
@@ -646,10 +629,9 @@ class PacketHandler:
         self.state.players[ghost_addr] = ghost
         print(f"[T2] spawned ghost tagger (player_id={ghost_id}) at {ghost_addr}")
 
-    # ── Node-to-node messaging ────────────────────────────────────────────────
-    # These are sent directly over the T1 socket, not via the broadcast queue
+    # Direct sends over the T1 socket; not queued through the broadcast pipeline.
 
-    # Send PKT_ACK so the node learns its assigned player_id
+    # Send PKT_ACK so the node learns its assigned player_id.
     def _send_ack(self, addr, player_id: int):
         if self.udp_transport is None:
             return
@@ -660,7 +642,7 @@ class PacketHandler:
         except Exception as e:
             print(f"[T2] failed to send ACK to {addr}: {e}")
 
-    # Send PKT_MAP so the node can load tile data into FPGA DRAM
+    # Send PKT_MAP so the node can load tile data into FPGA BRAM.
     def _send_map(self, addr, map_state=None):
         if self.udp_transport is None:
             return
@@ -674,7 +656,7 @@ class PacketHandler:
         except Exception as e:
             print(f"[T2] failed to send PKT_MAP to {addr}: {e}")
 
-    # Send PKT_BITS_INIT so the node knows the current bit layout — including zero bits.
+    # Send PKT_BITS_INIT so the node knows the current bit layout (including zero bits).
     def _send_bits_init(self, addr, bits=None):
         if self.udp_transport is None:
             return
@@ -686,8 +668,7 @@ class PacketHandler:
         except Exception as e:
             print(f"[T2] failed to send PKT_BITS_INIT to {addr}: {e}")
 
-    # ── Node eviction ─────────────────────────────────────────────────────────
-    # Pause active matches when nodes go silent; only abort after the pause grace.
+    # Pause / abort / resume
 
     def _timed_out_human_ids(self):
         return sorted(
@@ -696,12 +677,13 @@ class PacketHandler:
             if not str(addr).startswith("ghost:") and p.get("timed_out")
         )
 
+    # Pause the match if any human has timed out; sets pause_reason and notifies the orchestrator.
     def _pause_for_timeouts(self):
         timed_out_ids = self._timed_out_human_ids()
         if not timed_out_ids or not self.state.match_started or self.state.match_ended:
             return
         if self.state.pause_match("player_timeout", timed_out_ids, abort_after_s=PAUSE_ABORT_S):
-            print(f"[T2] match paused — timed out players {timed_out_ids}")
+            print(f"[T2] match paused: timed out players {timed_out_ids}")
             self._on_match_pause({
                 "reason": "player_timeout",
                 "timed_out_player_ids": timed_out_ids,
@@ -710,6 +692,7 @@ class PacketHandler:
                 "bits_mask": self.state.bits_mask,
             })
 
+    # Resume a player_timeout pause once all timed-out humans send a packet again.
     def _maybe_resume_match(self):
         if (
             not self.state.match_paused
@@ -730,13 +713,14 @@ class PacketHandler:
             p["last_seq"] = None
 
         if self.state.resume_match():
-            print("[T2] match resumed — all timed out players returned")
+            print("[T2] match resumed: all timed out players returned")
             self._on_match_resume({
                 "reason": "player_timeout_cleared",
                 "game_mode": self.state.game_mode,
                 "bits_mask": self.state.bits_mask,
             })
 
+    # Evict lobby nodes that go silent; mark in-match nodes timed-out and trigger pause/abort logic.
     async def evict_timed_out_nodes(self):
         now = time.monotonic()
         lobby_evicted = []
@@ -760,7 +744,7 @@ class PacketHandler:
         for addr in lobby_evicted:
             p = self.state.players.pop(addr)
             print(f"[T2] evicted queued player {p['player_id']} from {addr} "
-                  f"— no packets for {LOBBY_TIMEOUT_S:.0f}s")
+                  f"no packets for {LOBBY_TIMEOUT_S:.0f}s")
             self.write_queue.put({"op": "del", "key": f"player:{p['player_id']}"})
 
         if newly_timed_out:
@@ -795,6 +779,6 @@ class PacketHandler:
                 ),
                 "bits_mask": self.state.bits_mask,
             }
-            print(f"[T2] match aborted — timed out players never returned {timed_out_ids}")
+            print(f"[T2] match aborted: timed out players never returned {timed_out_ids}")
             self.state.abort_match()
             self._on_match_abort(abort_event)

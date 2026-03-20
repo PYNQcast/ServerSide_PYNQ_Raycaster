@@ -1,84 +1,56 @@
-# pynq_full/interfacing/protocol.py — UDP packet format (node ↔ server).
-# Asserts catch size mismatches at startup. Used by PYNQ board code and EC2 server.
+# protocol.py - UDP wire format shared by the PYNQ node and EC2 server.
+# Struct size asserts run at import time to catch layout mismatches early.
 
 import struct
 import time
 
-# ── Packet types ──────────────────────────────────────────────────────────────
+# Packet types
+PKT_STATE_UPDATE = 0x0001   # node -> server: position this tick
+PKT_GAME_STATE   = 0x0002   # server -> node: all player positions
+PKT_HEARTBEAT    = 0x0010   # node -> server: keepalive
+PKT_REGISTER     = 0x0020   # node -> server: first contact; optional trailer: username_len(B) + UTF-8 bytes
+PKT_ACK          = 0x0030   # server -> node: registration confirmed; byte 8 = player_id
+PKT_MAP          = 0x0040   # server -> node: map tiles; header(8) + MapHeader(4) + tiles
+PKT_BITS_INIT    = 0x0050   # server -> node: bit positions at match start; header(8) + count(B) + N x BitEntry
+PKT_NODE_MODE    = 0x0060   # server -> node: runtime control mode (manual/auto/replay)
+PKT_PERF         = 0x0070   # node -> server: board telemetry ~every 2s; header(8) + PerfPayload(8)
 
-PKT_STATE_UPDATE = 0x0001   # node  → server: position this tick
-PKT_GAME_STATE   = 0x0002   # server → node:  all player positions
-PKT_HEARTBEAT    = 0x0010   # node  → server: keepalive
-PKT_REGISTER     = 0x0020   # node  → server: first contact, triggers ACK
-                             #   optional trailer after the 24-byte NodePacket:
-                             #   username_len (1 byte) + UTF-8 username bytes
-
-PKT_ACK          = 0x0030   # server → node:  confirms registration
-                             #   byte 8 = player_id (1=RUNNER, 2=TAGGER) — wait for this
-                             #   before sending STATE_UPDATEs. No node-to-node comms needed;
-                             #   opponent position arrives in every PKT_GAME_STATE broadcast.
-                             
-PKT_MAP          = 0x0040   # server → node:  map tile data, sent once after PKT_ACK
-                             #   header (8 bytes) + MapHeader (4 bytes) + tiles (width*height bytes)
-                             #   node stores tiles in DRAM; FPGA raycaster reads them each frame.
-
-PKT_BITS_INIT    = 0x0050   # server → node:  bit positions, sent once at match start
-                             #   header (8 bytes) + count (1 byte) + N × BitEntry (6 bytes each)
-                             #   node stores positions; server sends bitmask each tick to flag collection.
-PKT_NODE_MODE    = 0x0060   # server → node:  runtime control mode switch (manual/auto/replay)
-PKT_PERF         = 0x0070   # node  → server: board performance telemetry (sent ~every 2 s)
-                             #   header (8 bytes) + PerfPayload (8 bytes)
-                             #   fields: tick_rate_hz(B) cpu_temp_c(B) bram_write_us(H)
-                             #           worst_overrun_us(h — signed) pad(2x)
-
-# ── Flags bitmask (uint8 flags field) ─────────────────────────────────────────
-#
-# The same byte is reused in both directions:
-# - node -> server: input / intent flags
-# - server -> node: authoritative state flags
-
+# Flags (same byte in both directions: node->server = input; server->node = state)
 FLAG_INPUT_SHOOT = 0x01   # client intent: fired this tick
 FLAG_TAGGED      = 0x02   # server state: player tagged this tick
 FLAG_MATCH_END   = 0x04   # server state: match is over
-FLAG_GHOST       = 0x08   # server state: this player is a server-controlled ghost
+FLAG_GHOST       = 0x08   # server state: server-controlled ghost
 
 CLIENT_INPUT_FLAGS = FLAG_INPUT_SHOOT
 SERVER_STATE_FLAGS = FLAG_TAGGED | FLAG_MATCH_END | FLAG_GHOST
 
-# Backward-compatible alias used by older call sites.
-FLAG_SHOOTING = FLAG_INPUT_SHOOT
+FLAG_SHOOTING = FLAG_INPUT_SHOOT  # backward-compatible alias
 
-# ── Role selection (sent in PKT_REGISTER reserved byte) ───────────────────────
-# Node declares preferred role on first contact; server assigns final role in ACK.
+# Role selection (sent in PKT_REGISTER reserved byte)
+ROLE_ANY    = 0x00   # no preference; server assigns by join order
+ROLE_RUNNER = 0x01
+ROLE_TAGGER = 0x02
 
-ROLE_ANY    = 0x00   # no preference — server assigns by join order
-ROLE_RUNNER = 0x01   # player wants to be the runner
-ROLE_TAGGER = 0x02   # player wants to be the tagger
-
-# ── Game modes ────────────────────────────────────────────────────────────────
-# Packed into PKT_GAME_STATE header extension so nodes know which mode is active.
-
+# Game modes (packed into PKT_GAME_STATE ext header)
 GAME_MODE_CHASE      = 0x00   # runner vs tagger, win by tag count
-GAME_MODE_CHASE_BITS = 0x01   # runner collects bits, tagger tries to tag before all bits gone
+GAME_MODE_CHASE_BITS = 0x01   # runner collects bits; tagger tries to tag first
 
-# ── Node movement modes ───────────────────────────────────────────────────────
+# Node movement modes
+NODE_PROTOCOL_VERSION = 1   # bump only for breaking NodePacket layout changes
+MAX_USERNAME_BYTES    = 32
 
-NODE_PROTOCOL_VERSION = 1  # Version of the 24-byte NodePacket wire format; bump only for breaking packet-layout changes.
-MAX_USERNAME_BYTES = 32
+MOVEMENT_MODE_POSE                   = 0x00  # node sends raw pose; server uses x/y/angle directly
+MOVEMENT_MODE_INTENT_ONLY            = 0x01  # node sends inputs only; server advances movement
+MOVEMENT_MODE_INTENT_WITH_PREDICTION = 0x02  # node sends inputs + predicted pose; server validates
 
-MOVEMENT_MODE_POSE = 0x00  # Node sends a raw pose update; server treats x/y/angle as the movement payload for this tick.
-MOVEMENT_MODE_INTENT_ONLY = 0x01  # Node is only declaring intent/inputs; server should ignore predicted x/y/angle and advance movement itself.
-MOVEMENT_MODE_INTENT_WITH_PREDICTION = 0x02  # Node sends inputs plus its locally predicted pose; server validates/corrects that prediction instead of trusting it blindly.
-
-# ── Runtime board control modes ───────────────────────────────────────────────
-
+# Runtime board control modes
 NODE_CONTROL_MODE_MANUAL = 0x00
 NODE_CONTROL_MODE_AUTO   = 0x01
 NODE_CONTROL_MODE_REPLAY = 0x02
 
-# ── Wire format ───────────────────────────────────────────────────────────────
+# Wire format
 #
-# Node → Server (NodePacket): 24 bytes, little-endian
+# Node -> Server (NodePacket): 24 bytes, little-endian
 #
 #   Offset  Size  Fmt  Field
 #     0       2    H   type              packet type
@@ -96,7 +68,7 @@ NODE_FMT  = '<HHIfffBBBB'
 NODE_SIZE = struct.calcsize(NODE_FMT)
 assert NODE_SIZE == 24, f"NodePacket must be 24 bytes, got {NODE_SIZE}"
 
-# Server → Node header (ServerPacketHeader): 8 bytes
+# Server -> Node header (ServerPacketHeader): 8 bytes
 #
 #   Offset  Size  Fmt  Field
 #     0       2    H   type
@@ -131,35 +103,20 @@ assert PLAYER_SIZE == 14, f"PlayerEntry must be 14 bytes, got {PLAYER_SIZE}"
 #
 # Followed immediately by width*height bytes of tile data (row-major, 0=empty 1=wall).
 # Total PKT_MAP size: 8 + 4 + width*height bytes.
-# For a 20×16 map: 8 + 4 + 320 = 332 bytes — well within UDP MTU.
+# For a 20x16 map: 8 + 4 + 320 = 332 bytes, well within UDP MTU.
 
 MAP_HEADER_FMT  = '<BBBx'
 MAP_HEADER_SIZE = struct.calcsize(MAP_HEADER_FMT)
 assert MAP_HEADER_SIZE == 4, f"MapHeader must be 4 bytes, got {MAP_HEADER_SIZE}"
 
-# PKT_GAME_STATE extension (follows player entries): 3 bytes
-#
-#   Offset  Size  Fmt  Field
-#     0       1    B   game_mode    GAME_MODE_CHASE or GAME_MODE_CHASE_BITS
-#     1       1    B   player_count N players that follow in player entries
-#     2       2    H   bits_mask    bitmask of active bits (bit N=1 → bit N still on map)
-#                                   only meaningful in GAME_MODE_CHASE_BITS
-#
-# Full PKT_GAME_STATE layout:
-#   header (8) + game_mode (1) + player_count (1) + players (14*N) + bits_mask (2)
+# PKT_GAME_STATE extension: game_mode(B) + player_count(B) + bits_mask(H)
+# Full layout: header(8) + ext(4) + N x PlayerEntry(14)
 
 GAME_STATE_EXT_FMT  = '<BBH'   # game_mode, player_count, bits_mask
 GAME_STATE_EXT_SIZE = struct.calcsize(GAME_STATE_EXT_FMT)
 assert GAME_STATE_EXT_SIZE == 4, f"GameStateExt must be 4 bytes, got {GAME_STATE_EXT_SIZE}"
 
-# BitEntry (in PKT_BITS_INIT): 6 bytes
-#
-#   Offset  Size  Fmt  Field
-#     0       1    B   bit_id   0-based index (matches bitmask position)
-#     1       4    f   x        world-space X
-#     5       1    f   y        world-space Y  ← actually offset 5, size 4 → total 9? No:
-#
-# Corrected: bit_id (B=1) + x (f=4) + y (f=4) = 9 bytes — use explicit fmt
+# BitEntry (in PKT_BITS_INIT): bit_id(B=1) + x(f=4) + y(f=4) = 9 bytes
 
 BIT_ENTRY_FMT  = '<Bff'
 BIT_ENTRY_SIZE = struct.calcsize(BIT_ENTRY_FMT)
@@ -169,10 +126,9 @@ NODE_MODE_FMT = '<B'
 NODE_MODE_SIZE = struct.calcsize(NODE_MODE_FMT)
 assert NODE_MODE_SIZE == 1, f"NodeMode payload must be 1 byte, got {NODE_MODE_SIZE}"
 
-# ── Pack helpers (build outgoing packets) ─────────────────────────────────────
+# Pack helpers (build outgoing packets)
 
-# Build PKT_BITS_INIT: header + count byte + N × BitEntry (9 bytes each)
-# Sent once at match start so nodes know where bits are; only bitmask is sent per-tick after.
+# Build PKT_BITS_INIT: header + count(B) + N x BitEntry(9); sent once at match start.
 def pack_bits_init_packet(seq, bits):
     timestamp = int(time.time() * 1000) & 0xFFFFFFFF
     header    = struct.pack(HEADER_FMT, PKT_BITS_INIT, seq & 0xFFFF, timestamp)
@@ -181,7 +137,7 @@ def pack_bits_init_packet(seq, bits):
         payload += struct.pack(BIT_ENTRY_FMT, i, float(x), float(y))
     return header + payload
 
-# Unpack PKT_BITS_INIT — returns list of (bit_id, x, y) tuples
+# Unpack PKT_BITS_INIT; returns list of (bit_id, x, y) tuples.
 def unpack_bits_init_packet(data):
     if len(data) < HEADER_SIZE + 1:
         raise ValueError(f"PKT_BITS_INIT too short: {len(data)} bytes")
@@ -195,20 +151,20 @@ def unpack_bits_init_packet(data):
     return bits
 
 
-# Build PKT_NODE_MODE: header + one byte mode payload for runtime board control.
+# Build PKT_NODE_MODE: header + one-byte mode payload for runtime board control.
 def pack_node_mode_packet(seq, mode):
     timestamp = int(time.time() * 1000) & 0xFFFFFFFF
     header = struct.pack(HEADER_FMT, PKT_NODE_MODE, seq & 0xFFFF, timestamp)
     return header + struct.pack(NODE_MODE_FMT, mode & 0xFF)
 
 
-# Unpack PKT_NODE_MODE — returns NODE_CONTROL_MODE_MANUAL/AUTO/REPLAY.
+# Unpack PKT_NODE_MODE; returns the control mode byte.
 def unpack_node_mode_packet(data):
     if len(data) < HEADER_SIZE + NODE_MODE_SIZE:
         raise ValueError(f"PKT_NODE_MODE too short: {len(data)} bytes")
     return struct.unpack_from(NODE_MODE_FMT, data, HEADER_SIZE)[0]
 
-# Build PKT_MAP: 8-byte header + 4-byte MapHeader + tiles (0=empty, 1=wall)
+# Build PKT_MAP: header(8) + MapHeader(4) + tiles (0=empty, 1=wall).
 def pack_map_packet(seq, width, height, tile_scale, tiles):
     timestamp = int(time.time() * 1000) & 0xFFFFFFFF
     header    = struct.pack(HEADER_FMT, PKT_MAP, seq & 0xFFFF, timestamp)
@@ -240,7 +196,7 @@ def pack_game_state_packet(seq, game_mode, players, bits_mask, *, timestamp=None
     )
     return header + ext + entries
 
-# Pack a 24-byte NodePacket for sending to the server
+# Pack a 24-byte NodePacket for sending to the server.
 def pack_node_packet(pkt_type, seq, x, y, angle, flags=0,
                      movement_mode=MOVEMENT_MODE_INTENT_WITH_PREDICTION,
                      protocol_version=NODE_PROTOCOL_VERSION,
@@ -252,6 +208,7 @@ def pack_node_packet(pkt_type, seq, x, y, angle, flags=0,
                        protocol_version & 0xFF, reserved & 0xFF)
 
 
+# Build PKT_REGISTER: standard NodePacket with preferred_role in reserved byte + optional username trailer.
 def pack_register_packet(seq, x, y, angle, *,
                          preferred_role=ROLE_ANY,
                          username="",
@@ -273,6 +230,7 @@ def pack_register_packet(seq, x, y, angle, *,
     return base + struct.pack("<B", len(username_bytes)) + username_bytes
 
 
+# Build a client input flags byte from named intent arguments.
 def client_input_flags(*, shooting=False):
     flags = 0
     if shooting:
@@ -280,6 +238,7 @@ def client_input_flags(*, shooting=False):
     return flags
 
 
+# Return human-readable names for set flag bits; direction is "client_to_server" or "server_to_client".
 def decode_flag_names(flags, *, direction):
     names = []
     if direction == "client_to_server":
@@ -311,9 +270,9 @@ def decode_node_control_mode(mode):
     }.get(mode, f"unknown({mode})")
 
 
-# ── Unpack helpers (decode incoming packets) ──────────────────────────────────
+# Unpack helpers (decode incoming packets)
 
-# Unpack a raw NodePacket into a dict of named fields
+# Unpack a raw NodePacket into a named dict.
 def unpack_node_packet(data):
     if len(data) < NODE_SIZE:
         raise ValueError(f"Packet too short for node packet: {len(data)} bytes")
@@ -334,6 +293,7 @@ def unpack_node_packet(data):
     }
 
 
+# Unpack PKT_REGISTER; extends unpack_node_packet with preferred_role and optional username trailer.
 def unpack_register_packet(data):
     pkt = unpack_node_packet(data)
     if pkt["pkt_type"] != PKT_REGISTER:
@@ -354,13 +314,13 @@ def unpack_register_packet(data):
     pkt["username"] = username
     return pkt
 
-# Unpack the 8-byte server header — returns (pkt_type, seq, timestamp)
+# Unpack the 8-byte server header; returns (pkt_type, seq, timestamp).
 def unpack_header(data):
     if len(data) < HEADER_SIZE:
         raise ValueError(f"Packet too short for header: {len(data)} bytes")
     return struct.unpack(HEADER_FMT, data[:HEADER_SIZE])
 
-# Unpack all PlayerEntry records from the post-header payload of a GAME_STATE packet
+# Unpack all PlayerEntry records from the post-header payload of a GAME_STATE packet.
 def unpack_player_entries(payload):
     players = []
     n = len(payload) // PLAYER_SIZE
@@ -376,7 +336,7 @@ def unpack_player_entries(payload):
         })
     return players
 
-# Unpack a PKT_MAP packet — returns (width, height, tile_scale, tiles bytearray)
+# Unpack PKT_MAP; returns (width, height, tile_scale, tiles bytearray).
 def unpack_map_packet(data):
     if len(data) < HEADER_SIZE + MAP_HEADER_SIZE:
         raise ValueError(f"PKT_MAP too short: {len(data)} bytes")
@@ -385,8 +345,8 @@ def unpack_map_packet(data):
     tiles = bytearray(data[tile_start : tile_start + width * height])
     return width, height, tile_scale, tiles
 
-# Unpack extended PKT_GAME_STATE — returns (pkt_type, seq, timestamp, game_mode, players, bits_mask)
-# Falls back gracefully to legacy format (no extension bytes) for older servers.
+# Unpack PKT_GAME_STATE; returns (pkt_type, seq, timestamp, game_mode, players, bits_mask).
+# Falls back gracefully to legacy format for older servers.
 def unpack_server_packet(data):
     pkt_type, seq, timestamp = unpack_header(data)
     payload = data[HEADER_SIZE:]
@@ -395,24 +355,25 @@ def unpack_server_packet(data):
         game_mode, player_count, bits_mask = struct.unpack_from(GAME_STATE_EXT_FMT, payload, 0)
         players = unpack_player_entries(payload[GAME_STATE_EXT_SIZE : GAME_STATE_EXT_SIZE + player_count * PLAYER_SIZE])
         return pkt_type, seq, timestamp, game_mode, players, bits_mask
-    # Legacy / non-game-state packets — no extension
+    # Legacy / non-game-state packets: no extension
     players = unpack_player_entries(payload)
     return pkt_type, seq, timestamp, GAME_MODE_CHASE, players, 0xFFFF
 
 
-# ── PKT_PERF pack / unpack ─────────────────────────────────────────────────────
+# PKT_PERF pack / unpack
 # PerfPayload (8 bytes, follows the 8-byte header):
-#   B  tick_rate_hz      — achieved tick rate over the last reporting window
-#   B  cpu_temp_c        — CPU temperature in °C (0 if unavailable)
-#   H  bram_write_us     — last BRAM write duration in microseconds
-#   h  worst_overrun_us  — worst tick overrun (signed; negative = on time, positive = late)
-#   xx pad               — 2 reserved bytes, zero
+#   B  tick_rate_hz      - achieved tick rate over the last reporting window
+#   B  cpu_temp_c        - CPU temperature in Celsius (0 if unavailable)
+#   H  bram_write_us     - last BRAM write duration in microseconds
+#   h  worst_overrun_us  - worst tick overrun (signed; negative = on time, positive = late)
+#   xx pad               - 2 reserved bytes, zero
 
 PERF_FMT  = '<BBHhxx'
 PERF_SIZE = struct.calcsize(PERF_FMT)
 assert PERF_SIZE == 8, f"PerfPayload must be 8 bytes, got {PERF_SIZE}"
 
 
+# Build PKT_PERF: header + 8-byte PerfPayload with board telemetry.
 def pack_perf_packet(seq, *, tick_rate_hz, cpu_temp_c, bram_write_us, worst_overrun_us):
     timestamp = int(time.time() * 1000) & 0xFFFFFFFF
     header = struct.pack(HEADER_FMT, PKT_PERF, seq & 0xFFFF, timestamp)
@@ -426,6 +387,7 @@ def pack_perf_packet(seq, *, tick_rate_hz, cpu_temp_c, bram_write_us, worst_over
     return header + payload
 
 
+# Unpack PKT_PERF; returns a dict with all telemetry fields.
 def unpack_perf_packet(data):
     if len(data) < HEADER_SIZE + PERF_SIZE:
         raise ValueError(f"PKT_PERF too short: {len(data)} bytes")

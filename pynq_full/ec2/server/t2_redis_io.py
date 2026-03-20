@@ -1,10 +1,6 @@
-# t2_redis_io.py — Broadcast packet builder and Redis write helpers.
-#
-# Owns: push_broadcast, push_redis_writes, _build_state_snapshot, push_event
-#
-# Why a separate module: serialisation details (struct layout, JSON schema) are
-# stable but verbose. Keeping them here prevents t2_game_tick.py from being
-# cluttered with wire-format code.
+# t2_redis_io.py - Broadcast packet builder and Redis write helpers.
+# Serialisation details (struct layout, JSON schema) live here so GameTick
+# stays free of wire-format code.
 
 import json
 import struct
@@ -33,15 +29,9 @@ class RedisIO:
         self.broadcast_queue = broadcast_queue
         self.write_queue     = write_queue
 
-    # ── UDP broadcast ─────────────────────────────────────────────────────────
-    # Build one state packet per tick and enqueue it for T3 Broadcaster
-    #
-    # Wire format:
-    #   header:     <HHI  — pkt_type=0x0002, tick_seq (16-bit), timestamp_ms (32-bit)
-    #   ext header: <BBH  — game_mode (B), player_count (B), bits_mask (H)
-    #   per-player: <BfffB — player_id, x, y, angle, flags
-    #
-    # Broadcasts go to human nodes only (ghost addresses are server-internal).
+    # Build one state packet per tick and enqueue it for T3.
+    # Wire format: header <HHI + ext <BBH (game_mode, player_count, bits_mask) + N x <BfffB entries.
+    # Ghosts are included in the payload but only human addrs receive the broadcast.
 
     async def push_broadcast(self, tick_count: int):
         if not self.state.players:
@@ -101,9 +91,7 @@ class RedisIO:
             "targets": human_addrs,
         })
 
-    # ── Redis persistence ─────────────────────────────────────────────────────
-    # Write player positions to hashes and append a replay frame each tick
-
+    # Write player positions, full game:state hash, and a replay snapshot to the write queue each tick.
     def push_redis_writes(self, tick_count: int, match_tick: int):
         for p in self.state.players.values():
             self.write_queue.put({
@@ -205,8 +193,7 @@ class RedisIO:
             "op": "lpush", "key": EVENTS_KEY, "value": json.dumps(event),
         })
 
-    # ── Snapshot builder ──────────────────────────────────────────────────────
-    # Build a full-state JSON dict for replay — sorted by player_id for consistency
+    # Build a full-state JSON dict for replay, sorted by player_id for consistency.
 
     def _build_state_snapshot(self, tick_count: int, match_tick: int) -> dict:
         players = [

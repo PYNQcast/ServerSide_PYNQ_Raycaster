@@ -1,24 +1,17 @@
-# anticheat.py — Server-side authoritative validation: position anti-cheat and proximity.
-#
-# This is the server's trust boundary for player state: every incoming position
-# update is checked here before T2 accepts it. The PYNQ node does its own physics
-# locally, but the server must re-validate to catch corrupt/lagged/cheated packets.
-#
-# Two checks:
-#   validate_position — reject implausible speed or out-of-bounds moves
-#   distance_between  — Euclidean distance used by CoreLogic for tag detection
+# anticheat.py - Server-side position validation and proximity helpers.
+# Every incoming position update passes through here before T2 accepts it.
+# validate_position: rejects implausible speed or out-of-bounds moves.
+# distance_between: Euclidean distance used by CoreLogic for tag detection.
 
 import math
 
 DEFAULT_MAX_SPEED_PER_TICK = 12.0
 
 
-# Anticheat is a stateless helper class; instantiate once in PacketHandler / CoreLogic.
-# Methods are static so they can also be called directly in unit tests without setup.
+# Stateless helper; instantiate once in PacketHandler/CoreLogic or call static methods directly.
 class Anticheat:
 
-    # Reject a position update if the move is faster than max_speed_per_tick or out of bounds.
-    # Returns True if the new position is plausible, False if it should be dropped.
+    # Returns True if the new position is plausible; False if it should be dropped.
     @staticmethod
     def validate_position(prev_seq, prev_x, prev_y, prev_angle,
                           new_x, new_y, new_angle, seq,
@@ -35,7 +28,7 @@ class Anticheat:
         allowed_distance = max_speed_per_tick * max(1, delta)
         return (dx * dx) + (dy * dy) <= (allowed_distance * allowed_distance)
 
-    # Euclidean distance between two world-space points — used for tag detection
+    # Euclidean distance between two world-space points.
     @staticmethod
     def distance_between(ax, ay, bx, by):
         return math.hypot(ax - bx, ay - by)
