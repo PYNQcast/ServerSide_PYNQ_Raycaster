@@ -1,123 +1,52 @@
 # PYNQ Client Tests
 
-Board-side diagnostics for report-ready latency numbers.
-
-Run from the `jupyter_side/` directory on the PYNQ board:
+Board-side latency benchmarking. Self-contained — copy the whole folder to the board:
 
 ```bash
-python3 -m pynq_client_tests --server 3.9.71.204 --label idle --samples 120
+scp -r jupyter_side/pynq_client_tests xilinx@<PYNQ_IP>:/home/xilinx/jupyter_notebooks/Final_project_test/
 ```
 
-Optional JSON export:
+## Quickstart
+
+Use the notebook **`UDP_RTT_Benchmark.ipynb`** — set params in cell 2, run all cells.
+
+Or from the terminal inside this folder (use `run_pynq_rtt.py` directly):
 
 ```bash
-python3 -m pynq_client_tests --server 3.9.71.204 --label idle --samples 120 --json-out rtt_idle.json
+# plain RTT
+python3 run_pynq_rtt.py --server 3.9.71.204 --samples 100 --label idle \
+  --csv-out data/udp_rtt_idle.csv --json-out data/udp_rtt_idle.json
+
+# button-to-visible (press a board button for each sample)
+python3 run_pynq_rtt.py --server 3.9.71.204 --samples 20 --label b2vis \
+  --measure button_to_visible \
+  --csv-out data/button_to_visible.csv --json-out data/button_to_visible.json
 ```
 
-Example load labels for your report:
+## What is measured
 
-- `idle`
-- `monitor-open`
-- `replay-active`
-- `dual-board`
-- `monitor-plus-dual-board`
+**`rtt`** — UDP echo probe: board → EC2 server → board. Raw network path, no game logic.
 
-Key outputs:
+**`button_to_visible`** — full path: new button press edge → `PKT_STATE_UPDATE` sent → `PKT_GAME_STATE` reply received → pose written to BRAM. One packet sent per sample (press edge, not hold), so the player moves one step on the monitor canvas per press.
 
-- `ack_rtt_ms`: time from register packet to server ACK
-- `first_state_after_ack_ms`: time from ACK to first `PKT_GAME_STATE`
-- `game_state_avg_gap_ms`: average time between live state packets
-- `game_state_p95_gap_ms`: main stability metric for packet cadence
-- `game_state_rate_hz`: effective update rate seen by the board
-- `game_state_jitter_p95_p50_ms`: simple jitter figure for the report
-- `expected_server_tick_hz`: configured server target rate
-- `expected_client_tick_hz`: configured `run_pynq.py` main-loop rate
-- `expected_client_send_hz`: configured `run_pynq.py` send/update rate
-- `game_state_gap_samples_ms`: raw per-packet gap samples for trace plots
+Does not measure monitor/browser rendering delay.
 
-Copy to board alongside `protocol.py`:
+## Key stats
 
-```bash
-scp -r jupyter_side/pynq_client_tests jupyter_side/protocol.py \
-    xilinx@<PYNQ_IP>:/home/xilinx/jupyter_notebooks/Final_project_test/
-```
+| stat | meaning |
+|---|---|
+| `p95_rtt_ms` | network stability headline |
+| `avg_rtt_ms` / `max_rtt_ms` | typical / worst-case RTT |
+| `button_to_visible_p95_ms` | worst-case button-to-BRAM latency |
+| `loss_pct` | % of probes that timed out |
 
-Basic plotting workflow:
-
-```bash
-python3 -m pynq_client_tests --label idle --json-out rtt_idle.json
-python3 -m pynq_client_tests --label monitor-open --json-out rtt_monitor.json
-python3 pynq_client_tests/plot_rtt_report.py rtt_idle.json rtt_monitor.json --out-dir rtt_plots
-```
-
-This writes:
-
-- `latency_comparison.png`
-- `gap_comparison.png`
-- `hz_comparison.png`
-- `gap_trace.png`
-
-Input-latency CSV capture for monitor plots:
-
-```bash
-python3 pynq_client_tests/input_latency_csv.py \
-  --monitor http://3.9.71.204:8080 \
-  --label idle \
-  --samples 40 \
-  --csv-out input_latency_idle.csv
-```
-
-Recommended CSV plot fields:
-
-- `input_to_server_ms`
-- `input_to_broadcast_ms`
-- `seq`
-- `label`
-
-Useful report wording:
-
-- `input_to_server_ms`: board input packet reaching the server
-- `input_to_broadcast_ms`: board input packet reaching the next server broadcast
-
-That CSV is the most stable source for plots. The live monitor card also shows an approximate input-to-monitor figure, but the CSV keeps to server-timestamped values so you do not have to rely on browser clock alignment.
-
-Jupyter plotting from those CSV files:
+## Plotting saved CSVs
 
 ```python
-from pynq_client_tests.plot_input_latency_csv import load_latency_rows, plot_latency_rows, summarise_by_label
+from pynq_client_tests.plot_udp_rtt_csv import load_rtt_rows, plot_rtt_rows, summarise_by_label
 
-rows = load_latency_rows([
-    "input_latency_idle.csv",
-    "input_latency_dual_board.csv",
-])
-
+rows = load_rtt_rows(["data/udp_rtt_idle.csv", "data/udp_rtt_dual-board.csv"])
 summarise_by_label(rows)
-plot_latency_rows(rows)
+plot_rtt_rows(rows)
+# writes: udp_rtt_comparison.png, udp_rtt_loss.png, udp_rtt_trace.png
 ```
-
-That renders inline in a notebook if `matplotlib` is available.
-
-PNG export from the command line:
-
-```bash
-python3 pynq_client_tests/plot_input_latency_csv.py \
-  input_latency_idle.csv input_latency_dual_board.csv \
-  --out-dir input_latency_plots
-```
-
-This writes:
-
-- `input_latency_comparison.png`
-- `input_latency_max.png`
-- `input_latency_trace.png`
-
-If you want a notebook-first workflow, open:
-
-- [Input_Latency_Report.ipynb](/home/akendall/Documents/ServerSide_PYNQ_Raycaster/jupyter_side/pynq_client_tests/Input_Latency_Report.ipynb)
-
-That notebook lets you:
-
-- set the monitor URL and load label
-- capture a CSV run from inside Jupyter
-- compare multiple CSV runs
-- render the report plots inline
