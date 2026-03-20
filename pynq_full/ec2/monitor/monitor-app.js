@@ -370,25 +370,6 @@ function updateMatchState(match) {
   banner.innerHTML = `<strong>match paused</strong> · waiting for ${who}${tail}`;
 }
 
-function updateInputLatency(inputLatency, state) {
-  const valueEl = document.getElementById('hud-input-broadcast');
-  const noteEl = document.getElementById('hud-input-latency-note');
-  if (!valueEl || !noteEl) return;
-
-  if (!inputLatency || inputLatency.input_to_broadcast_ms == null) {
-    valueEl.textContent = '— ms';
-    noteEl.textContent = 'latest input -> broadcast';
-    return;
-  }
-
-  const inputToServer = Number(inputLatency.input_to_server_ms || 0);
-  const inputToBroadcast = Number(inputLatency.input_to_broadcast_ms || 0);
-
-  valueEl.textContent = `${inputToBroadcast.toFixed(1)} ms`;
-  const sourceLabel = inputLatency.display_name || inputLatency.username || (inputLatency.board_slot ? `P${inputLatency.board_slot}` : `player ${inputLatency.player_id || '?'}`);
-  noteEl.textContent = `${sourceLabel} seq ${inputLatency.seq} · server ${inputToServer.toFixed(1)} ms`;
-}
-
 function updateMatches(matches) {
   const el = document.getElementById('match-list');
   const replayEl = document.getElementById('replay-list');
@@ -636,7 +617,6 @@ function connect() {
     updateBoardReplayStatus(state);
     updateMatches(state.matches);
     updateMatchState(state.match);
-    updateInputLatency(state.input_latency, state);
     updateEvents(state.events);
     updateMapSelector(
       state.active_map,
