@@ -26,16 +26,29 @@ except ImportError:
     import rtt_protocol as protocol
 
 try:
-    from . import rtt_run_pynq
+    from . import rtt_run_pynq as _rtt_run_pynq_mod
 except ImportError:
-    import rtt_run_pynq
+    import rtt_run_pynq as _rtt_run_pynq_mod
 
-try:
-    pynq_runtime = rtt_run_pynq.load_run_pynq()
-    PYNQ_RUNTIME_IMPORT_ERROR = None
-except Exception as exc:
-    pynq_runtime = None
-    PYNQ_RUNTIME_IMPORT_ERROR = exc
+pynq_runtime = None
+PYNQ_RUNTIME_IMPORT_ERROR = None
+
+
+def _ensure_pynq_runtime():
+    """Load run_pynq lazily — only when a button mode is actually requested.
+
+    Importing pynq at module load time on the board initialises hardware and
+    can crash or destabilise a running session, so we defer it until needed.
+    """
+    global pynq_runtime, PYNQ_RUNTIME_IMPORT_ERROR
+    if pynq_runtime is not None:
+        return
+    try:
+        pynq_runtime = _rtt_run_pynq_mod.load_run_pynq()
+        PYNQ_RUNTIME_IMPORT_ERROR = None
+    except Exception as exc:
+        pynq_runtime = None
+        PYNQ_RUNTIME_IMPORT_ERROR = exc
 
 
 DEFAULT_SERVER = "3.9.71.204"
@@ -464,6 +477,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     bram = None
     needs_hw_path = args.trigger == "button" or args.measure == "button_to_visible"
     if needs_hw_path:
+        _ensure_pynq_runtime()
         if pynq_runtime is None:
             detail = f" ({PYNQ_RUNTIME_IMPORT_ERROR})" if PYNQ_RUNTIME_IMPORT_ERROR is not None else ""
             print("Button-related modes require run_pynq.py to be available next to this folder or in the parent jupyter_side folder." + detail)
