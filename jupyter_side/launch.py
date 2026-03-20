@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """launch.py — PYNQcast TUI launcher for script.py
 
-Drop alongside script.py on the PYNQ board. Run:
+Drop alongside run_pynq.py on the PYNQ board. Run:
     python3 launch.py
 
 Features:
@@ -23,7 +23,7 @@ import time
 
 # ── paths ────────────────────────────────────────────────────────────────────
 SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
-CLIENT_SCRIPT = os.path.join(SCRIPT_DIR, "pynq_client.py")
+CLIENT_SCRIPT = os.path.join(SCRIPT_DIR, "run_pynq.py")
 CONFIG_PATH   = os.path.expanduser("~/.pynqcast.json")
 
 # ── defaults ─────────────────────────────────────────────────────────────────

@@ -33,9 +33,12 @@ except ModuleNotFoundError:
     import protocol
 
 try:
-    import pynq_client as pynq_runtime
+    import run_pynq as pynq_runtime
 except Exception:
-    pynq_runtime = None
+    try:
+        import pynq_client as pynq_runtime
+    except Exception:
+        pynq_runtime = None
 
 
 DEFAULT_SERVER = "3.9.71.204"

@@ -31,8 +31,8 @@ Key outputs:
 - `game_state_rate_hz`: effective update rate seen by the board
 - `game_state_jitter_p95_p50_ms`: simple jitter figure for the report
 - `expected_server_tick_hz`: configured server target rate
-- `expected_client_tick_hz`: configured board client main-loop rate
-- `expected_client_send_hz`: configured board send/update rate
+- `expected_client_tick_hz`: configured `run_pynq.py` main-loop rate
+- `expected_client_send_hz`: configured `run_pynq.py` send/update rate
 - `game_state_gap_samples_ms`: raw per-packet gap samples for trace plots
 
 Copy to board alongside `protocol.py`:
