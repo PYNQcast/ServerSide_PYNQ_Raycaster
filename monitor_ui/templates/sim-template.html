@@ -132,37 +132,13 @@
         </div>
 
         <div class="game-sidebar">
-          <div class="panel-raised frame-panel sidebar-profiler-panel">
+          <div class="panel-raised profiler-panel server-frame-panel">
             <div class="panel-head">
-              <h2>Pipeline Frame Timing</h2>
-              <span class="micro-chip">stacked profiler</span>
+              <h2>Frame Timing</h2>
+              <span class="micro-chip">sparkline</span>
             </div>
-            <div class="frame-chart-container">
-              <div class="target-lines">
-                <div class="target-line target-60fps">
-                  <span class="target-label">16.7MS (60FPS)</span>
-                </div>
-                <div class="target-line target-30fps">
-                  <span class="target-label">33.3MS (30FPS)</span>
-                </div>
-              </div>
-
-              <div class="stacked-bars" id="stacked-frame-chart"></div>
-
-              <div class="bar-time-axis">
-                <span>oldest</span>
-                <span>newest</span>
-              </div>
-            </div>
-
-            <div class="legend">
-              <div class="legend-item"><span class="legend-swatch" style="background:var(--stage-dispatch)"></span>Dispatch</div>
-              <div class="legend-item"><span class="legend-swatch" style="background:var(--stage-compute)"></span>FPGA Compute</div>
-              <div class="legend-item"><span class="legend-swatch" style="background:var(--stage-network)"></span>Network</div>
-              <div class="legend-item"><span class="legend-swatch" style="background:var(--stage-composite)"></span>Composite</div>
-            </div>
-
-            <div class="metric-note profiler-note">Development timing shim for now. Replace this buffer with real per-stage frame telemetry once the websocket exposes it.</div>
+            <canvas id="frame-chart" width="560" height="88"></canvas>
+            <div class="metric-note">Recent monitor render times. Taller bars mean slower browser-side drawing.</div>
           </div>
 
           <div class="panel-raised player-panel">
