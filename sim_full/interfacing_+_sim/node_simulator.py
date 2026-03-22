@@ -826,7 +826,7 @@ def run_node(server_ip, server_port, player_id, node_index,
             try:
                 manual_controller = ManualController()
                 manual_controller.enable()
-                print(f"{tag} manual mode: W/S move, A/D turn, space shoots")
+                print(f"{tag} manual mode: arrows or W/S move, arrows or A/D turn, space shoots")
                 normalized_mode = "manual"
             except Exception as exc:
                 print(f"{tag} manual mode unavailable: {exc}")
@@ -935,7 +935,7 @@ def run_node(server_ip, server_port, player_id, node_index,
 
     try:
         if manual_controller:
-            print(f"{tag} manual mode: W/S move, A/D turn, space shoots")
+            print(f"{tag} manual mode: arrows or W/S move, arrows or A/D turn, space shoots")
         while True:
             sync_runtime_from_redis()
             # ── DISCONNECTED / REJOINING ─────────────────────────────────────
