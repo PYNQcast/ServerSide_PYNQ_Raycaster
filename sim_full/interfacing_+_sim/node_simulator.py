@@ -1050,11 +1050,12 @@ def run_node(server_ip, server_port, player_id, node_index,
                                 decode_flag_names(p["flags"], direction="server_to_client")
                             ) or "none"
                             if active_player_id is not None and p["player_id"] == active_player_id:
-                                x = p["x"]
-                                y = p["y"]
-                                angle = p["angle"]
-                                if sim_view_mode == "orbit" and (abs(x) > 0.01 or abs(y) > 0.01):
-                                    orbit_phase = math.atan2(y, x)
+                                if normalized_mode != "manual":
+                                    x = p["x"]
+                                    y = p["y"]
+                                    angle = p["angle"]
+                                    if sim_view_mode == "orbit" and (abs(x) > 0.01 or abs(y) > 0.01):
+                                        orbit_phase = math.atan2(y, x)
                                 have_authoritative_state = True
                                 last_authoritative_state_at = time.monotonic()
                             if active_player_id is not None and p["player_id"] == active_player_id and p["flags"] & FLAG_MATCH_END:
