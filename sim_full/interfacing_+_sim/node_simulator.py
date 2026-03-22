@@ -6,6 +6,7 @@
 # controls are only needed when the operator wants to drop a node manually.
 # Usage: python3 node_simulator.py <server_ip> [port] --nodes N --node-index I --username sim
 
+import os
 import socket
 import struct
 import time
@@ -658,15 +659,23 @@ class ManualController:
             termios.tcsetattr(self.fd, termios.TCSADRAIN, self._old_attrs)
             self._old_attrs = None
 
+    def _readbyte(self, timeout=0.0):
+        ready, _, _ = select.select([self.fd], [], [], timeout)
+        if not ready:
+            return None
+        b = os.read(self.fd, 1)
+        return b.decode("latin-1") if b else None
+
     def read_actions(self):
         actions = []
         while True:
-            ready, _, _ = select.select([sys.stdin], [], [], 0)
-            if not ready:
+            ch = self._readbyte(timeout=0.0)
+            if ch is None:
                 break
-            ch = sys.stdin.read(1)
             if ch == "\x1b":
-                seq = ch + sys.stdin.read(1) + sys.stdin.read(1)
+                b1 = self._readbyte(timeout=0.05)
+                b2 = self._readbyte(timeout=0.05) if b1 is not None else None
+                seq = ch + (b1 or "") + (b2 or "")
                 mapping = {
                     "\x1b[A": "forward",
                     "\x1b[B": "backward",
