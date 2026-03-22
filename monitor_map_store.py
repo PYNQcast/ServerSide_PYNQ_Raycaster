@@ -450,11 +450,21 @@ def list_map_entries(maps_dir: Path, map_table=None):
     entries_by_id = {}
     for path in sorted(maps_dir.glob("*.txt")):
         map_id = path.stem
-        runtime_payload = parse_runtime_text(path.read_text(encoding="utf-8"))
+        try:
+            runtime_payload = parse_runtime_text(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
         entries_by_id[map_id] = build_map_entry(map_id, runtime_payload, _read_metadata(maps_dir, map_id))
-    for item in _table_scan_items(map_table):
-        loaded = _entry_from_table_item(item, include_grid=False)
-        entries_by_id[loaded["map_id"]] = loaded
+    try:
+        table_items = _table_scan_items(map_table)
+    except MapStorageError:
+        table_items = []
+    for item in table_items:
+        try:
+            loaded = _entry_from_table_item(item, include_grid=False)
+            entries_by_id[loaded["map_id"]] = loaded
+        except Exception:
+            continue
     return [entries_by_id[key] for key in sorted(entries_by_id)]
 
 
