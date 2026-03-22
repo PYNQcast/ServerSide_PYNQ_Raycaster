@@ -1070,14 +1070,14 @@ def run_node(server_ip, server_port, player_id, node_index,
                 have_authoritative_state = False
 
             # send position update
-            if not have_authoritative_state and assigned_player_id != 0 and normalized_mode != "manual":
-                input_flags = 0
-            elif assigned_player_id == 0 and normalized_mode != "manual":
-                input_flags = 0
-            elif normalized_mode == "manual":
+            if normalized_mode == "manual":
                 actions = manual_controller.read_actions() if manual_controller else []
                 x, y, angle, shoot_now = apply_manual_actions(x, y, angle, actions, map_state)
                 input_flags = client_input_flags(shooting=shoot_now)
+            elif not have_authoritative_state and assigned_player_id != 0:
+                input_flags = 0
+            elif assigned_player_id == 0:
+                input_flags = 0
             elif sim_view_mode == "orbit":
                 orbit_rotation_speed = orbit_rotation_speed_for_player(assigned_player_id, node_index)
                 orbit_phase = (orbit_phase + orbit_rotation_speed) % (math.pi * 2.0)
