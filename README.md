@@ -8,7 +8,8 @@
 ![Tests](https://img.shields.io/badge/Tests-~120_pytest_%26_isolated_sim_mode-brightgreen)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
-<!-- TODO: add screenshot / GIF of gameplay + monitor dashboard -->
+<img width="3053" height="2228" alt="Main_architecture" src="https://github.com/user-attachments/assets/08cb9643-6a3b-4cdc-bb89-3df9768f2f58" />
+
 
 ---
 
