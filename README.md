@@ -27,7 +27,14 @@
 
 Each script SSHes into EC2, pulls latest, rebuilds the monitor bundle, and launches everything. PYNQ nodes connect to `EC2:9000` over UDP.
 
-**Simulated (no boards needed):**
+
+**Real hardware: - will still work without boards - game-dev environment most up-to-date**
+
+```bash
+./pynq_dev.sh
+```
+
+**Simulated (no boards needed - legacy):**
 
 ```bash
 ./sim_dev2.sh
@@ -37,12 +44,6 @@ Each script SSHes into EC2, pulls latest, rebuilds the monitor bundle, and launc
 
 ```bash
 SIM1_USERNAME=alice SIM2_USERNAME=bob ./sim_dev2.sh
-```
-
-**Real hardware:**
-
-```bash
-./pynq_dev.sh
 ```
 
 **Dashboard only:**
