@@ -54,7 +54,7 @@ python3 sim_full/interfacing_+_sim/node_simulator.py 3.9.71.204 9000 \
 ## Modes
 
 - **manual**: node sits still; use keyboard or monitor controls to move
-- **auto**: node drives itself — runner evades, tagger chases
+- **auto**: node drives itself; runner evades, tagger chases
 
 The monitor can switch a connected node between modes at runtime via the board control buttons.
 

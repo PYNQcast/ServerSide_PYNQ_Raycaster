@@ -1,6 +1,6 @@
 # sidecar/
 
-Redis → DynamoDB / S3 / SNS persistence pipeline. Shared by both stacks —
+Redis → DynamoDB / S3 / SNS persistence pipeline. Shared by both stacks;
 both `sim_dev.sh` and `pynq_dev.sh` launch this same file.
 
 The sidecar has no dependency on whether the UDP source is a PYNQ board or a

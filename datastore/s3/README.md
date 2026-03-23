@@ -31,12 +31,12 @@ Each line is one JSON event with a `recorded_at` timestamp. For the current game
 
 ## Why .ndjson.gz is Already a Good Format
 
-**NDJSON** (newline-delimited JSON) — one JSON object per line. Streamable: the dashboard can
+**NDJSON** (newline-delimited JSON): one JSON object per line. Streamable; the dashboard can
 start rendering the replay before the full file is loaded. Easy to append to. Each line is
 independently parseable so a corrupt line doesn't break the rest.
 
 **gzip** on top of NDJSON is very effective for replay data because consecutive state snapshots
-are nearly identical (players move slowly — x changes by ~0.001 per tick). gzip's LZ77 algorithm
+are nearly identical (players move slowly; x changes by ~0.001 per tick). gzip's LZ77 algorithm
 detects these repeated byte patterns and compresses them heavily, effectively achieving delta
 encoding implicitly without any extra code. A 30-second match at 60 Hz = 1800 snapshots
 compresses to a few KB.
@@ -47,7 +47,7 @@ minimal. Delta encoding would add decoder complexity in the dashboard JS for lit
 
 **The one replay improvement worth considering:** keyframe-based seeking. Currently the dashboard
 must replay from frame 0 to reach any point in the match. Adding a full snapshot every N ticks
-(keyframes) would allow seeking to any point in O(1) — useful if matches get long or you add
+(keyframes) would allow seeking to any point in O(1), useful if matches get long or you add
 a scrub bar to the replay player.
 
 ## Plug-In Points
