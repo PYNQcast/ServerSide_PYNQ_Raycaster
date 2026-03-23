@@ -5,7 +5,7 @@
 ![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue)
 ![Server](https://img.shields.io/badge/Server-EC2_asyncio-orange)
 ![Board](https://img.shields.io/badge/Board-PYNQ--Z1-green)
-![Tests](https://img.shields.io/badge/Tests-~120_pytest-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-~120_pytest_&_isolated_sim_mode-brightgreen)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
 <!-- TODO: add screenshot / GIF of gameplay + monitor dashboard -->
