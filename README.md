@@ -134,8 +134,8 @@ When both humans pick runner, up to 3 **ghost AI taggers** spawn automatically.
 
 The server was validated in two distinct phases before any PYNQ hardware was involved:
 
-1. **In-process unit/integration suite** (`tests/`) — server modules imported directly into pytest, no EC2 or Redis needed. A `_NullUDPTransport` absorbs outgoing UDP; FPGA BRAM encoding is verified by asserting on integer outputs, not by running on hardware.
-2. **Live simulation** (`./sim_dev2.sh`) — full EC2 stack running against software node simulators (`node_simulator.py`) on the laptop. Confirmed correct game flow, match lifecycle, monitor, sidecar, and persistence end-to-end before a single PYNQ board connected.
+1. **In-process unit/integration suite** (`tests/`): server modules imported directly into pytest, no EC2 or Redis needed. A `_NullUDPTransport` absorbs outgoing UDP; FPGA BRAM encoding is verified by asserting on integer outputs, not by running on hardware.
+2. **Live simulation** (`./sim_dev2.sh`): full EC2 stack running against software node simulators (`node_simulator.py`) on the laptop. Confirmed correct game flow, match lifecycle, monitor, sidecar, and persistence end-to-end before a single PYNQ board connected.
 
 This meant every server behaviour was exercised and confirmed correct before plugging in hardware, so board bring-up could focus purely on the PS/PL interface.
 

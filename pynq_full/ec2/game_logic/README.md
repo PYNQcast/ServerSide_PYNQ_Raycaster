@@ -1,6 +1,6 @@
 # game_logic/
 
-Pure game rules — no I/O, no Redis, no UDP. Imported by `t2_game_tick.py`.
+Pure game rules; no I/O, no Redis, no UDP. Imported by `t2_game_tick.py`.
 
 ## Files
 

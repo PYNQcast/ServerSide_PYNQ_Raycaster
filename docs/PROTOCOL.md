@@ -5,7 +5,7 @@
 
 ## Node → Server
 
-### `PKT_STATE_UPDATE (0x0001)` — 24 bytes
+### `PKT_STATE_UPDATE (0x0001)`: 24 bytes
 
 Sent by the node every tick. Primary position and input update.
 
@@ -26,24 +26,24 @@ Offset  Size  Field
 
 **Sequence number**: `(seq - prev_seq) & 0xFFFF`. Valid if delta is not 0 and is <= 0x7FFF. Rollover `(0 - 65535) & 0xFFFF = 1` is treated as a forward step of 1.
 
-### `PKT_REGISTER (0x0020)` — 24 bytes
+### `PKT_REGISTER (0x0020)`: 24 bytes
 
 Same wire format as `PKT_STATE_UPDATE`. The `reserved` byte carries the preferred role:
 - `ROLE_ANY=0x00`, `ROLE_RUNNER=0x01`, `ROLE_TAGGER=0x02`
 
 Optional UTF-8 username string appended after the 24-byte header.
 
-### `PKT_PERF (0x0070)` — telemetry
+### `PKT_PERF (0x0070)`: telemetry
 
 Sent from the board ~every 2 seconds. Carries worst BRAM write time, worst tick overrun, measured tick rate. Server logs it; Monitor can display it.
 
 ## Server → Node
 
-### `PKT_ACK (0x0030)` — 9 bytes
+### `PKT_ACK (0x0030)`: 9 bytes
 
 Sent immediately after successful `PKT_REGISTER`. 8-byte header + 1 byte: assigned `player_id`. Player 1 = runner, player 2 = tagger. Ghost IDs start at 3.
 
-### `PKT_MAP (0x0040)` — 1032 bytes
+### `PKT_MAP (0x0040)`: 1032 bytes
 
 Sent once after `PKT_ACK`. Full 32x32 tile grid: 1024 bytes (one byte per cell, 0=floor, 1=wall) + 8-byte header. Fits inside 1500-byte MTU; never fragments.
 
@@ -53,7 +53,7 @@ Node writes to BRAM: one 32-bit word per row, `word |= (1 << col)` for wall tile
 
 Sent once at match start if map has `B` tiles (chase-bits mode). Sequence of float pairs `(x, y)` for each bit pickup world position. Node writes these into BRAM sprite slots.
 
-### `PKT_GAME_STATE (0x0002)` — per-tick broadcast
+### `PKT_GAME_STATE (0x0002)`: per-tick broadcast
 
 ```
 Header (8 bytes):
