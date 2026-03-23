@@ -8,7 +8,6 @@
 ![Tests](https://img.shields.io/badge/Tests-~120_pytest_%26_isolated_sim_mode-brightgreen)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
-<img width="800" alt="Main_architecture" src="https://github.com/user-attachments/assets/08cb9643-6a3b-4cdc-bb89-3df9768f2f58" />
 
 ---
 
@@ -65,7 +64,7 @@ SIM1_USERNAME=alice SIM2_USERNAME=bob ./sim_dev2.sh
 
 ## Architecture
 
-<!-- Attach: top-level architecture diagram (Figure 19 from report) -->
+<img width="800" alt="Main_architecture" src="https://github.com/user-attachments/assets/08cb9643-6a3b-4cdc-bb89-3df9768f2f58" />
 
 **Reactor Server with SEDA inspired pipeline:** four stages, lock-free queues, single asyncio event loop (T4 on its own OS thread).
 
@@ -137,7 +136,7 @@ The server was validated in two distinct phases before any PYNQ hardware was inv
 1. **In-process unit/integration suite** (`tests/`): server modules imported directly into pytest, no EC2 or Redis needed. A `_NullUDPTransport` absorbs outgoing UDP; FPGA BRAM encoding is verified by asserting on integer outputs, not by running on hardware.
 2. **Live simulation** (`./sim_dev2.sh`): full EC2 stack running against software node simulators (`node_simulator.py`) on the laptop. Confirmed correct game flow, match lifecycle, monitor, sidecar, and persistence end-to-end before a single PYNQ board connected.
 
-This meant every server behaviour was exercised and confirmed correct before plugging in hardware, so board bring-up could focus purely on the PS/PL interface.
+This meant every server behaviour was exercised and confirmed correct before plugging in hardware, so board could focus purely on the PS/PL interface.
 
 ```bash
 pip install -r requirements.txt
