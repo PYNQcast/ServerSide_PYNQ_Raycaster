@@ -14,7 +14,7 @@
 
 ## Quick Start
 
-> **`raycastpair.pem`** (EC2 SSH key) is required for all launch scripts and will be provided to the assessor separately. Place it at the repo root.
+> **`raycastpair.pem`** (EC2 SSH key) is required for full access to launch scripts and will be provided to the assessor separately. Place it at the repo root. However, server will be running so ClietnSide should still work. 
 > Future plan is too design a full tutorial on how to setup your own server using our tools.
 
 ### Three launch modes - from repo root
