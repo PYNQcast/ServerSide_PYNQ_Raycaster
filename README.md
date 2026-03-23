@@ -132,21 +132,26 @@ When both humans pick runner, up to 3 **ghost AI taggers** spawn automatically.
 
 ## Tests
 
-> [!NOTE]
-> No EC2, Redis, or PYNQ hardware required. The entire suite runs in-process on a laptop — server modules are imported directly, a `_NullUDPTransport` absorbs outgoing UDP, and the FPGA BRAM contract is verified by asserting on integer encoding outputs.
+The server was validated in two distinct phases before any PYNQ hardware was involved:
+
+1. **In-process unit/integration suite** (`tests/`) — server modules imported directly into pytest, no EC2 or Redis needed. A `_NullUDPTransport` absorbs outgoing UDP; FPGA BRAM encoding is verified by asserting on integer outputs, not by running on hardware.
+2. **Live simulation** (`./sim_dev2.sh`) — full EC2 stack running against software node simulators (`node_simulator.py`) on the laptop. Confirmed correct game flow, match lifecycle, monitor, sidecar, and persistence end-to-end before a single PYNQ board connected.
+
+This meant every server behaviour was exercised and confirmed correct before plugging in hardware, so board bring-up could focus purely on the PS/PL interface.
 
 ```bash
 pip install -r requirements.txt
 python -m pytest tests/ -v                        # full suite
 python -m pytest tests/test_server_latency.py -s  # with live benchmark output
 python3 tests/test_protocol.py                    # protocol micro-benchmark
+./sim_dev2.sh                                     # full live sim; no boards needed
 ```
 
 | Area | File | What it covers |
 |------|------|----------------|
 | Game rules | `test_game_logic.py`, `test_match_modes.py` | Tag detection, match lifecycle, grace ticks, timeouts, ghost AI, chase-bits mode, lobby return |
 | Regression | `test_bottleneck_fixes.py` | Sequence validation across all movement modes, 16-bit rollover, sidecar background thread |
-| FPGA contract | `test_pynq_hardware_contract.py` | BRAM map encoding (`word |= 1 << col`), Q6.10 coordinate format, entity slot layout — pins the PS/PL boundary |
+| FPGA contract | `test_pynq_hardware_contract.py` | BRAM map encoding (`word |= 1 << col`), Q6.10 coordinate format, entity slot layout; pins the PS/PL boundary |
 | Protocol | `test_protocol.py` | Pack/unpack round-trips + µs timings for every packet type |
 | Performance | `test_server_latency.py` | In-process tick benchmark: asserts `avg < 25 ms`, `p95 < 35 ms`; optional live UDP RTT probe |
 | Monitor | `test_monitor_map_store.py` | Map editor save/load, system map protection, spawn ordering |
