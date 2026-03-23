@@ -1,321 +1,150 @@
-# FPGA Raycaster : Game Server
+# PYNQcast: Server-Side
 
-Server-side repository for a multiplayer FPGA raycaster tag game. PYNQ-Z2 nodes run a hardware raycaster on FPGA; this server handles game logic, state synchronisation, and persistence.
+> Multiplayer FPGA raycasting game engine. PYNQ-Z1 nodes render via hardware DDA; this repo holds the **authoritative EC2 game server**, **browser monitor / game-dev environment** and **persistence layer**
 
----
+![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue)
+![Server](https://img.shields.io/badge/Server-EC2_asyncio-orange)
+![Board](https://img.shields.io/badge/Board-PYNQ--Z1-green)
+![Tests](https://img.shields.io/badge/Tests-~120_pytest-brightgreen)
+![License](https://img.shields.io/badge/License-MIT-yellow)
 
-## What the system does
-
-Two PYNQ boards connect over UDP to a Python game server running on EC2. Each board renders a first-person raycasted view of a 32×32 tile map using dedicated FPGA IP. One player is the **runner**, the other is the **tagger**. The server tracks positions, enforces tag proximity, manages match lifecycle, and broadcasts authoritative state at 60 Hz. A browser-based monitor provides live oversight.
-
----
-
-## Architecture
-
-```
-PYNQ Node (runner)  ──┐
-                       ├──UDP:9000──► EC2 SEDA Server ──► Redis ──► Sidecar ──► DynamoDB / S3
-PYNQ Node (tagger)  ──┘                    │                             ▲
-                                           │                      watches game:events
-                                      game_logic/
-                                   (anticheat, core_logic,
-                                    match_state — pure Python)
-                                           │
-                                    T4 RedisWriter
-                                   (background thread)
-                                           │
-                                       Redis keys
-                                       (game:state,
-                                        game:events,
-                                        game:control)
-                                           │
-                               Browser Monitor (WebSocket/SSE)
-```
-
-**SEDA pipeline** — four stages, three queues:
-
-| Stage | Thread model | Role |
-|-------|-------------|------|
-| T1 UDPReceiver | asyncio coroutine | Receive node packets, parse headers, enqueue |
-| T2 GameTick | asyncio coroutine | Run game logic tick at 60 Hz, produce broadcasts + Redis writes |
-| T3 Broadcaster | asyncio coroutine | Send PKT\_GAME\_STATE to all registered nodes via shared UDP socket |
-| T4 RedisWriter | OS thread | Blocking Redis writes (never stalls the event loop) |
-
-T1 and T3 share the same UDP socket bound to port 9000. This ensures broadcasts come from `EC2:9000`, which matches the NAT mapping created by the node's outbound `sendto(EC2:9000)` — essential for WSL/NAT environments.
+<!-- TODO: add screenshot / GIF of gameplay + monitor dashboard -->
 
 ---
 
-## Game modes
+## Quick Start
 
-| Mode | Description |
-|------|-------------|
-| `GAME_MODE_CHASE` | Runner vs tagger. First to `TAGS_TO_WIN` tags wins. |
-| `GAME_MODE_CHASE_BITS` | Runner collects bit pickups (B tiles in map). Tagger must tag before all bits are collected. |
+> **`raycastpair.pem`** (EC2 SSH key) is required for all launch scripts and will be provided to the assessor separately. Place it at the repo root.
+> future plan is too design a full tutorial on how to setup your own server using our tools.
 
-The mode is detected automatically from the loaded map — maps with `B` tiles enter chase-bits mode. The server sends a `PKT_BITS_INIT` packet once at match start with all bit positions; per-tick `PKT_GAME_STATE` carries a bitmask of remaining bits.
+### Three launch modes
 
-**Ghost taggers** — when both humans pick runner, the server spawns up to 3 AI ghosts that path straight toward the runner each tick. Ghosts are visible on the monitor canvas and on the PYNQ sprite BRAM.
+| Script | What it does | When to use |
+|--------|-------------|-------------|
+| `./pynq_dev.sh` | 4-pane tmux: server + sidecar + auto-launch monitor + Redis stats | Full dev with physical PYNQ boards |
+| `./sim_dev2.sh` | 6-pane tmux: server + sidecar + auto-launch monitor + 2 sim nodes + Redis | Server dev without hardware |
+| `./monitor_view.sh` | SSH tunnel, opens dashboard at `localhost:8080` | Assessor / quick demo view |
 
----
+Each script SSHes into EC2, pulls latest, rebuilds the monitor bundle, and launches everything. PYNQ nodes connect to `EC2:9000` over UDP.
 
-## Repo structure
+**Simulated (no boards needed):**
 
-```
-ServerSide_PYNQ_Raycaster/
-│
-├── pynq_full/                    # Primary stack — real PYNQ hardware
-│   ├── ec2/                      # EC2 server side
-│   │   ├── server/               # SEDA pipeline: server.py, t1–t4 modules
-│   │   ├── game_logic/           # Pure game rules (anticheat, core_logic, match_state)
-│   │   ├── maps/                 # 32×32 .txt map files (chase, ghost_chase, lobby, …)
-│   │   ├── monitor/              # Browser monitor: monitor.py (FastAPI SSE), JS, CSS
-│   │   ├── player_profiles.py    # Per-player stat tracking
-│   │   └── replay_store.py       # S3 replay upload
-│   └── interfacing/              # Shared protocol.py for PYNQ ↔ server
-│
-├── sim_full/                     # Simulator stack — PC node simulation
-│   ├── ec2/                      # Mirror of pynq_full/ec2 (simpler role assignment)
-│   └── interfacing_+_sim/        # node_simulator.py, protocol.py, PYNQ guides
-│
-├── jupyter_side/                 # PYNQ board client code (runs on Xilinx PYNQ-Z2)
-│   ├── test_package_v4.py        # Main board client: hardware BRAM, auto/manual/replay modes
-│   └── launch.py                 # TUI launcher with saved config
-│
-├── monitor_ui/                   # Monitor front-end build system
-│   ├── build.mjs                 # esbuild pipeline — bundles JS + templates → dist/
-│   ├── templates/                # pynq-template.html, sim-template.html
-│   └── dist/                     # Built output (monitor-ui.js + .gz) — synced to EC2
-│
-├── datastore/                    # AWS infrastructure
-│   ├── dynamodb/                 # Table design, match metadata
-│   ├── s3/                       # Replay storage
-│   ├── lambda/                   # Post-game stats processor
-│   ├── redis/                    # Key schema reference
-│   └── infra/                    # EC2 / Redis / DynamoDB setup guides
-│
-├── tests/                        # pytest suite
-│   ├── test_game_logic.py        # Core rules: tagging, match lifecycle, ghosts
-│   ├── test_match_modes.py       # Chase and chase-bits mode coverage
-│   ├── test_protocol.py          # Packet encode/decode
-│   ├── test_pynq_hardware_contract.py  # BRAM format, coordinate system
-│   └── …
-│
-├── docs/                         # Architecture docs and design notes
-├── basic/                        # Minimal single-file POC (reference only)
-├── sidecar/                      # Standalone sidecar prototype (archived)
-├── ref_files/                    # Hardware reference: .hwh, drivers
-├── manim_vid/                    # Animated architecture explainer (Manim)
-│
-├── pynq_dev.sh                   # Dev launcher: pynq_full on EC2 (4-pane tmux)
-├── sim_dev2.sh                   # Dev launcher: sim_full on EC2 (6-pane tmux)
-├── sshec2.sh                     # Quick SSH to EC2
-├── monitor_map_store.py          # Local map library store (used by monitor)
-└── raycastpair.pem               # EC2 SSH key (not committed)
+```bash
+./sim_dev2.sh
 ```
 
----
+**With custom usernames:**
 
-## Dev workflow
+```bash
+SIM1_USERNAME=alice SIM2_USERNAME=bob ./sim_dev2.sh
+```
 
-### PYNQ hardware (`pynq_dev.sh`)
+**Real hardware:**
 
 ```bash
 ./pynq_dev.sh
 ```
 
-Opens a 4-pane tmux session:
-
-```
-┌──────────────┬──────────────┬──────────────┐
-│  pynq server │   sidecar    │   monitor    │
-├──────────────┴──────────────┴──────────────┤
-│              redis stats                   │
-└────────────────────────────────────────────┘
-```
-
-- Kills any running EC2 processes, `git pull` on EC2, syncs the monitor bundle, launches everything.
-- Monitor available at `http://localhost:8080` via SSH tunnel.
-- PYNQ nodes connect directly to `EC2:9000` — no simulator panes needed.
-
-### Assessor dashboard only (`monitor_view.sh`)
+**Dashboard only:**
 
 ```bash
-./monitor_view.sh
-```
-
-Opens just the live monitor/dashboard without starting the full tmux dev stack.
-
-- Reuses the existing EC2 deployment and starts `monitor.py` there if needed.
-- Creates a background SSH tunnel from local `:8080` to EC2 `:8080`.
-- Opens the dashboard in the browser for quick assessor access.
-- Close the local tunnel later with `./monitor_view.sh --stop`.
-
-### PC simulator (`sim_dev2.sh`)
-
-```bash
-./sim_dev2.sh
-# Optional: set node usernames
-SIM1_USERNAME=alice SIM2_USERNAME=bob ./sim_dev2.sh
-```
-
-Opens a 6-pane tmux session:
-
-```
-┌────────────────┬────────────┬────────────┐
-│   seda server  │  sidecar   │  monitor   │
-├────────────────┼────────────┼────────────┤
-│   node sim 1   │  node sim 2  │  redis   │
-└────────────────┴─────────────┴───────────┘
-```
-
-Node simulator panes are pre-loaded — just press `Enter` to connect. Redis tunnel forwarded to `localhost:6380`.
-
-### Monitor front-end
-
-The monitor JS/CSS lives in the source files under `pynq_full/ec2/monitor/` and `sim_full/ec2/monitor/`. After editing:
-
-```bash
-cd monitor_ui && node build.mjs
-```
-
-The dev scripts rebuild and rsync `monitor_ui/dist/` to EC2 automatically on each launch.
-
-### PYNQ board client
-
-```bash
-# Copy to board
-scp jupyter_side/test_package_v4.py \
-    pynq_full/interfacing/protocol.py \
-    jupyter_side/launch.py \
-    xilinx@<PYNQ_IP>:/home/xilinx/jupyter_notebooks/Final_project_test/
-
-# Run (on board)
-python3 launch.py              # interactive TUI
-python3 test_package_v4.py --mode auto --username alice
+./monitor_view.sh          # start
+./monitor_view.sh --stop   # teardown tunnel
 ```
 
 ---
 
-## Protocol overview
+## Architecture
 
-All packets are UDP to/from `EC2:9000`.
+<!-- Attach: top-level architecture diagram (Figure 19 from report) -->
 
-| Packet | Direction | Purpose |
-|--------|-----------|---------|
-| `PKT_REGISTER (0x20)` | node → server | First contact; carries username and preferred role |
-| `PKT_ACK (0x30)` | server → node | Confirms registration; returns assigned player ID |
-| `PKT_MAP (0x40)` | server → node | 32×32 map tile BRAM data; sent once after ACK |
-| `PKT_BITS_INIT (0x50)` | server → node | Bit pickup positions; sent once at match start |
-| `PKT_STATE_UPDATE (0x01)` | node → server | Player position + angle + flags each tick |
-| `PKT_GAME_STATE (0x02)` | server → node | All player entries + game mode + bits bitmask |
-| `PKT_HEARTBEAT (0x10)` | node → server | Keepalive when not moving |
-| `PKT_NODE_MODE (0x60)` | server → node | Switch node between manual / auto / replay modes |
-| `PKT_PERF (0x70)` | node → server | Board telemetry (FPS, tick time) every ~2 s |
+**Reactor Server with SEDA inspired pipeline:** four stages, lock-free queues, single asyncio event loop (T4 on its own OS thread).
 
-**Player flags** in `PKT_GAME_STATE`:
-
-| Flag | Meaning |
-|------|---------|
-| `FLAG_TAGGED (0x02)` | Tagged this tick — triggers spawn snap on node |
-| `FLAG_MATCH_END (0x04)` | Match is over |
-| `FLAG_GHOST (0x08)` | Server-controlled AI ghost |
-
-**Roles** in `PKT_REGISTER`:
-
-| Value | Role |
+| Stage | Role |
 |-------|------|
-| `ROLE_ANY (0x00)` | No preference — assigned by join order |
-| `ROLE_RUNNER (0x01)` | Wants to be runner |
-| `ROLE_TAGGER (0x02)` | Wants to be tagger |
+| **T1** `t1_udp_receiver.py` | `DatagramProtocol` callback → `packet_queue` |
+| **T2** `t2_game_tick.py` | Authoritative game logic @ 60 Hz → `broadcast_queue` + `write_queue` |
+| **T3** `t3_broadcaster.py` | Fan-out `PKT_GAME_STATE` to all nodes via UDP |
+| **T4** `t4_redis_writer.py` | Batched `HSET` pipeline to Redis (daemon thread, never blocks event loop) |
+
+**Storage tiers:** Redis (live, <1 ms) → DynamoDB (match history, atomic career counters) → S3 (compressed NDJSON replays). The **sidecar** bridges tiers via `BRPOP`, fully decoupled from the game loop.
 
 ---
 
-## Map format
+## Monitor: Game Development Environment
 
-Maps are plain text, exactly 32 columns × 32 rows. Tile characters:
+The browser dashboard (`localhost:8080`) distinguishes PYNQcast as a **game-dev environment**, not just a game. Custom maps, configurable AI entities, and S3 replays are all operator-controllable from any connected node.
 
-| Char | Meaning |
-|------|---------|
-| `#` | Wall |
-| `.` | Floor |
-| `B` | Bit pickup (floor tile, also defines bit positions for `GAME_MODE_CHASE_BITS`) |
-| `1` | Player 1 spawn |
-| `2` | Player 2 spawn |
+| Tab | Capability |
+|-----|-----------|
+| **Game View** | Live top-down arena canvas: players, ghosts, bit collectibles, spawn markers |
+| **Map Editor** | Draw 32×32 arenas in-browser (brush, fill, line, rect, spawns), validate, hot-swap live |
+| **Map Library** | Save / load / hot-swap stored maps mid-session |
+| **Controls** | Start/end match, ghost AI count, kick players, switch node modes |
+| **Match Replay** | Stream recorded matches from S3 directly to a PYNQ screen |
+| **Server Monitoring** | SEDA queue health, Redis metrics, live event feed |
+| **Player Stats** | Per-player tag counts, career stats |
 
-Maps are stored in `pynq_full/ec2/maps/`. The monitor's map editor validates the 32×32 constraint and can hot-swap a map onto the live server (takes effect at next match reset via Redis `game:control`).
+---
+---
 
-**BRAM encoding**: columns packed as `word |= 1 << col` (LSB = col 0, matching the HDL). Coordinates use Q6.10 fixed-point (`COORD_FRAC_BITS = 10`).
+## Wire Protocol
+
+Fixed-size `struct`-packed UDP datagrams: zero-copy unpack on ARM Cortex-A9 and x86-64, no framing overhead.
+
+| Packet | Dir | Bytes | Purpose |
+|--------|-----|-------|---------|
+| `PKT_REGISTER (0x20)` | node → srv | — | First contact: username + preferred role |
+| `PKT_ACK (0x30)` | srv → node | — | Confirms registration, returns player ID |
+| `PKT_MAP (0x40)` | srv → node | 1032 | 32×32 BRAM tile data (once at match start) |
+| `PKT_STATE_UPDATE (0x01)` | node → srv | 24 | Position + angle + flags each tick |
+| `PKT_GAME_STATE (0x02)` | srv → node | 68 | All players + game mode + bits bitmask |
+| `PKT_NODE_MODE (0x60)` | srv → node | — | Switch node: manual / auto / replay |
+
+**NodePacket (24 B):** `<HHIfffB3x>` : `u16 node_id`, `u16 seq`, `u32 tick`, `f32×3 (x,y,angle)`, `u8 flags`, 3-byte pad.
 
 ---
 
-## Monitor
+## Game Modes
 
-The monitor is a FastAPI server (`monitor.py`) serving a single-page app to the browser via Server-Sent Events. It connects to Redis on localhost and pushes live state to the browser every ~33 ms.
+| Mode | Trigger | Rules |
+|------|---------|-------|
+| **Chase** | Default map | Runner vs tagger: first to `TAGS_TO_WIN` wins |
+| **Chase Bits** | Map contains `B` tiles | Runner collects pickups; tagger must tag before all bits collected |
 
-**Tabs:**
+When both humans pick runner, up to 3 **ghost AI taggers** spawn automatically.
 
-| Tab | Purpose |
-|-----|---------|
-| Game View | Live arena canvas with players, ghosts, bits, spawn markers |
-| Server Monitoring | SEDA pipeline health, Redis metrics, event feed |
-| Controls & Config | Start/end match, kick players, set ghost count, restart nodes |
-| Player Stats | Per-player tag counts and session stats |
-| Map Editor | Draw maps in-browser, validate, hot-swap onto live server |
-| About | Project info |
-
-The arena canvas uses an OffscreenCanvas-cached static layer (walls, grid, AO, vignette) blitted each frame, with dynamic player glow/pulse, name label pills, and bit collectible animations on top.
-
----
-
-## Data persistence
-
-| Tier | Store | Contents |
-|------|-------|----------|
-| Hot | Redis (EC2 localhost:6379) | Live game state, player registry, event stream, match control |
-| Warm | DynamoDB (`pynq-raycaster-seda-matches`, eu-west-2) | Match metadata, per-player stats, recent match list |
-| Cold | S3 | Compressed NDJSON replay files, archived match data |
-
-The **sidecar** (`replay_store.py` + sidecar process) watches `game:events` in Redis and writes to DynamoDB/S3 on match end. It is fully decoupled from the game loop — AWS latency never blocks T2.
-
-Match IDs follow the format `match-YYYYMMDD-HHMMSS`.
+**Map format:** plain text, 32×32. `#` wall, `.` floor, `B` bit pickup, `1`/`2` spawns. BRAM encoding: `word |= 1 << col` (LSB = col 0, matching HDL). Coordinates: Q6.10 fixed-point.
 
 ---
 
 ## Tests
 
 ```bash
-python -m pytest tests/
+pip install -r requirements.txt
 ```
 
-Key test files:
+```bash
+python -m pytest tests/ -v
+```
 
-| File | Covers |
-|------|--------|
-| `test_game_logic.py` | Tagging, match end, ghost spawning, bit collection |
-| `test_match_modes.py` | Chase vs chase-bits mode detection and rules |
-| `test_protocol.py` | Packet encode/decode round-trips |
-| `test_pynq_hardware_contract.py` | BRAM column encoding, coordinate Q6.10 format |
-| `test_server_latency.py` | T2 tick timing under load |
-| `test_bottleneck_fixes.py` | Anti-cheat, speed cap, sequence validation |
+Covers game rules, protocol encode/decode, BRAM hardware contract, tick timing under load, anti-cheat, and sim/pynq parity.
 
 ---
 
 ## Infrastructure
 
-- **EC2:** `ubuntu@3.9.71.204`, SSH key `raycastpair.pem` at repo root
-- **UDP game server:** port 9000
-- **Monitor:** port 8080 (tunnelled to localhost:8080 by dev scripts)
-- **Redis:** EC2 localhost:6379, tunnelled to local port 6380 via dev scripts
-- **DynamoDB table:** `pynq-raycaster-seda-matches`, region `eu-west-2`
+| Resource | Detail |
+|----------|--------|
+| **EC2** | `ubuntu@3.9.71.204` : SSH key `raycastpair.pem` (provided to assessor) |
+| **UDP server** | Port `9000` |
+| **Monitor** | Port `8080` (SSH-tunnelled by dev scripts) |
+| **Redis** | EC2 `localhost:6379` (tunnelled to local `6380`) |
+| **DynamoDB** | `pynq-raycaster-seda-matches`, `eu-west-2` |
+| **S3** | Compressed NDJSON replays + DDB archives |
 
 ---
 
-## Reference
+## License
 
-- `docs/architecture_full.md` — detailed SEDA pipeline design
-- `docs/threading_model.md` — asyncio + thread boundary rationale
-- `docs/storage_design.md` — hot/warm/cold tier design
-- `pynq_full/ec2/maps/README.md` — map authoring guide
-- `pynq_full/interfacing/INTERFACING_NOTES.md` — node ↔ server protocol details
-- `sim_full/interfacing_+_sim/PYNQ_TO_EC2.md` — porting sim code to real PYNQ board
-- `ref_files/hardware/` — `.hwh` bitstream descriptor, IP block parameters
+MIT
