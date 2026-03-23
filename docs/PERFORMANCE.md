@@ -10,7 +10,10 @@ No connection overhead, no retransmission, no head-of-line blocking. A missed pa
 
 T1 (receive) and T3 (broadcast) share the **same socket** bound to port 9000. This is not optional.
 
-When a PYNQ board (behind WSL NAT or a university LAN) sends to `EC2:9000`, NAT creates a mapping that only accepts return traffic *from* `EC2:9000`. If T3 opened its own socket, broadcasts would come from a random ephemeral port; NAT drops them silently. Nodes never see `FLAG_TAGGED` or position updates.
+> [!IMPORTANT]
+> T1 and T3 must share the same socket. If T3 opens its own socket, broadcasts come from a random ephemeral port; NAT has no mapping for it and drops the packets silently. Nodes never see `FLAG_TAGGED` or position updates. This is the single most critical constraint in the network layer.
+
+When a PYNQ board (behind WSL NAT or a university LAN) sends to `EC2:9000`, NAT creates a mapping that only accepts return traffic *from* `EC2:9000`. Sharing the socket ensures every outbound packet has source port 9000.
 
 ```python
 # server.py: T1 binds first, T3 reuses the same transport
@@ -20,7 +23,10 @@ ticker = GameTick(..., receiver.transport, ...)   # T3 calls transport.sendto(..
 
 ### Fixed-size structs, no hot-path parsing
 
-Every wire format is a `struct` with no variable-length fields on the hot path. `struct.pack/unpack` calls into C, no Python loops. `PKT_STATE_UPDATE` is 24 bytes; `PKT_GAME_STATE` is 8-byte header + 4-byte ext + 14 bytes per player. The `PlayerEntry` struct is exactly 14 bytes (`'<BfffB'`) with no padding; adding an `x` byte would silently misalign every subsequent entry.
+Every wire format is a `struct` with no variable-length fields on the hot path. `struct.pack/unpack` calls into C, no Python loops. `PKT_STATE_UPDATE` is 24 bytes; `PKT_GAME_STATE` is 8-byte header + 4-byte ext + 14 bytes per player.
+
+> [!CAUTION]
+> `PlayerEntry` is exactly 14 bytes (`'<BfffB'`): `1+4+4+4+1`. Adding an `x` padding byte would silently misalign every subsequent entry in the broadcast. Do not add padding.
 
 ### One queue drain per tick
 
@@ -44,7 +50,8 @@ def to_q6_10(world_val, tile_scale=8, dim=32):
 bram_word = (to_q6_10(x) << 16) | to_q6_10(y)
 ```
 
-Note: `COORD_FRAC_BITS=16` in the raycaster IP is internal DDA precision only. The BRAM interface is Q6.10.
+> [!NOTE]
+> `COORD_FRAC_BITS=16` in the raycaster IP is internal DDA precision only. The BRAM interface is Q6.10. These are different things.
 
 ### Angle encoding
 

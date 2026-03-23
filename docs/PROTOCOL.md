@@ -1,6 +1,7 @@
 # Protocol
 
-Source of truth: `pynq_full/interfacing/protocol.py`
+> [!IMPORTANT]
+> Source of truth: `pynq_full/interfacing/protocol.py`. Edit there, not here.
 
 ## Node → Server
 
@@ -71,7 +72,8 @@ PlayerEntry (14 bytes each):  '<BfffB'
   flags      (B)  FLAG_TAGGED=0x02  FLAG_MATCH_END=0x04  FLAG_GHOST=0x08
 ```
 
-`PlayerEntry` is exactly 14 bytes: `1+4+4+4+1`. No padding; an `x` suffix would silently misalign every subsequent entry. Player entries start at offset `GAME_STATE_EXT_SIZE = 4` after the 8-byte header.
+> [!CAUTION]
+> `PlayerEntry` is exactly 14 bytes: `1+4+4+4+1`. No padding byte. Adding `x` would silently misalign every subsequent entry. Player entries start at offset `GAME_STATE_EXT_SIZE = 4` (not 2) after the 8-byte header.
 
 ### `PKT_NODE_MODE (0x0060)`
 
@@ -89,9 +91,8 @@ Three modes in `movement_mode` byte, representing different ownership models:
 
 **Current default:** `INTENT_WITH_PREDICTION`. Node moves locally without waiting for server, making button presses feel instantaneous over 30-50 ms UK to EC2 RTT.
 
-`INTENT_ONLY` is the cleanest authoritative model but not fully wired; it would require richer input flags and complete server-side movement. The server currently treats both `POSE` and `INTENT_WITH_PREDICTION` as pose-carrying updates.
-
-Sending `pred_x/y/angle` alongside intent gives a cheap comparison point: what the node thought should happen vs what the server accepted. Useful for debugging client/server movement divergence, especially when bringing up new PYNQ hardware.
+> [!NOTE]
+> `INTENT_ONLY` is the cleanest authoritative model but not fully wired; it would require richer input flags and complete server-side movement. The server currently treats both `POSE` and `INTENT_WITH_PREDICTION` as pose-carrying updates. Sending `pred_x/y/angle` gives a cheap comparison point for debugging node/server divergence when bringing up new hardware.
 
 ## Redis control messages
 

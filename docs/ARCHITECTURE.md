@@ -56,11 +56,11 @@ Reads `game:seda-events` and `game:seda-replay` from Redis via `BRPOP`. Writes m
 
 ```
 sim_full/            # simulator stack (software nodes, no hardware needed)
-  ec2/               # SEDA server, sidecar, monitor
+  ec2/               # reactor server, sidecar, monitor
   interfacing_+_sim/ # protocol.py (sim source of truth), node_simulator.py
 
 pynq_full/           # PYNQ board stack (active development target, will diverge)
-  ec2/               # SEDA server, sidecar, monitor, game_logic/ (Python)
+  ec2/               # reactor server, sidecar, monitor, game_logic/ (Python)
   interfacing/       # protocol.py (PYNQ source of truth; edit this one)
 
 datastore/           # shared cloud infra: DynamoDB schemas, Lambda, S3, Redis config
@@ -71,6 +71,5 @@ dev.sh / pynq_dev.sh # one-command launch scripts (see RUNNING.md)
 raycastpair.pem      # EC2 SSH key (gitignored)
 ```
 
-**Protocol source of truth:**
-- Sim: `sim_full/interfacing_+_sim/protocol.py`
-- PYNQ: `pynq_full/interfacing/protocol.py`
+> [!IMPORTANT]
+> There are two separate protocol files. `pynq_full/interfacing/protocol.py` is the active source of truth for PYNQ development. `sim_full/interfacing_+_sim/protocol.py` is for the simulator stack. Edit the right one.
