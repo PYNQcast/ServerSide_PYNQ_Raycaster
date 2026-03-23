@@ -11,6 +11,7 @@ try:
 except Exception:  # pragma: no cover - botocore is present in runtime, optional in tests
     ClientError = None
 
+# Shared by both monitor servers; kept at repo root so each stack can import one storage policy via REPO_ROOT.
 GRID_WIDTH = 32
 GRID_HEIGHT = 32
 GRID_CELLS = GRID_WIDTH * GRID_HEIGHT
@@ -148,6 +149,7 @@ def ensure_runtime_constraints(grid, spawns):
     def cell(x: int, y: int):
         return grid[(y * GRID_WIDTH) + x]
 
+    # The runtime expects a sealed border so hardware-safe maps never let rays or players leave the grid.
     for x in range(GRID_WIDTH):
         if cell(x, 0) != 1 or cell(x, GRID_HEIGHT - 1) != 1:
             raise MapStorageError("top and bottom borders must be solid walls for hardware-safe maps")
@@ -174,6 +176,7 @@ def parse_runtime_text(text: str):
         raise MapStorageError(f"runtime map rows must be exactly {GRID_WIDTH} cells wide")
 
     grid = []
+    # Spawn digits encode a stable player order, so load them by numbered slot instead of scan order.
     spawns_by_index = [None] * 5
     markers = []
     for y, row in enumerate(rows):
@@ -205,6 +208,7 @@ def parse_runtime_text(text: str):
 def serialise_runtime_text(grid, spawns, markers):
     rows = [["#" if grid[(y * GRID_WIDTH) + x] else "." for x in range(GRID_WIDTH)] for y in range(GRID_HEIGHT)]
 
+    # Paint markers first so numbered spawns win if an editor ever overlaps the same tile.
     for marker in markers:
         x = marker["x"]
         y = marker["y"]
@@ -296,6 +300,7 @@ def _table_scan_items(map_table):
     items = []
     kwargs = {}
     while True:
+        # DynamoDB scan paginates, so keep walking until we have the full logical map catalog.
         try:
             response = map_table.scan(**kwargs)
         except Exception as exc:
@@ -385,6 +390,7 @@ def _entry_from_table_item(item: dict, include_grid: bool = True):
     runtime_text = str(item.get("runtime_text") or "")
     if not runtime_text:
         raise MapStorageError(f"map table entry '{map_id}' is missing runtime_text")
+    # Rebuild the same payload shape as file-backed maps so callers do not care where a map came from.
     runtime_payload = parse_runtime_text(runtime_text)
     return build_map_entry(
         map_id,
@@ -459,6 +465,7 @@ def list_map_entries(maps_dir: Path, map_table=None):
         table_items = _table_scan_items(map_table)
     except MapStorageError:
         table_items = []
+    # Table-backed editor maps intentionally override runtime mirrors to avoid duplicates and stale metadata.
     for item in table_items:
         try:
             loaded = _entry_from_table_item(item, include_grid=False)
@@ -492,6 +499,7 @@ def save_map_entry(maps_dir: Path, payload: dict, map_table=None):
     existing_metadata = _read_metadata(maps_dir, map_id)
     existing_table_item = _table_get_item(map_table, map_id)
     existing_table_metadata = _metadata_from_table_item(existing_table_item) if existing_table_item else None
+    # Built-in maps ship as system content, so only editor-authored maps are allowed to overwrite in place.
     if runtime_path.exists() and (not existing_metadata or existing_metadata.get("source") != "editor"):
         raise MapStorageError(f"system map '{map_id}' is read-only; save under a new name")
     if existing_table_metadata and existing_table_metadata.get("source") != "editor":
@@ -499,6 +507,7 @@ def save_map_entry(maps_dir: Path, payload: dict, map_table=None):
 
     existing_editor_metadata = existing_table_metadata or existing_metadata
 
+    # Preserve original creation time on edits, but always refresh update time and budgets from the latest payload.
     metadata = _metadata_defaults(
         map_id,
         map_name,
@@ -537,6 +546,7 @@ def delete_map_entry(maps_dir: Path, map_id: str, protected_map_ids=None, map_ta
     effective_metadata = table_metadata or metadata
     if not runtime_path.exists() and table_item is None:
         raise MapStorageError(f"map not found: {safe_map_id}")
+    # Deletion is metadata-gated so bundled maps and other protected content cannot disappear by filename alone.
     if not effective_metadata or effective_metadata.get("source") != "editor" or not effective_metadata.get("deletable", False):
         raise MapStorageError(f"map '{safe_map_id}' is protected")
 

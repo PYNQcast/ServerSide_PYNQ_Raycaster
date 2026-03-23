@@ -14,7 +14,8 @@ def _validate_seq(prev_seq, seq):
 
 **Wall clamping**: the server runs `resolve_walkable_world()` on the claimed position. If the node reported a position inside a wall (out-of-order packets, minor physics divergence), the server snaps it to the nearest walkable point.
 
-There is **no speed cap**. Full position validation (`anticheat.py`) exists but is not called on node packets; it caused visible jitter on the FPGA renderer when delayed burst packets made apparent speed look implausible, causing the server and node to disagree on position. Removing speed-cap validation eliminated the jitter. The only clients are trusted PYNQ boards; adversarial validation is not needed.
+> [!NOTE]
+> There is no speed cap. `anticheat.py` has a `validate_position()` implementation but it is deliberately not called on node packets. When enabled, delayed burst packets made apparent speed look implausible, causing server/node position disagreement and visible jitter on the FPGA renderer. Only clients are trusted PYNQ boards so adversarial validation is not needed.
 
 All **match events** (tags, bit collection, match end) are server-authoritative regardless.
 
@@ -60,7 +61,8 @@ Ghosts use **reactive steering**, not A*. Each tick:
 
 No path cache, no graph search. Stateless per tick. Cheaper than A* and produces believable pressure on current maps. Up to 3 ghosts; `FLAG_GHOST=0x08`; ghost `player_id`s start at 3.
 
-Ghost count is controlled at runtime via Monitor > Redis `game:control` `{"cmd":"set_ghost_count","count":N}`.
+> [!TIP]
+> Ghost count is controllable at runtime without restarting anything. Monitor > Controls > "Ghost Taggers" or via Redis: `{"cmd":"set_ghost_count","count":N}`. Set to 2 with no human players for a fully automated AI-vs-AI demo.
 
 ## Simulator auto-mode (A*)
 
@@ -102,4 +104,5 @@ MATCH_END_HOLD_S    = 0.5
 BIT_COLLECT_RADIUS  = 8.0
 ```
 
-Changes take effect on next server restart. No recompile, no protocol change, no hardware reflash.
+> [!TIP]
+> Changes take effect on next server restart. No recompile, no protocol change, no hardware reflash.
