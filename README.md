@@ -14,7 +14,7 @@
 ## Quick Start
 
 > [!IMPORTANT]
-> **`raycastpair.pem`** (EC2 SSH key) is required for full access to launch scripts and will be provided on github temporarily for security reasons. Place it at the repo root if it is not already. However, server will be running so Client Side (PYNQ board) will still work without.
+> **`raycastpair.pem`** (EC2 SSH key) is required for full access to launch scripts. It is never committed to the repo (it is gitignored). Obtain it through a secure channel and place it at the repo root yourself. 
 > Future plan is too design a full tutorial on how to setup your own server using our tools.
 
 ### Three launch modes - from repo root
@@ -164,7 +164,7 @@ See [`tests/README.md`](tests/README.md) for the full breakdown including the du
 
 | Resource | Detail |
 |----------|--------|
-| **EC2** | `ubuntu@3.9.71.204` : SSH key `raycastpair.pem` (provided to assessor) |
+| **EC2** | `ubuntu@<instance-public-ip>` : SSH key `raycastpair.pem` (shared securely, not committed) |
 | **UDP server** | Port `9000` |
 | **Monitor** | Port `8080` (SSH-tunnelled by dev scripts) |
 | **Redis** | EC2 `localhost:6379` (tunnelled to local `6380`) |
